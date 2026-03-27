@@ -1,0 +1,10 @@
+<svg width="150" height="140" viewBox="0 0 150 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="3" y="3" width="144" height="134" rx="47" stroke="#01AC6A" stroke-width="6" />
+  <path
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M69.7824 0H40.0041L0 96H28.6547L35.8464 78.066H73.2661L80.0083 96H109L69.7824 0Z"
+    fill="#E69F33"
+    transform="translate(20.5 22)"
+  />
+</svg>
