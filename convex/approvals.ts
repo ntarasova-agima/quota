@@ -229,14 +229,15 @@ export const decide = mutation({
       },
     });
 
-    if (status === "approved" && request.fundingSource === "Квота на пресейлы") {
+    if (status === "approved" && ["Квота на пресейлы", "Квота на AI-подписки"].includes(request.fundingSource)) {
       if (!request.neededBy) {
-        throw new Error("Missing neededBy for presales quota");
+        throw new Error("Missing neededBy for NBD quota");
       }
       const date = new Date(request.neededBy);
       const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      const tableName = request.fundingSource === "Квота на AI-подписки" ? "nbdServiceQuotas" : "presalesQuotas";
       const existing = await ctx.db
-        .query("presalesQuotas")
+        .query(tableName)
         .withIndex("by_monthKey", (q: any) => q.eq("monthKey", key))
         .first();
       if (existing) {
@@ -245,7 +246,7 @@ export const decide = mutation({
           updatedAt: Date.now(),
         });
       } else {
-        await ctx.db.insert("presalesQuotas", {
+        await ctx.db.insert(tableName, {
           monthKey: key,
           year: date.getFullYear(),
           month: date.getMonth() + 1,
@@ -377,14 +378,15 @@ export const adminApproveAsRole = mutation({
       updatedAt: now,
     });
 
-    if (status === "approved" && request.fundingSource === "Квота на пресейлы") {
+    if (status === "approved" && ["Квота на пресейлы", "Квота на AI-подписки"].includes(request.fundingSource)) {
       if (!request.neededBy) {
-        throw new Error("Missing neededBy for presales quota");
+        throw new Error("Missing neededBy for NBD quota");
       }
       const date = new Date(request.neededBy);
       const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      const tableName = request.fundingSource === "Квота на AI-подписки" ? "nbdServiceQuotas" : "presalesQuotas";
       const existing = await ctx.db
-        .query("presalesQuotas")
+        .query(tableName)
         .withIndex("by_monthKey", (q: any) => q.eq("monthKey", key))
         .first();
       if (existing) {
@@ -393,7 +395,7 @@ export const adminApproveAsRole = mutation({
           updatedAt: Date.now(),
         });
       } else {
-        await ctx.db.insert("presalesQuotas", {
+        await ctx.db.insert(tableName, {
           monthKey: key,
           year: date.getFullYear(),
           month: date.getMonth() + 1,

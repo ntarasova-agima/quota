@@ -152,3 +152,24 @@ export function sumQuotaUsageByMonth(
   }
   return totals;
 }
+
+export function sumQuotaUsageByMonthAndTag(
+  requests: any[],
+  predicate: (request: any) => boolean,
+) {
+  const totals = new Map<string, Map<string, number>>();
+  for (const request of requests) {
+    if (!predicate(request)) {
+      continue;
+    }
+    const tag = request.cfdTag?.trim() || "Без тега";
+    for (const allocation of getEffectiveQuotaAllocations(request)) {
+      if (!totals.has(allocation.monthKey)) {
+        totals.set(allocation.monthKey, new Map<string, number>());
+      }
+      const monthTotals = totals.get(allocation.monthKey)!;
+      monthTotals.set(tag, (monthTotals.get(tag) ?? 0) + allocation.amount);
+    }
+  }
+  return totals;
+}

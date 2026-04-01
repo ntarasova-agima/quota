@@ -180,7 +180,11 @@ export default function RequestDetailPage() {
   const isNbd = useMemo(() => myRoles.includes("NBD"), [myRoles]);
   const isCoo = useMemo(() => myRoles.includes("COO"), [myRoles]);
   const canSetCfdTag = useMemo(
-    () => myRoles.includes("CFD") || myRoles.includes("ADMIN") || myRoles.includes("BUH"),
+    () =>
+      myRoles.includes("CFD") ||
+      myRoles.includes("ADMIN") ||
+      myRoles.includes("BUH") ||
+      myRoles.includes("NBD"),
     [myRoles],
   );
   const showStandaloneTagEditor = canSetCfdTag && !myRoles.includes("BUH");
@@ -214,15 +218,19 @@ export default function RequestDetailPage() {
   const showNbdQuotaSummary = Boolean(
     isAuthenticated &&
       isNbd &&
-      data?.request?.fundingSource === "Квота на пресейлы" &&
-      data?.request?.category !== "Welcome-бонус",
+      ((data?.request?.fundingSource === "Квота на пресейлы" && data?.request?.category !== "Welcome-бонус") ||
+        (data?.request?.fundingSource === "Квота на AI-подписки" && data?.request?.category === "Закупка сервисов")),
   );
   const showCooQuotaSummary = Boolean(
     isAuthenticated && isCoo && data?.request?.fundingSource === "Квота на внутренние затраты",
   );
   const nbdQuotaSummary = useQuery(
     api.quotas.listByMonthKeys,
-    showNbdQuotaSummary ? { monthKeys: quotaMonthKeys } : "skip",
+    showNbdQuotaSummary && data?.request?.fundingSource === "Квота на пресейлы" ? { monthKeys: quotaMonthKeys } : "skip",
+  );
+  const nbdAiQuotaSummary = useQuery(
+    api.quotas.listNbdServiceByMonthKeys,
+    showNbdQuotaSummary && data?.request?.fundingSource === "Квота на AI-подписки" ? { monthKeys: quotaMonthKeys } : "skip",
   );
   const cooQuotaSummary = useQuery(
     api.quotas.listCooByMonthKeys,
@@ -740,10 +748,10 @@ export default function RequestDetailPage() {
                   </div>
                 </div>
               ) : null}
-              {showStandaloneTagEditor && (
+              {showStandaloneTagEditor && (!myRoles.includes("NBD") || ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid", "closed"].includes(request.status)) && (
                 <div className="space-y-2">
-                  <Label>Тег CFD</Label>
-                  <div className="flex max-w-md gap-2">
+                  <Label>Тег заявки</Label>
+                  <div className="grid max-w-2xl gap-2 md:grid-cols-[1fr_1fr_auto]">
                     <Select value={selectedTag || "none"} onValueChange={(value) => setSelectedTag(value === "none" ? "" : value)}>
                       <SelectTrigger>
                         <SelectValue placeholder="Выберите тег" />
@@ -757,15 +765,27 @@ export default function RequestDetailPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <Input
+                      value={customTagName}
+                      onChange={(event) => setCustomTagName(event.target.value)}
+                      placeholder="Или впишите новый тег"
+                    />
                     <Button
                       type="button"
                       variant="outline"
                       onClick={async () => {
                         setError(null);
                         try {
+                          let nextTag = selectedTag || undefined;
+                          if (customTagName.trim()) {
+                            await createTag({ name: customTagName.trim() });
+                            nextTag = customTagName.trim();
+                            setSelectedTag(customTagName.trim());
+                            setCustomTagName("");
+                          }
                           await assignCfdTag({
                             id: request._id,
-                            tag: selectedTag || undefined,
+                            tag: nextTag,
                           });
                           router.refresh();
                         } catch (err) {
@@ -1644,13 +1664,13 @@ export default function RequestDetailPage() {
             </CardContent>
           </Card>
 
-          {showNbdQuotaSummary && nbdQuotaSummary?.length ? (
+          {showNbdQuotaSummary && (data?.request?.fundingSource === "Квота на AI-подписки" ? nbdAiQuotaSummary?.length : nbdQuotaSummary?.length) ? (
             <Card>
               <CardContent className="pt-6">
                 <div className="rounded-xl border border-emerald-200/80 bg-[linear-gradient(180deg,rgba(240,253,244,0.92)_0%,rgba(236,253,245,0.85)_100%)] p-4">
                   <div className="font-medium text-emerald-900">Остаток квоты NBD</div>
                   <div className="mt-3 grid gap-2 md:grid-cols-3">
-                    {nbdQuotaSummary.map((item) => {
+                    {(data?.request?.fundingSource === "Квота на AI-подписки" ? nbdAiQuotaSummary : nbdQuotaSummary)?.map((item) => {
                       const remaining = item.quota - item.spent;
                       const isHighlighted = item.monthKey === highlightedQuotaMonthKey;
                       return (

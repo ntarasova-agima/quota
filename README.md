@@ -1,17 +1,31 @@
 # Aurum
 
-Aurum is an internal AGIMA service for creating, approving, paying, and tracking expense and investment requests.
+Aurum — внутренний сервис AGIMA для создания, согласования, оплаты и сопровождения заявок на затраты.
 
-It supports:
-- multi-role approval flows;
-- quota-based funding routes;
-- HOD validation for contest requests;
-- payment workflow for BUH;
-- partial payments;
-- comments, attachments, timeline, and email logs;
-- archival of old requests.
+Сервис покрывает полный цикл работы с заявкой:
+- создание и черновики;
+- многошаговое согласование по ролям;
+- квоты по направлениям;
+- валидацию часов и прямых затрат руководителями цехов (`HOD`);
+- оплатный контур для бухгалтерии (`BUH`);
+- частичные оплаты и транши;
+- комментарии, вложения, историю изменений и таймлайн;
+- архивирование заявок и сотрудников.
 
-## Stack
+## Основные возможности
+
+- Гибкая ролевая модель: `AD`, `NBD`, `COO`, `CFD`, `BUH`, `HOD`, `ADMIN`
+- Разные типы заявок и источники финансирования
+- Квоты пресейлов, внутренних затрат, AI-подписок и CFD/COO-квоты
+- Конкурсные заявки со специалистами и отдельным HOD-этапом
+- Теги для аналитики и разбивки затрат
+- История изменений по редактированиям
+- Таймлайн заявки с письмами и системными событиями
+- Повторное согласование при критичных изменениях
+- Поддержка частичной оплаты
+- Переоткрытие закрытых заявок
+
+## Технологический стек
 
 Frontend:
 - Next.js 16
@@ -24,229 +38,244 @@ Backend:
 - `@convex-dev/auth`
 
 Email:
-- Resend
+- SMTP relay `agima.ru`
+- host: `188.225.81.88`
+- port: `9025`
 
-## Main Roles
+## Роли в системе
 
-- `AD` — request author
-- `NBD` — presales quota approver
-- `COO` — internal quota approver
-- `CFD` — finance approver and tag owner
-- `BUH` — payment processing
-- `HOD` — validates specialist hours and direct costs for contest requests
-- `ADMIN` — administration and support actions
+- `AD` — автор заявки
+- `NBD` — согласующий по квотам пресейлов и AI-подписок
+- `COO` — согласующий по внутренним квотам
+- `CFD` — финансовый согласующий и владелец тегов
+- `BUH` — бухгалтерия и оплата
+- `HOD` — руководитель цеха / подцеха, валидирует часы и прямые затраты
+- `ADMIN` — администрирование, поддержка, аварийные действия
 
-## Project Structure
+## Структура проекта
 
 ```text
-src/app                Next.js pages and flows
-src/components         shared UI
-src/lib                client helpers and constants
-convex                 backend logic, schema, mutations, queries, emails
-docs                   product, support, and user documentation
-public                 static assets
+src/app                страницы Next.js и сценарии UI
+src/components         общие UI-компоненты
+src/lib                клиентские хелперы, константы, серверные SMTP-утилиты
+convex                 схема, backend-логика, роли, согласования, квоты, письма
+docs                   документация для продукта, пользователей и инфраструктуры
+public                 статические ресурсы
 ```
 
-Key backend modules:
-- `convex/requests.ts` — request lifecycle and core business logic
-- `convex/approvals.ts` — approval queue and decisions
-- `convex/roles.ts` — role management
-- `convex/quotas.ts` — quota logic
-- `convex/emails.ts` — outgoing email workflows
-- `convex/timeline.ts` / `convex/timelineHelpers.ts` — audit trail
+Ключевые backend-модули:
+- `convex/requests.ts` — жизненный цикл заявки и основная бизнес-логика
+- `convex/approvals.ts` — очередь согласования и решения
+- `convex/quotas.ts` — таблицы и правила квот
+- `convex/quotaUsage.ts` — расчеты расходования квот
+- `convex/cfdTags.ts` — теги и работа с ними
+- `convex/emails.ts` — отправка и логирование писем
+- `convex/timeline.ts` / `convex/timelineHelpers.ts` — таймлайн и аудит
 
-## Local Development
+## Быстрый старт
 
-### Prerequisites
+### Требования
 
 - Node.js 20+
 - npm
-- a Convex account / deployment
-- a Resend API key
+- доступ к Convex deployment
+- доступ к SMTP relay `188.225.81.88:9025`
 
-### Install
+### Установка зависимостей
 
 ```bash
 npm install
 ```
 
-### Environment
+### Переменные окружения
 
-Create `.env.local` with the required values.
+Создай файл `.env.local`.
 
-Typical variables:
+Минимальный набор:
 
 ```env
 CONVEX_DEPLOYMENT=...
 NEXT_PUBLIC_CONVEX_URL=...
 NEXT_PUBLIC_CONVEX_SITE_URL=...
-SITE_URL=http://localhost:3000
-RESEND_API_KEY=...
-RESEND_FROM=no-reply@aurum.agima.ru
+
+EMAIL_BASE_URL=http://localhost:3000
+EMAIL_API_BASE_URL=https://public-host-for-email-endpoint
+EMAIL_API_KEY=dev-email-key
+
+SMTP_HOST=188.225.81.88
+SMTP_PORT=9025
+SMTP_SERVERNAME=agima.ru
+SMTP_FROM="Aurum <no-reply@aurum.agima.ru>"
+SMTP_USER=
+SMTP_PASS=
+
 JWT_PRIVATE_KEY=...
 JWKS=...
 ```
 
-Notes:
-- `SITE_URL` is important for auth links.
-- `JWT_PRIVATE_KEY` and `JWKS` are required for `convex-auth`.
-- Email scenarios depend on valid Resend credentials.
+Важно:
+- `EMAIL_BASE_URL` используется для ссылок внутри писем.
+- `EMAIL_API_BASE_URL` должен быть **публично доступен из Convex**, потому что письма отправляются через серверный email endpoint.
+- Для локальной разработки `localhost` для `EMAIL_API_BASE_URL` не подойдет без туннеля или внешнего стенда.
+- `SMTP_USER` / `SMTP_PASS` нужны только если relay требует авторизацию.
 
-### Start Convex
+### Запуск backend-части Convex
 
 ```bash
 npx convex dev --once --tail-logs disable
 ```
 
-If you want the interactive local backend loop:
+Для постоянной локальной разработки можно использовать:
 
 ```bash
 npx convex dev
 ```
 
-### Start Frontend
+### Запуск frontend
 
 ```bash
 npm run dev
 ```
 
-Open:
+Открыть в браузере:
 - [http://localhost:3000](http://localhost:3000)
 
-### Useful Commands
+### Полезные команды
 
 ```bash
 npm run build
-npm run lint
 npx convex dev --once --tail-logs disable
 ```
 
-## Development Notes
+## Почта и вход по коду
 
-### Contest Request Flow
+В текущей архитектуре письма идут так:
+1. Convex инициирует отправку письма.
+2. Convex вызывает публичный endpoint `/api/email/send`.
+3. Next.js endpoint отправляет письмо в SMTP relay `agima.ru`.
 
-For `Конкурсное задание` with specialists:
-- author adds specialists instead of entering final amount manually;
-- amount is calculated from specialists' direct costs;
-- if direct costs are unknown, the request may still be submitted;
-- request first goes to `HOD` validation;
-- only after all required departments validate their specialists does the request move to normal approvers.
+Это значит:
+- на проде `EMAIL_API_BASE_URL` должен указывать на публичный адрес приложения, например `https://aurum.agima.ru`;
+- локально для проверки входа по коду нужен публичный туннель или внешний тестовый стенд.
 
-### Payment Flow
+Прямой SMTP-тест можно делать отдельно от логина — сам relay работает независимо от Convex.
 
-`BUH` can:
-- move request to planned payment;
-- record partial payments;
-- mark paid;
-- set Finplan IDs;
-- set currency rate for non-RUB payments.
+## Ключевые сценарии
 
-### Reopening a Closed Request
+### Обычная заявка
 
-A closed request can be reopened from the request card.
-It returns to the previous status:
-- `approved`
-- or `paid`
+1. Автор создает заявку.
+2. Выбирает источник финансирования и маршрут согласования.
+3. После согласования при необходимости передает заявку в оплату.
+4. `BUH` планирует оплату, может провести частичную оплату или полную оплату.
+5. После оплаты автор закрывает заявку.
 
-## Documentation
+### Конкурсное задание
 
-Supporting docs live in `docs/`:
-- `docs/aurum-operating-guide.txt` — combined handover / operating guide
-- `docs/aurum-user-guide.txt` — user guide
-- `docs/aurum-infrastructure-guide.txt` — infrastructure and support guide
-- `docs/aurum-vision.md` — detailed product vision
-- `docs/aurum-vision-stakeholders.md` — stakeholder-facing product summary
+1. Автор указывает специалистов, цеха, часы и прямые затраты.
+2. Если прямые затраты неизвестны, заявку можно отправить без финальной суммы.
+3. Заявка сначала идет на валидацию цехов (`HOD`).
+4. После валидации всех нужных цехов считается сумма.
+5. Только потом заявка уходит в обычное согласование.
 
-## Deployment
+### Частичная оплата
 
-### Current Deployment Model
+`BUH` может:
+- запланировать оплату;
+- провести частичную оплату;
+- указать остаток и следующую дату;
+- завершить оплату полностью.
 
-Aurum is currently designed as:
-- Next.js frontend deployed on a VM or app host;
-- Convex as managed backend;
-- Resend as email provider.
+## Документация
 
-This means the service is **not fully self-hosted on a single VM** in its current form.
+Поддерживающие документы лежат в `docs/`:
+- `docs/aurum-operating-guide.txt` — общий handover и operating guide
+- `docs/aurum-user-guide.txt` — инструкция для пользователей
+- `docs/aurum-infrastructure-guide.txt` — инфраструктура и поддержка
+- `docs/aurum-vision.md` — подробный vision-документ
+- `docs/aurum-vision-stakeholders.md` — stakeholder-версия
 
-### Recommended Production VM
+## Прод-развертывание
 
-- Ubuntu Server 22.04 LTS or 24.04 LTS
+### Модель развертывания
+
+Сейчас Aurum предполагает:
+- Next.js приложение на VM или app host;
+- Convex как managed backend;
+- внешний SMTP relay `agima.ru`.
+
+То есть сервис не является полностью self-hosted в одной VM без внешних зависимостей.
+
+### Рекомендуемая production VM
+
+- Ubuntu Server 22.04 LTS или 24.04 LTS
 - 4 vCPU
 - 8 GB RAM
 - 20 GB SSD
 - Node.js 20+
 - nginx
-- pm2 or systemd
+- pm2 или systemd
 
-### Required Network / Infra
+### Сетевые требования
 
-- inbound `80/tcp`
-- inbound `443/tcp`
-- SSL certificate for `aurum.agima.ru`
-- outbound access to:
+- входящие `80/tcp`
+- входящие `443/tcp`
+- SSL для `aurum.agima.ru`
+- исходящий доступ к:
   - Convex Cloud
-  - Resend API
+  - SMTP relay `188.225.81.88:9025`
 
-### Production Environment Variables
+### Production env
 
 ```env
 CONVEX_DEPLOYMENT=...
 NEXT_PUBLIC_CONVEX_URL=...
 NEXT_PUBLIC_CONVEX_SITE_URL=...
-SITE_URL=https://aurum.agima.ru
-RESEND_API_KEY=...
-RESEND_FROM=no-reply@aurum.agima.ru
+
+EMAIL_BASE_URL=https://aurum.agima.ru
+EMAIL_API_BASE_URL=https://aurum.agima.ru
+EMAIL_API_KEY=...
+
+SMTP_HOST=188.225.81.88
+SMTP_PORT=9025
+SMTP_SERVERNAME=agima.ru
+SMTP_FROM="Aurum <no-reply@aurum.agima.ru>"
+SMTP_USER=
+SMTP_PASS=
+
 JWT_PRIVATE_KEY=...
 JWKS=...
 ```
 
-### Production Start
-
-Build:
+### Сборка и запуск
 
 ```bash
 npm run build
-```
-
-Run:
-
-```bash
-npm run start
-```
-
-Or with a fixed port:
-
-```bash
 npm run start -- --port 3000
 ```
 
-### Recommended Release Checklist
+## Чеклист перед релизом
 
-Before deploy:
 - `npm run build`
-- verify Convex functions with `npx convex dev --once --tail-logs disable`
-- verify auth by email code
-- verify standard request flow
-- verify contest request with HOD validation
-- verify payment flow
-- verify closing and reopening a request
+- `npx convex dev --once --tail-logs disable`
+- проверить вход по email-коду
+- проверить обычную заявку
+- проверить конкурсное задание и HOD-валидацию
+- проверить передачу в оплату
+- проверить частичную оплату
+- проверить закрытие и переоткрытие заявки
+- проверить письма и таймлайн
 
-### What Support Should Check First
+## Что первым делом смотреть при проблемах
 
-If something breaks in production:
-1. open the request card;
-2. inspect `Изменения` and `Таймлайн`;
-3. verify request status and approvals;
-4. verify role assignment;
-5. verify email log in timeline / Convex;
-6. verify env values for Convex and Resend.
+1. Открыть карточку заявки.
+2. Проверить вкладки `Изменения` и `Таймлайн`.
+3. Проверить текущий статус и approvals.
+4. Проверить роли пользователя.
+5. Проверить email-логи в таймлайне.
+6. Проверить env-переменные Convex и SMTP.
 
-## Git
+## Статус репозитория
 
-Current working branch for the initial code push:
-- `codex/aurum-initial`
-
-## Contact
-
-If something goes wrong in the product flow, current support contact inside the UI is:
-- `@Natarom`
+Основная рабочая ветка проекта:
+- `main`

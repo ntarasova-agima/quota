@@ -44,7 +44,7 @@ Backend / data layer:
 - convex-auth
 
 Email:
-- Resend
+- SMTP (`agima.ru`, `188.225.81.88`, порт `9025`)
 
 Основные директории проекта:
 - src/app — страницы и сценарии UI
@@ -74,15 +74,15 @@ Email:
 Для production сейчас предполагается:
 - Next.js frontend на VM
 - Convex как managed backend
-- Resend как email-провайдер
+- SMTP-сервер agima.ru как email-провайдер
 
 Нужные env-переменные:
 - CONVEX_DEPLOYMENT
 - NEXT_PUBLIC_CONVEX_URL
 - NEXT_PUBLIC_CONVEX_SITE_URL
 - SITE_URL
-- RESEND_API_KEY
-- RESEND_FROM
+- SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS
+- SMTP_FROM
 - JWT_PRIVATE_KEY
 - JWKS
 
@@ -93,7 +93,7 @@ Email:
 Что важно инфраструктуре:
 - доступ на 80/443
 - SSL для домена
-- исходящий доступ к Convex и Resend
+- исходящий доступ к Convex и SMTP-сервер agima.ru
 - хранение env-переменных
 - мониторинг процесса Node/Nginx и доступности frontend
 
@@ -453,7 +453,7 @@ ADMIN
 16. ЧТО ВАЖНО ИНФРАСТРУКТУРЕ
 ==================================================
 
-- сервис зависит от Convex и Resend
+- сервис зависит от Convex и SMTP-сервер agima.ru
 - нужна стабильная работа frontend и SSL
 - домен и env-переменные критичны для писем и авторизации
 - при проблемах с почтой смотреть:

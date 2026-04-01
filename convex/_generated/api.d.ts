@@ -14,6 +14,7 @@ import type * as auth from "../auth.js";
 import type * as authHelpers from "../authHelpers.js";
 import type * as cfdTags from "../cfdTags.js";
 import type * as comments from "../comments.js";
+import type * as debug from "../debug.js";
 import type * as emails from "../emails.js";
 import type * as http from "../http.js";
 import type * as quotaUsage from "../quotaUsage.js";
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   authHelpers: typeof authHelpers;
   cfdTags: typeof cfdTags;
   comments: typeof comments;
+  debug: typeof debug;
   emails: typeof emails;
   http: typeof http;
   quotaUsage: typeof quotaUsage;

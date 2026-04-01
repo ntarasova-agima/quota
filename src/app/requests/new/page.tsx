@@ -86,7 +86,11 @@ export default function NewRequestPage() {
   }, []);
   const presalesQuotas = useQuery(
     api.quotas.listByMonthKeys,
-    isNbd ? { monthKeys: presalesMonthKeys } : "skip",
+    isNbd && fundingSource === "Квота на пресейлы" ? { monthKeys: presalesMonthKeys } : "skip",
+  );
+  const aiServiceQuotas = useQuery(
+    api.quotas.listNbdServiceByMonthKeys,
+    isNbd && fundingSource === "Квота на AI-подписки" ? { monthKeys: presalesMonthKeys } : "skip",
   );
   const currentMonthKey = useMemo(() => {
     const now = new Date();
@@ -174,7 +178,7 @@ export default function NewRequestPage() {
 
   const enforcedRoles = useMemo(() => {
     const enforced = new Set<RoleOption>();
-    if (fundingSource === "Квота на пресейлы") {
+    if (fundingSource === "Квота на пресейлы" || fundingSource === "Квота на AI-подписки") {
       enforced.add("NBD");
     }
     if (fundingSource === "Прибыль компании") {
@@ -216,7 +220,10 @@ export default function NewRequestPage() {
   }, [fundingSource, category]);
 
   useEffect(() => {
-    if (category === "Закупка сервисов" && fundingSource !== "Квота на внутренние затраты") {
+    if (
+      category === "Закупка сервисов" &&
+      !["Квота на внутренние затраты", "Квота на AI-подписки"].includes(fundingSource)
+    ) {
       setFundingSource("Квота на внутренние затраты");
     }
   }, [category, fundingSource]);
@@ -634,14 +641,12 @@ export default function NewRequestPage() {
                   </div>
                 </div>
               )}
-              {fundingSource === "Квота на пресейлы" &&
-              category !== "Welcome-бонус" &&
-              isNbd &&
-              presalesQuotas?.length ? (
+              {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
+                (fundingSource === "Квота на AI-подписки" && category === "Закупка сервисов" && isNbd && aiServiceQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
                   <div className="font-medium">Остаток квот</div>
                   <div className="mt-2 grid gap-2">
-                    {presalesQuotas.map((item) => (
+                    {(fundingSource === "Квота на AI-подписки" ? aiServiceQuotas : presalesQuotas)?.map((item) => (
                       <div
                         key={item.monthKey}
                         className={`flex items-center justify-between rounded-md px-3 py-2 ${

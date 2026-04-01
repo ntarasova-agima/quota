@@ -41,12 +41,13 @@ const fundingSourceCodes: Record<string, string> = {
   "Отгрузки проекта": "RP",
   "Прибыль компании": "PC",
   "Квота на пресейлы": "QS",
+  "Квота на AI-подписки": "QA",
   "Квота на внутренние затраты": "QI",
   "Я не знаю": "UN",
 };
 
 function getFundingOwnerRoles(fundingSource: string) {
-  if (fundingSource === "Квота на пресейлы") {
+  if (fundingSource === "Квота на пресейлы" || fundingSource === "Квота на AI-подписки") {
     return ["NBD"] as const;
   }
   if (fundingSource === "Квота на внутренние затраты") {
@@ -664,9 +665,9 @@ function validateRequestPayload(args: any) {
   }
   if (
     args.category === "Закупка сервисов" &&
-    args.fundingSource !== "Квота на внутренние затраты"
+    !["Квота на внутренние затраты", "Квота на AI-подписки"].includes(args.fundingSource)
   ) {
-    throw new Error("Для закупки сервисов доступен только источник Квота на внутренние затраты");
+    throw new Error("Для закупки сервисов доступны только источники Квота на внутренние затраты и Квота на AI-подписки");
   }
   if (
     args.approvalDeadline !== undefined &&
@@ -702,8 +703,11 @@ function validateRequestPayload(args: any) {
   if (args.fundingSource === "Отгрузки проекта" && !args.paidBy) {
     throw new Error("Укажите дату, когда заплатят нам");
   }
-  if (args.fundingSource === "Квота на пресейлы" && !args.requiredRoles.includes("NBD")) {
-    throw new Error("Для пресейлов обязателен NBD");
+  if (
+    ["Квота на пресейлы", "Квота на AI-подписки"].includes(args.fundingSource) &&
+    !args.requiredRoles.includes("NBD")
+  ) {
+    throw new Error("Для квот NBD обязателен NBD");
   }
   if (
     args.fundingSource === "Квота на внутренние затраты" &&
@@ -1876,13 +1880,22 @@ export const assignCfdTag = mutation({
     if (
       !record?.roles?.includes("CFD") &&
       !record?.roles?.includes("ADMIN") &&
-      !record?.roles?.includes("BUH")
+      !record?.roles?.includes("BUH") &&
+      !record?.roles?.includes("NBD")
     ) {
       throw new Error("Not authorized");
     }
     const request = await ctx.db.get(args.id);
     if (!request) {
       throw new Error("Request not found");
+    }
+    if (
+      record?.roles?.includes("NBD") &&
+      !["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid", "closed"].includes(
+        request.status,
+      )
+    ) {
+      throw new Error("NBD может назначать тег только после согласования");
     }
     if (args.tag?.trim()) {
       const existingTag = await ctx.db

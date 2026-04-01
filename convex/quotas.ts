@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getCurrentEmail } from "./authHelpers";
-import { sumQuotaUsageByMonth } from "./quotaUsage";
+import { sumQuotaUsageByMonth, sumQuotaUsageByMonthAndTag } from "./quotaUsage";
 
 function monthKeyFromDate(date: Date) {
   const year = date.getFullYear();
@@ -112,6 +112,85 @@ export const updateQuota = mutation({
       return existing._id;
     }
     return await ctx.db.insert("presalesQuotas", {
+      monthKey: args.monthKey,
+      year,
+      month,
+      quota: args.quota,
+      spent,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const listNbdServiceByMonthKeys = query({
+  args: {
+    monthKeys: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ensureNbd(ctx);
+    const items = await ctx.db.query("nbdServiceQuotas").collect();
+    const map = new Map(items.map((item) => [item.monthKey, item]));
+    const requests = await ctx.db.query("requests").collect();
+    const predicate = (request: any) =>
+      request.fundingSource === "Квота на AI-подписки" &&
+      request.category === "Закупка сервисов";
+    const spentByMonth = sumQuotaUsageByMonth(requests, predicate);
+    const spentByMonthAndTag = sumQuotaUsageByMonthAndTag(requests, predicate);
+    const results = [];
+    for (const key of args.monthKeys) {
+      const existing = map.get(key);
+      const { year, month } = monthInfoFromKey(key);
+      const spent = spentByMonth.get(key) ?? 0;
+      const tagBreakdown = Array.from(spentByMonthAndTag.get(key)?.entries() ?? [])
+        .sort((a, b) => b[1] - a[1])
+        .map(([tag, amount]) => ({ tag, amount }));
+      results.push(
+        existing
+          ? { ...existing, spent, tagBreakdown }
+          : {
+              monthKey: key,
+              year,
+              month,
+              quota: 0,
+              spent,
+              tagBreakdown,
+              updatedAt: 0,
+            },
+      );
+    }
+    return results;
+  },
+});
+
+export const updateNbdServiceQuota = mutation({
+  args: {
+    monthKey: v.string(),
+    quota: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ensureNbd(ctx);
+    const { year, month } = monthInfoFromKey(args.monthKey);
+    const requests = await ctx.db.query("requests").collect();
+    const spent = sumQuotaUsageByMonth(
+      requests,
+      (request) =>
+        request.fundingSource === "Квота на AI-подписки" &&
+        request.category === "Закупка сервисов",
+    ).get(args.monthKey) ?? 0;
+
+    const existing = await ctx.db
+      .query("nbdServiceQuotas")
+      .withIndex("by_monthKey", (q: any) => q.eq("monthKey", args.monthKey))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        quota: args.quota,
+        spent,
+        updatedAt: Date.now(),
+      });
+      return existing._id;
+    }
+    return await ctx.db.insert("nbdServiceQuotas", {
       monthKey: args.monthKey,
       year,
       month,

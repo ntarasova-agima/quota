@@ -70,45 +70,35 @@ async function sendEmail(
     html: string;
   },
 ) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    const error = "Missing RESEND_API_KEY";
+  try {
+    const emailApiBaseUrl = process.env.EMAIL_API_BASE_URL ?? process.env.EMAIL_BASE_URL ?? "http://localhost:3000";
+    const response = await fetch(`${emailApiBaseUrl.replace(/\/+$/, "")}/api/email/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-email-api-key": process.env.EMAIL_API_KEY ?? "dev-email-key",
+      },
+      body: JSON.stringify({
+        to: params.to,
+        subject: params.subject,
+        html: params.html,
+      }),
+    });
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(`SMTP error: ${message}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "SMTP error";
     await ctx.runMutation(internal.timeline.recordEmailLog, {
       requestId: params.requestId,
       emailType: params.emailType,
       recipients: params.to,
       subject: params.subject,
       status: "failed",
-      error,
+      error: message,
     });
-    throw new Error(error);
-  }
-  const from = process.env.RESEND_FROM ?? "Quota <onboarding@resend.dev>";
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from,
-      to: params.to,
-      subject: params.subject,
-      html: params.html,
-    }),
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    const error = `Resend error: ${text}`;
-    await ctx.runMutation(internal.timeline.recordEmailLog, {
-      requestId: params.requestId,
-      emailType: params.emailType,
-      recipients: params.to,
-      subject: params.subject,
-      status: "failed",
-      error,
-    });
-    throw new Error(error);
+    throw new Error(message);
   }
   await ctx.runMutation(internal.timeline.recordEmailLog, {
     requestId: params.requestId,

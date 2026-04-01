@@ -16,7 +16,7 @@ async function ensureCfdOrAdmin(ctx: any) {
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const canManage = record?.roles?.some((role: string) => ["CFD", "ADMIN", "BUH"].includes(role));
+  const canManage = record?.roles?.some((role: string) => ["CFD", "ADMIN", "BUH", "NBD"].includes(role));
   if (!canManage) {
     throw new Error("Not authorized");
   }

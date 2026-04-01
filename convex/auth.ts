@@ -4,37 +4,32 @@ import { Email } from "@convex-dev/auth/providers/Email";
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
     Email({
-      sendVerificationRequest: async ({ identifier, token, url }) => {
-        const apiKey = process.env.RESEND_API_KEY;
-        if (!apiKey) {
-          throw new Error("Missing RESEND_API_KEY");
-        }
-        const from = process.env.RESEND_FROM ?? "My App <onboarding@resend.dev>";
+      sendVerificationRequest: async ({ identifier, token }) => {
         const baseUrl = (process.env.EMAIL_BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
         const encodedCode = encodeURIComponent(token);
         const encodedEmail = encodeURIComponent(identifier);
         const safeUrl = `${baseUrl}/sign-in?email=${encodedEmail}&code=${encodedCode}#code=${encodedCode}&email=${encodedEmail}`;
-        const response = await fetch("https://api.resend.com/emails", {
+        const emailApiBaseUrl = process.env.EMAIL_API_BASE_URL ?? process.env.EMAIL_BASE_URL ?? "http://localhost:3000";
+        const response = await fetch(`${emailApiBaseUrl.replace(/\/+$/, "")}/api/email/send`, {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
+            "x-email-api-key": process.env.EMAIL_API_KEY ?? "dev-email-key",
           },
           body: JSON.stringify({
-            from,
-            to: identifier,
-            subject: "Your sign-in code",
+            to: [identifier],
+            subject: "Код для входа в Aurum",
             html: `
-              <p>Your one-time sign-in code is:</p>
+              <p>Код для входа в Aurum:</p>
               <p><strong>${token}</strong></p>
-              <p>Or click this link to sign in:</p>
+              <p>Или перейдите по ссылке:</p>
               <p><a href="${safeUrl}">${safeUrl}</a></p>
             `,
           }),
         });
         if (!response.ok) {
           const errorText = await response.text();
-          throw new Error(`Resend error: ${errorText}`);
+          throw new Error(`SMTP error: ${errorText}`);
         }
       },
     }),

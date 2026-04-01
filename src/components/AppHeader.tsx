@@ -83,9 +83,14 @@ export default function AppHeader({
           </Button>
         )}
         {isNbd && (
-          <Button asChild variant={pathname === "/presales-quota" ? "default" : "outline"}>
-            <Link href="/presales-quota">Квота пресейлов</Link>
-          </Button>
+          <>
+            <Button asChild variant={pathname === "/presales-quota" ? "default" : "outline"}>
+              <Link href="/presales-quota">Квота пресейлов</Link>
+            </Button>
+            <Button asChild variant={pathname === "/nbd-services-quota" ? "default" : "outline"}>
+              <Link href="/nbd-services-quota">Квоты AI-подписок</Link>
+            </Button>
+          </>
         )}
         {isCfd && (
           <>
