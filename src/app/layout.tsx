@@ -24,18 +24,26 @@ export const metadata: Metadata = {
   },
 };
 
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const convexUrl = process.env["NEXT_PUBLIC_CONVEX_URL"];
+
+  if (!convexUrl) {
+    throw new Error("Missing environment variable NEXT_PUBLIC_CONVEX_URL");
+  }
+
   return (
     <ConvexAuthNextjsServerProvider>
       <html lang="en" className={inter.variable}>
         <body
           className={`${geistSans.variable} ${geistMono.variable} antialiased`}
         >
-          <ConvexClientProvider>
+          <ConvexClientProvider convexUrl={convexUrl}>
             <div className="min-h-screen bg-background text-foreground">
               {children}
               <footer className="border-t border-zinc-200 bg-[linear-gradient(180deg,rgba(255,255,255,0)_0%,rgba(244,244,245,0.9)_100%)]">
