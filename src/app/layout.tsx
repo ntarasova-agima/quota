@@ -38,7 +38,7 @@ export default function RootLayout({
   }
 
   return (
-    <ConvexAuthNextjsServerProvider>
+    <ConvexAuthNextjsServerProvider storageNamespace={convexUrl}>
       <html lang="en" className={inter.variable}>
         <body
           className={`${geistSans.variable} ${geistMono.variable} antialiased`}
