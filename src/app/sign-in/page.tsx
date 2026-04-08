@@ -26,6 +26,21 @@ const captureParams = `
 })();
 `;
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function isAgimaEmail(value: string) {
+  return /^[^@\s]+@agima\.ru$/i.test(value.trim());
+}
+
+function isAllowedSignInEmail(value: string) {
+  return (
+    isAgimaEmail(value) ||
+    (process.env.NODE_ENV !== "production" && /^[^@\s]+@quota\.local$/i.test(value.trim()))
+  );
+}
+
 export default function SignInPage() {
   const { signIn } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -41,6 +56,7 @@ export default function SignInPage() {
   const [linkEmail, setLinkEmail] = useState<string | undefined>(undefined);
   const [linkChecked, setLinkChecked] = useState(false);
   const myRoles = useQuery(api.roles.myRoles, isAuthenticated ? {} : "skip");
+  const signInError = searchParams.get("error");
 
   const linkParams = useMemo(() => {
     const codeParam = searchParams.get("code") ?? linkCode;
@@ -48,6 +64,13 @@ export default function SignInPage() {
       searchParams.get("email") ?? searchParams.get("identifier") ?? linkEmail;
     return { codeParam, emailParam };
   }, [searchParams, linkCode, linkEmail]);
+
+  useEffect(() => {
+    if (!signInError) {
+      return;
+    }
+    setError(signInError);
+  }, [signInError]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -90,11 +113,18 @@ export default function SignInPage() {
     setStep("code");
     setCode(linkParams.codeParam);
     if (linkParams.emailParam) {
-      setEmail(linkParams.emailParam);
+      const normalizedEmail = normalizeEmail(linkParams.emailParam);
+      setEmail(normalizedEmail);
+      if (!isAllowedSignInEmail(normalizedEmail)) {
+        setCode("");
+        setStep("email");
+        setError("Войти в Aurum можно только с почтой @agima.ru");
+        return;
+      }
       setSubmitting(true);
       setError(null);
       signIn("email", {
-        email: linkParams.emailParam,
+        email: normalizedEmail,
         code: linkParams.codeParam,
         redirectTo: "/requests",
       })
@@ -129,11 +159,16 @@ export default function SignInPage() {
     setError(null);
     setSubmitting(true);
     try {
+      const normalizedEmail = normalizeEmail(email);
+      if (!isAllowedSignInEmail(normalizedEmail)) {
+        throw new Error("Войти в Aurum можно только с почтой @agima.ru");
+      }
+      setEmail(normalizedEmail);
       if (step === "email") {
-        await signIn("email", { email, redirectTo: "/requests" });
+        await signIn("email", { email: normalizedEmail, redirectTo: "/requests" });
         setStep("code");
       } else {
-        await signIn("email", { email, code, redirectTo: "/requests" });
+        await signIn("email", { email: normalizedEmail, code, redirectTo: "/requests" });
         if (typeof window !== "undefined") {
           sessionStorage.removeItem("auth_code");
           sessionStorage.removeItem("auth_email");
@@ -178,9 +213,10 @@ export default function SignInPage() {
                   required={step === "email"}
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
-                  placeholder="you@example.com"
+                  placeholder="name@agima.ru"
                   disabled={step === "code"}
                 />
+                <p className="text-xs text-muted-foreground">Войти можно только с корпоративной почтой @agima.ru.</p>
               </div>
 
               {step === "code" && (

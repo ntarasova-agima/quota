@@ -17,6 +17,7 @@ import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import { getApprovalStatusClass, getRequestStatusSummary } from "@/lib/requestStatus";
 import { HOD_DEPARTMENTS } from "@/lib/constants";
+import { getRoleLabel } from "@/lib/roleLabels";
 import { Paperclip, Upload } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
 
@@ -1768,7 +1769,7 @@ export default function RequestDetailPage() {
                 approvals.map((approval) => (
                   <div key={approval._id} className="rounded-lg border border-border p-4 text-sm">
                     <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="font-medium">{approval.role}</div>
+                      <div className="font-medium">{getRoleLabel(approval.role)}</div>
                       <span
                         className={`rounded-full border px-3 py-1 text-xs ${
                           approval.status === "pending"
@@ -1839,7 +1840,7 @@ export default function RequestDetailPage() {
                               }))
                             }
                             rows={2}
-                            placeholder={`Например, согласовано как ${approval.role}`}
+                            placeholder={`Например, согласовано как ${getRoleLabel(approval.role)}`}
                           />
                         </div>
                         <Button
@@ -1859,7 +1860,7 @@ export default function RequestDetailPage() {
                             }
                           }}
                         >
-                          Согласовать как {approval.role}
+                          Согласовать как {getRoleLabel(approval.role)}
                         </Button>
                       </div>
                     ) : null}

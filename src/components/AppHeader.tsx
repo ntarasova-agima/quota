@@ -6,6 +6,7 @@ import { useQuery } from "convex/react";
 import { Button } from "@/components/ui/button";
 import SignOutButton from "@/components/SignOutButton";
 import { api } from "@/lib/convex";
+import { formatRoleList } from "@/lib/roleLabels";
 
 export default function AppHeader({
   title,
@@ -20,7 +21,7 @@ export default function AppHeader({
   const hasHistoricalApprovalAccess = useQuery(api.approvals.hasReviewedAny);
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const roles = profile?.roles?.length ? profile.roles.join(", ") : "роль не назначена";
+  const roles = profile?.roles?.length ? formatRoleList(profile.roles) : "роль не назначена";
   const name = profile?.fullName || profile?.email || "";
   const canViewAllRequests =
     profile?.roles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)) ||

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Button } from "@/components/ui/button";
@@ -14,20 +14,25 @@ import { api } from "@/lib/convex";
 export default function ProfileClient() {
   const { signOut } = useAuthActions();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const profile = useQuery(api.roles.myProfile);
   const updateProfile = useMutation(api.roles.updateMyProfile);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
+  const [creatorTitle, setCreatorTitle] = useState("");
   const [email, setEmail] = useState("");
   const isAdmin = profile?.roles?.includes("ADMIN") ?? false;
+  const isOnboarding = searchParams.get("onboarding") === "1" || profile?.needsOnboarding;
+  const nextPath = searchParams.get("next")?.startsWith("/") ? searchParams.get("next")! : "/requests";
 
   useEffect(() => {
     if (!profile) {
       return;
     }
     setFullName(profile.fullName ?? "");
+    setCreatorTitle(profile.creatorTitle ?? "");
     setEmail(profile.email ?? "");
   }, [profile]);
 
@@ -55,8 +60,12 @@ export default function ProfileClient() {
     try {
       await updateProfile({
         fullName: fullName.trim() || undefined,
+        creatorTitle: creatorTitle.trim() || undefined,
         email: isAdmin ? email.trim() || undefined : undefined,
       });
+      if (isOnboarding) {
+        router.replace(nextPath);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось обновить профиль";
       setError(
@@ -64,7 +73,13 @@ export default function ProfileClient() {
           ? "Менять почту может только администратор"
           : message.includes("Email already exists")
             ? "Такая почта уже используется"
-            : message,
+            : message.includes("Full name required")
+              ? "Укажите имя и фамилию"
+              : message.includes("Creator title required")
+                ? "Укажите должность"
+                : message.includes("Corporate email required")
+                  ? "Используйте корпоративную почту @agima.ru"
+                  : message,
       );
     } finally {
       setSaving(false);
@@ -74,8 +89,12 @@ export default function ProfileClient() {
   return (
     <Card className="w-full max-w-xl">
       <CardHeader>
-        <CardTitle>Профиль</CardTitle>
-        <CardDescription>Вы вошли в систему.</CardDescription>
+        <CardTitle>{isOnboarding ? "Заполните профиль" : "Профиль"}</CardTitle>
+        <CardDescription>
+          {isOnboarding
+            ? "Это нужно только один раз: укажите имя, фамилию и должность, чтобы продолжить работу."
+            : "Вы вошли в систему."}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {error && (
@@ -85,12 +104,6 @@ export default function ProfileClient() {
         )}
 
         <form className="space-y-4" onSubmit={handleSave}>
-          {profile?.creatorTitle ? (
-            <div className="space-y-2">
-              <Label>Роль создателя заявок</Label>
-              <Input value={profile.creatorTitle} disabled />
-            </div>
-          ) : null}
           <div className="space-y-2">
             <Label htmlFor="fullName">Имя и фамилия</Label>
             <Input
@@ -98,6 +111,15 @@ export default function ProfileClient() {
               value={fullName}
               onChange={(event) => setFullName(event.target.value)}
               placeholder="Например, Наталья Тарасова"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="creatorTitle">Должность</Label>
+            <Input
+              id="creatorTitle"
+              value={creatorTitle}
+              onChange={(event) => setCreatorTitle(event.target.value)}
+              placeholder="Например, Аккаунт-менеджер"
             />
           </div>
           <div className="space-y-2">
@@ -113,13 +135,15 @@ export default function ProfileClient() {
             )}
           </div>
           <Button type="submit" disabled={saving} className="w-full">
-            Сохранить
+            {isOnboarding ? "Сохранить и продолжить" : "Сохранить"}
           </Button>
         </form>
 
-        <Button asChild className="w-full">
-          <Link href="/requests">Перейти к заявкам</Link>
-        </Button>
+        {!isOnboarding && (
+          <Button asChild className="w-full">
+            <Link href="/requests">Перейти к заявкам</Link>
+          </Button>
+        )}
         <Button
           type="button"
           onClick={handleSignOut}

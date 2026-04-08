@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { api } from "@/lib/convex";
 import { ALL_ROLES_WITH_HOD, HOD_DEPARTMENTS } from "@/lib/constants";
+import { formatRoleList, getRoleLabel } from "@/lib/roleLabels";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 
@@ -167,7 +168,7 @@ export default function RolesPage() {
                   <Input value={fullName} onChange={(e) => setFullName(e.target.value)} />
                 </div>
                 <div className="space-y-2">
-                  <Label>Должность / роль создателя</Label>
+                  <Label>Должность</Label>
                   <Input
                     value={creatorTitle}
                     onChange={(e) => setCreatorTitle(e.target.value)}
@@ -180,7 +181,7 @@ export default function RolesPage() {
                     {ALL_ROLES_WITH_HOD.map((role) => (
                       <label key={role} className="flex items-center gap-2 text-sm">
                         <Checkbox checked={selectedRoles.includes(role)} onCheckedChange={() => toggleRole(role)} />
-                        {role}
+                        {getRoleLabel(role)}
                       </label>
                     ))}
                   </div>
@@ -248,11 +249,11 @@ export default function RolesPage() {
                           )}
                           {item.creatorTitle ? (
                             <div className="text-xs text-muted-foreground">
-                              Роль создателя: {item.creatorTitle}
+                              Должность: {item.creatorTitle}
                             </div>
                           ) : null}
                           <div className="text-muted-foreground">
-                            {item.roles.join(", ") || "Нет ролей"}
+                            {item.roles.length ? formatRoleList(item.roles) : "Нет ролей"}
                           </div>
                           {item.hodDepartments?.length ? (
                             <div className="text-xs text-muted-foreground">

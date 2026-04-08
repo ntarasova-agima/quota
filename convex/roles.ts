@@ -19,6 +19,18 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+function isAgimaEmail(email: string) {
+  return /^[^@\s]+@agima\.ru$/i.test(email.trim());
+}
+
+function isDevTestEmail(email: string) {
+  return process.env.NODE_ENV !== "production" && /^[^@\s]+@quota\.local$/i.test(email.trim());
+}
+
+function hasCompletedProfile(record: { fullName?: string; creatorTitle?: string } | null | undefined) {
+  return Boolean(record?.fullName?.trim() && record?.creatorTitle?.trim());
+}
+
 export const myProfile = query({
   args: {},
   handler: async (ctx) => {
@@ -36,6 +48,9 @@ export const myProfile = query({
       fullName: record?.fullName ?? null,
       creatorTitle: record?.creatorTitle ?? null,
       hodDepartments: record?.hodDepartments ?? [],
+      needsOnboarding: !record || !hasCompletedProfile(record),
+      hasRoleRecord: Boolean(record),
+      isCorporateEmail: isAgimaEmail(email),
     };
   },
 });
@@ -116,6 +131,57 @@ export const listAdContacts = query({
         fullName: role.fullName ?? null,
         creatorTitle: role.creatorTitle ?? null,
       }));
+  },
+});
+
+export const ensureCurrentUserRole = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing email");
+    }
+    const normalizedEmail = normalizeEmail(email);
+    const existing = await ctx.db
+      .query("roles")
+      .withIndex("by_email", (q) => q.eq("email", normalizedEmail))
+      .first();
+    if (existing) {
+      if (!existing.active) {
+        throw new Error("Профиль архивирован. Обратитесь к администратору");
+      }
+      if (!isAgimaEmail(normalizedEmail) && !(existing.isTest && isDevTestEmail(normalizedEmail))) {
+        throw new Error("Войти в Aurum можно только с почтой @agima.ru");
+      }
+      return {
+        created: false,
+        needsOnboarding: !hasCompletedProfile(existing),
+        roles: existing.roles,
+      };
+    }
+
+    if (!isAgimaEmail(normalizedEmail)) {
+      throw new Error("Войти в Aurum можно только с почтой @agima.ru");
+    }
+
+    const now = Date.now();
+    await ctx.db.insert("roles", {
+      email: normalizedEmail,
+      roles: ["AD"],
+      active: true,
+      isTest: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return {
+      created: true,
+      needsOnboarding: true,
+      roles: ["AD"],
+    };
   },
 });
 
@@ -338,6 +404,7 @@ export const updateMyProfile = mutation({
   args: {
     fullName: v.optional(v.string()),
     email: v.optional(v.string()),
+    creatorTitle: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -367,21 +434,34 @@ export const updateMyProfile = mutation({
         throw new Error("Email already exists");
       }
     }
+    const nextFullName = args.fullName?.trim();
+    const nextCreatorTitle = args.creatorTitle?.trim();
+    if (!nextFullName) {
+      throw new Error("Full name required");
+    }
+    if (!nextCreatorTitle) {
+      throw new Error("Creator title required");
+    }
 
     if (record) {
       await ctx.db.patch(record._id, {
         email: nextEmail,
-        fullName: args.fullName?.trim() || undefined,
+        fullName: nextFullName,
+        creatorTitle: nextCreatorTitle,
         updatedAt: now,
       });
       return { email: nextEmail };
     }
+    if (!isAgimaEmail(nextEmail)) {
+      throw new Error("Corporate email required");
+    }
     await ctx.db.insert("roles", {
       email: nextEmail,
-      roles: [],
+      roles: ["AD"],
       active: true,
       isTest: false,
-      fullName: args.fullName?.trim() || undefined,
+      fullName: nextFullName,
+      creatorTitle: nextCreatorTitle,
       createdAt: now,
       updatedAt: now,
     });
