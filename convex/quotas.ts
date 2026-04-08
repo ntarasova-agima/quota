@@ -108,6 +108,15 @@ export const listByMonthKeys = query({
           ? {
               ...existing,
               quotaWithVat: getQuotaWithVat(existing.quota, existing.quotaWithVat, existing.vatRate),
+              adjustedQuota: existing.adjustedQuota,
+              adjustedQuotaWithVat:
+                existing.adjustedQuota !== undefined
+                  ? getQuotaWithVat(
+                      existing.adjustedQuota,
+                      existing.adjustedQuotaWithVat,
+                      existing.vatRate,
+                    )
+                  : undefined,
               vatRate: normalizeVatRate(existing.vatRate),
               spent: spent.amountWithoutVat,
               spentWithVat: spent.amountWithVat,
@@ -118,6 +127,8 @@ export const listByMonthKeys = query({
               month,
               quota: 0,
               quotaWithVat: 0,
+              adjustedQuota: undefined,
+              adjustedQuotaWithVat: undefined,
               vatRate: DEFAULT_VAT_RATE,
               spent: spent.amountWithoutVat,
               spentWithVat: spent.amountWithVat,
@@ -134,6 +145,8 @@ export const updateQuota = mutation({
     monthKey: v.string(),
     quota: v.number(),
     quotaWithVat: v.optional(v.number()),
+    adjustedQuota: v.optional(v.number()),
+    adjustedQuotaWithVat: v.optional(v.number()),
     vatRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -146,6 +159,10 @@ export const updateQuota = mutation({
     ).get(args.monthKey) ?? { amountWithoutVat: 0, amountWithVat: 0 };
     const vatRate = normalizeVatRate(args.vatRate);
     const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
+    const adjustedQuotaWithVat =
+      args.adjustedQuota !== undefined
+        ? getQuotaWithVat(args.adjustedQuota, args.adjustedQuotaWithVat, vatRate)
+        : undefined;
 
     const existing = await ctx.db
       .query("presalesQuotas")
@@ -155,6 +172,8 @@ export const updateQuota = mutation({
       await ctx.db.patch(existing._id, {
         quota: args.quota,
         quotaWithVat,
+        adjustedQuota: args.adjustedQuota,
+        adjustedQuotaWithVat,
         vatRate,
         spent: spent.amountWithoutVat,
         spentWithVat: spent.amountWithVat,
@@ -168,6 +187,8 @@ export const updateQuota = mutation({
       month,
       quota: args.quota,
       quotaWithVat,
+      adjustedQuota: args.adjustedQuota,
+      adjustedQuotaWithVat,
       vatRate,
       spent: spent.amountWithoutVat,
       spentWithVat: spent.amountWithVat,
@@ -201,6 +222,15 @@ export const listAiToolByMonthKeys = query({
           ? {
               ...existing,
               quotaWithVat: getQuotaWithVat(existing.quota, existing.quotaWithVat, existing.vatRate),
+              adjustedQuota: existing.adjustedQuota,
+              adjustedQuotaWithVat:
+                existing.adjustedQuota !== undefined
+                  ? getQuotaWithVat(
+                      existing.adjustedQuota,
+                      existing.adjustedQuotaWithVat,
+                      existing.vatRate,
+                    )
+                  : undefined,
               vatRate: normalizeVatRate(existing.vatRate),
               spent: spent.amountWithoutVat,
               spentWithVat: spent.amountWithVat,
@@ -212,6 +242,8 @@ export const listAiToolByMonthKeys = query({
               month,
               quota: 0,
               quotaWithVat: 0,
+              adjustedQuota: undefined,
+              adjustedQuotaWithVat: undefined,
               vatRate: DEFAULT_VAT_RATE,
               spent: spent.amountWithoutVat,
               spentWithVat: spent.amountWithVat,
@@ -229,6 +261,8 @@ export const updateAiToolQuota = mutation({
     monthKey: v.string(),
     quota: v.number(),
     quotaWithVat: v.optional(v.number()),
+    adjustedQuota: v.optional(v.number()),
+    adjustedQuotaWithVat: v.optional(v.number()),
     vatRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -240,6 +274,10 @@ export const updateAiToolQuota = mutation({
       { amountWithoutVat: 0, amountWithVat: 0 };
     const vatRate = normalizeVatRate(args.vatRate);
     const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
+    const adjustedQuotaWithVat =
+      args.adjustedQuota !== undefined
+        ? getQuotaWithVat(args.adjustedQuota, args.adjustedQuotaWithVat, vatRate)
+        : undefined;
 
     const existing = await ctx.db
       .query("aiToolQuotas")
@@ -249,6 +287,8 @@ export const updateAiToolQuota = mutation({
       await ctx.db.patch(existing._id, {
         quota: args.quota,
         quotaWithVat,
+        adjustedQuota: args.adjustedQuota,
+        adjustedQuotaWithVat,
         vatRate,
         spent: spent.amountWithoutVat,
         spentWithVat: spent.amountWithVat,
@@ -262,6 +302,8 @@ export const updateAiToolQuota = mutation({
       month,
       quota: args.quota,
       quotaWithVat,
+      adjustedQuota: args.adjustedQuota,
+      adjustedQuotaWithVat,
       vatRate,
       spent: spent.amountWithoutVat,
       spentWithVat: spent.amountWithVat,
@@ -291,7 +333,7 @@ export const listCfdByMonthKeys = query({
               ...existing,
               quotaWithVat: getQuotaWithVat(existing.quota, existing.quotaWithVat, existing.vatRate),
               adjustedQuotaWithVat: getQuotaWithVat(
-                existing.adjustedQuota,
+                existing.adjustedQuota ?? existing.quota,
                 existing.adjustedQuotaWithVat,
                 existing.vatRate,
               ),
@@ -305,8 +347,8 @@ export const listCfdByMonthKeys = query({
               month,
               quota: 0,
               quotaWithVat: 0,
-              adjustedQuota: 0,
-              adjustedQuotaWithVat: 0,
+              adjustedQuota: undefined,
+              adjustedQuotaWithVat: undefined,
               vatRate: DEFAULT_VAT_RATE,
               spent: spent.amountWithoutVat,
               spentWithVat: spent.amountWithVat,
@@ -323,7 +365,7 @@ export const updateCfdQuota = mutation({
     monthKey: v.string(),
     quota: v.number(),
     quotaWithVat: v.optional(v.number()),
-    adjustedQuota: v.number(),
+    adjustedQuota: v.optional(v.number()),
     adjustedQuotaWithVat: v.optional(v.number()),
     vatRate: v.optional(v.number()),
   },
@@ -336,11 +378,10 @@ export const updateCfdQuota = mutation({
       { amountWithoutVat: 0, amountWithVat: 0 };
     const vatRate = normalizeVatRate(args.vatRate);
     const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
-    const adjustedQuotaWithVat = getQuotaWithVat(
-      args.adjustedQuota,
-      args.adjustedQuotaWithVat,
-      vatRate,
-    );
+    const adjustedQuotaWithVat =
+      args.adjustedQuota !== undefined
+        ? getQuotaWithVat(args.adjustedQuota, args.adjustedQuotaWithVat, vatRate)
+        : undefined;
 
     const existing = await ctx.db
       .query("cfdQuotas")
@@ -399,7 +440,7 @@ export const listCooByMonthKeys = query({
               ...existing,
               quotaWithVat: getQuotaWithVat(existing.quota, existing.quotaWithVat, existing.vatRate),
               adjustedQuotaWithVat: getQuotaWithVat(
-                existing.adjustedQuota,
+                existing.adjustedQuota ?? existing.quota,
                 existing.adjustedQuotaWithVat,
                 existing.vatRate,
               ),
@@ -413,8 +454,8 @@ export const listCooByMonthKeys = query({
               month,
               quota: 0,
               quotaWithVat: 0,
-              adjustedQuota: 0,
-              adjustedQuotaWithVat: 0,
+              adjustedQuota: undefined,
+              adjustedQuotaWithVat: undefined,
               vatRate: DEFAULT_VAT_RATE,
               spent: spent.amountWithoutVat,
               spentWithVat: spent.amountWithVat,
@@ -431,7 +472,7 @@ export const updateCooQuota = mutation({
     monthKey: v.string(),
     quota: v.number(),
     quotaWithVat: v.optional(v.number()),
-    adjustedQuota: v.number(),
+    adjustedQuota: v.optional(v.number()),
     adjustedQuotaWithVat: v.optional(v.number()),
     vatRate: v.optional(v.number()),
   },
@@ -445,11 +486,10 @@ export const updateCooQuota = mutation({
     ).get(args.monthKey) ?? { amountWithoutVat: 0, amountWithVat: 0 };
     const vatRate = normalizeVatRate(args.vatRate);
     const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
-    const adjustedQuotaWithVat = getQuotaWithVat(
-      args.adjustedQuota,
-      args.adjustedQuotaWithVat,
-      vatRate,
-    );
+    const adjustedQuotaWithVat =
+      args.adjustedQuota !== undefined
+        ? getQuotaWithVat(args.adjustedQuota, args.adjustedQuotaWithVat, vatRate)
+        : undefined;
     const existing = await ctx.db
       .query("cooQuotas")
       .withIndex("by_monthKey", (q: any) => q.eq("monthKey", args.monthKey))

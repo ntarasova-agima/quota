@@ -90,11 +90,11 @@ export function calculateIncomingRatio(params: {
   return Number((params.incomingAmount / outgoingAmount).toFixed(4));
 }
 
-export function formatIncomingRatio(value?: number) {
+export function formatIncomingRatio(value?: number, digits = 2) {
   if (value === undefined || !Number.isFinite(value)) {
     return "";
   }
-  return value.toFixed(4).replace(/(?:\.0+|(\.\d+?)0+)$/, "$1");
+  return value.toFixed(digits).replace(/(?:\.0+|(\.\d+?)0+)$/, "$1");
 }
 
 export function isPaidByDateAllowed(value?: string) {
@@ -125,6 +125,14 @@ export function buildShipmentMonthKey(year: string, month: string) {
     return undefined;
   }
   return `${year}-${month}`;
+}
+
+export function monthKeyToDateInput(monthKey?: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey ?? "");
+  if (!match) {
+    return "";
+  }
+  return `${match[1]}-${match[2]}-01`;
 }
 
 export function buildShipmentYearOptions(currentYear: number, selectedYear?: string) {

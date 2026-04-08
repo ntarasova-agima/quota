@@ -47,8 +47,6 @@ type QuotaRemainingTableProps = {
   emptyText?: string;
   onLoadMore?: () => void;
   rows?: QuotaRow[];
-  showTagBreakdown?: boolean;
-  useAdjustedQuota?: boolean;
 };
 
 export default function QuotaRemainingTable({
@@ -57,8 +55,6 @@ export default function QuotaRemainingTable({
   emptyText = "Пока нет данных по квоте.",
   onLoadMore,
   rows,
-  showTagBreakdown = false,
-  useAdjustedQuota = false,
 }: QuotaRemainingTableProps) {
   const currentKey = useMemo(() => {
     const now = new Date();
@@ -88,36 +84,28 @@ export default function QuotaRemainingTable({
       <CardContent>
         {rows.length ? (
           <div className="grid gap-3">
-            <div
-              className={`grid gap-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground ${
-                showTagBreakdown
-                  ? "grid-cols-[1.1fr_1.4fr_1fr_1fr_1.4fr]"
-                  : "grid-cols-[1.1fr_1.4fr_1fr_1fr]"
-              }`}
-            >
+            <div className="grid grid-cols-[1.1fr_1.35fr_1.35fr_1fr_1fr] gap-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <div>Месяц и год</div>
-              <div>Квота</div>
+              <div>Изначальная квота</div>
+              <div>Измененная квота</div>
               <div>Потрачено</div>
               <div>Остаток</div>
-              {showTagBreakdown ? <div>По тегам</div> : null}
             </div>
             {rows.map((row) => {
-              const quota = useAdjustedQuota ? row.adjustedQuota ?? row.quota : row.quota;
-              const quotaWithVat = useAdjustedQuota
-                ? row.adjustedQuotaWithVat ?? row.adjustedQuota ?? row.quotaWithVat ?? row.quota
-                : row.quotaWithVat ?? row.quota;
+              const initialQuota = row.quota;
+              const initialQuotaWithVat = row.quotaWithVat ?? row.quota;
+              const adjustedQuota = row.adjustedQuota;
+              const adjustedQuotaWithVat = row.adjustedQuotaWithVat ?? row.adjustedQuota;
+              const quotaForRemaining = adjustedQuota ?? initialQuota;
+              const quotaWithVatForRemaining = adjustedQuotaWithVat ?? initialQuotaWithVat;
               const spentWithVat = row.spentWithVat ?? row.spent;
-              const remaining = quota - row.spent;
-              const remainingWithVat = quotaWithVat - spentWithVat;
+              const remaining = quotaForRemaining - row.spent;
+              const remainingWithVat = quotaWithVatForRemaining - spentWithVat;
               const isAlert = remaining < 0 || remainingWithVat < 0;
               return (
                 <div
                   key={row.monthKey}
-                  className={`grid items-start gap-3 rounded-lg border px-3 py-3 text-sm ${
-                    showTagBreakdown
-                      ? "grid-cols-[1.1fr_1.4fr_1fr_1fr_1.4fr]"
-                      : "grid-cols-[1.1fr_1.4fr_1fr_1fr]"
-                  } ${
+                  className={`grid grid-cols-[1.1fr_1.35fr_1.35fr_1fr_1fr] items-start gap-3 rounded-lg border px-3 py-3 text-sm ${
                     isAlert
                       ? "border-rose-200 bg-rose-50/60"
                       : row.monthKey === currentKey
@@ -127,8 +115,12 @@ export default function QuotaRemainingTable({
                 >
                   <div className="font-medium">{formatMonth(row.year, row.month)}</div>
                   <div className="space-y-1">
-                    <div>Без НДС: {formatAmount(quota)}</div>
-                    <div>С НДС: {formatAmount(quotaWithVat)}</div>
+                    <div>Без НДС: {formatAmount(initialQuota)}</div>
+                    <div>С НДС: {formatAmount(initialQuotaWithVat)}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div>Без НДС: {formatAmount(adjustedQuota)}</div>
+                    <div>С НДС: {formatAmount(adjustedQuotaWithVat)}</div>
                   </div>
                   <div className="space-y-1">
                     <div>Без НДС: {formatAmount(row.spent)}</div>
@@ -138,28 +130,6 @@ export default function QuotaRemainingTable({
                     <div>Без НДС: {formatAmount(remaining)}</div>
                     <div>С НДС: {formatAmount(remainingWithVat)}</div>
                   </div>
-                  {showTagBreakdown ? (
-                    <div className="space-y-1">
-                      {row.tagBreakdown?.length ? (
-                        row.tagBreakdown.map((item) => (
-                          <div
-                            key={`${row.monthKey}-${item.tag}`}
-                            className="rounded-md border border-zinc-200 bg-white/80 px-2 py-1 text-xs"
-                          >
-                            <div className="truncate font-medium">{item.tag}</div>
-                            <div className="text-muted-foreground">
-                              Без НДС: {formatAmount(item.amountWithoutVat)}
-                            </div>
-                            <div className="text-muted-foreground">
-                              С НДС: {formatAmount(item.amountWithVat)}
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <span className="text-xs text-muted-foreground">Пока нет согласованных трат</span>
-                      )}
-                    </div>
-                  ) : null}
                 </div>
               );
             })}

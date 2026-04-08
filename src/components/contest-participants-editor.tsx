@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { HOD_DEPARTMENTS } from "@/lib/constants";
+import { sanitizeNumericInput } from "@/lib/vat";
 
 export type ContestParticipantDraft = {
   id: string;
@@ -102,7 +103,7 @@ export default function ContestParticipantsEditor({
               setRows((current) =>
                 current.map((row) =>
                   row.id === item.id
-                    ? { ...row, hours: event.target.value.replace(/\s+/g, "") }
+                    ? { ...row, hours: sanitizeNumericInput(event.target.value) }
                     : row,
                 ),
               )
@@ -117,7 +118,7 @@ export default function ContestParticipantsEditor({
               setRows((current) =>
                 current.map((row) =>
                   row.id === item.id
-                    ? { ...row, directCost: event.target.value.replace(/\s+/g, "") }
+                    ? { ...row, directCost: sanitizeNumericInput(event.target.value) }
                     : row,
                 ),
               )

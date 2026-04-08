@@ -37,6 +37,7 @@ import {
   calculateAmountWithVat,
   formatAmountPair,
   parseMoneyInput,
+  sanitizeNumericInput,
   syncVatInputPair,
 } from "@/lib/vat";
 import { Paperclip, Upload } from "lucide-react";
@@ -896,11 +897,9 @@ export default function RequestDetailPage() {
                               id: request._id,
                               status: "paid",
                               finplanCostIdsRaw,
-                              actualPaidAmount: actualPaidAmount ? Number(actualPaidAmount) : undefined,
+                              actualPaidAmount: parseMoneyInput(actualPaidAmount),
                               actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
-                              paymentCurrencyRate: paymentCurrencyRate
-                                ? Number(paymentCurrencyRate)
-                                : undefined,
+                              paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
                             });
                             router.refresh();
                           } catch (err) {
@@ -1093,7 +1092,7 @@ export default function RequestDetailPage() {
                             inputMode="decimal"
                             value={paymentCurrencyRate}
                             onChange={(event) =>
-                              setPaymentCurrencyRate(event.target.value.replace(/\s+/g, ""))
+                              setPaymentCurrencyRate(sanitizeNumericInput(event.target.value))
                             }
                             placeholder={request.currency === "RUB" ? "Не обязателен для RUB" : "Например, 92.4"}
                           />
@@ -1105,7 +1104,7 @@ export default function RequestDetailPage() {
                             inputMode="decimal"
                             value={actualPaidAmount}
                             onChange={(event) => {
-                              const nextAmount = event.target.value.replace(/\s+/g, "");
+                              const nextAmount = sanitizeNumericInput(event.target.value);
                               setActualPaidAmount(nextAmount);
                               const synced = syncVatInputPair({
                                 amountWithoutVatInput: nextAmount,
@@ -1125,7 +1124,7 @@ export default function RequestDetailPage() {
                             inputMode="decimal"
                             value={actualPaidAmountWithVat}
                             onChange={(event) => {
-                              const nextAmountWithVat = event.target.value.replace(/\s+/g, "");
+                              const nextAmountWithVat = sanitizeNumericInput(event.target.value);
                               setActualPaidAmountWithVat(nextAmountWithVat);
                               const synced = syncVatInputPair({
                                 amountWithoutVatInput: actualPaidAmount,
@@ -1150,7 +1149,7 @@ export default function RequestDetailPage() {
                             inputMode="decimal"
                             value={paymentResidualAmount}
                             onChange={(event) =>
-                              setPaymentResidualAmount(event.target.value.replace(/\s+/g, ""))
+                              setPaymentResidualAmount(sanitizeNumericInput(event.target.value))
                             }
                             placeholder="Например, 50000"
                           />
@@ -1186,11 +1185,9 @@ export default function RequestDetailPage() {
                                     ? new Date(`${paymentPlannedDate}T00:00:00`).getTime()
                                     : undefined,
                                   finplanCostIdsRaw,
-                                  actualPaidAmount: actualPaidAmount ? Number(actualPaidAmount) : undefined,
+                                  actualPaidAmount: parseMoneyInput(actualPaidAmount),
                                   actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
-                                  paymentCurrencyRate: paymentCurrencyRate
-                                    ? Number(paymentCurrencyRate)
-                                    : undefined,
+                                  paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
                                   allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
                                 });
                                 router.refresh();
@@ -1241,12 +1238,10 @@ export default function RequestDetailPage() {
                                   status: "partially_paid",
                                   paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
                                   finplanCostIdsRaw,
-                                  actualPaidAmount: Number(actualPaidAmount),
+                                  actualPaidAmount: parseMoneyInput(actualPaidAmount),
                                   actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
-                                  paymentResidualAmount: Number(paymentResidualAmount),
-                                  paymentCurrencyRate: paymentCurrencyRate
-                                    ? Number(paymentCurrencyRate)
-                                    : undefined,
+                                  paymentResidualAmount: parseMoneyInput(paymentResidualAmount),
+                                  paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
                                   allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
                                 });
                                 router.refresh();
@@ -1293,12 +1288,15 @@ export default function RequestDetailPage() {
                   </p>
                 ) : null}
               </div>
-              {request.category !== "Конкурсное задание" ? (
               <div className="space-y-3">
-                <div className="text-muted-foreground">Файлы</div>
+                <div>
+                  <div className="text-muted-foreground">Прикрепить файлы</div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Например, счет в PDF, акт и другие важные документы
+                  </p>
+                </div>
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="flex min-w-[320px] flex-1 flex-col gap-2">
-                    <Label htmlFor="attachment">Прикрепить файл</Label>
                     <input
                       id="attachment"
                       ref={fileInputRef}
@@ -1470,7 +1468,6 @@ export default function RequestDetailPage() {
                   </div>
                 ) : null}
               </div>
-              ) : null}
               {request.category !== "Конкурсное задание" &&
               request.category !== "Welcome-бонус" &&
               !isServiceCategory ? (
@@ -1676,7 +1673,7 @@ export default function RequestDetailPage() {
                                     ...current,
                                     [item.id]: {
                                       ...draft,
-                                      hours: event.target.value ? Number(event.target.value) : undefined,
+                                      hours: parseMoneyInput(sanitizeNumericInput(event.target.value)),
                                     },
                                   }))
                                 }
@@ -1692,7 +1689,7 @@ export default function RequestDetailPage() {
                                     ...current,
                                     [item.id]: {
                                       ...draft,
-                                      directCost: event.target.value ? Number(event.target.value) : undefined,
+                                      directCost: parseMoneyInput(sanitizeNumericInput(event.target.value)),
                                     },
                                   }))
                                 }
@@ -1824,10 +1821,12 @@ export default function RequestDetailPage() {
                   <div className="font-medium text-slate-900">Остаток квоты COO</div>
                   <div className="mt-3 grid gap-2 md:grid-cols-3">
                     {cooQuotaSummary.map((item) => {
-                      const remaining = item.adjustedQuota - item.spent;
+                      const quotaBase = item.adjustedQuota ?? item.quota;
+                      const quotaBaseWithVat =
+                        item.adjustedQuotaWithVat ?? item.quotaWithVat ?? quotaBase;
+                      const remaining = quotaBase - item.spent;
                       const remainingWithVat =
-                        (item.adjustedQuotaWithVat ?? item.adjustedQuota) -
-                        (item.spentWithVat ?? item.spent);
+                        quotaBaseWithVat - (item.spentWithVat ?? item.spent);
                       const isHighlighted = item.monthKey === highlightedQuotaMonthKey;
                       return (
                         <div
