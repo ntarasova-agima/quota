@@ -25,6 +25,7 @@ import {
 import {
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
@@ -106,7 +107,7 @@ export default function NewRequestPage() {
   const [financeLinks, setFinanceLinks] = useState("");
   const [approvalDeadline, setApprovalDeadline] = useState(defaultDeadline);
   const [neededBy, setNeededBy] = useState(defaultDeadline);
-  const [paidBy, setPaidBy] = useState(defaultDeadline);
+  const [paidBy, setPaidBy] = useState("");
   const [requiredRoles, setRequiredRoles] = useState<RoleOption[]>([...DEFAULT_REQUIRED_ROLES]);
   const [error, setError] = useState<string | null>(null);
   const [fundingError, setFundingError] = useState<string | null>(null);
@@ -155,6 +156,10 @@ export default function NewRequestPage() {
       return `${names[month - 1] ?? ""} ${year}`;
     },
     [],
+  );
+  const showClientTransitPaidBy = useMemo(
+    () => category === CLIENT_SERVICES_TRANSIT_CATEGORY,
+    [category],
   );
 
   useEffect(() => {
@@ -205,7 +210,7 @@ export default function NewRequestPage() {
     setNeededBy(
       request.neededBy ? new Date(request.neededBy).toISOString().slice(0, 10) : defaultDeadline,
     );
-    setPaidBy(request.paidBy ? new Date(request.paidBy).toISOString().slice(0, 10) : defaultDeadline);
+    setPaidBy(request.paidBy ? new Date(request.paidBy).toISOString().slice(0, 10) : "");
     setRequiredRoles((request.requiredRoles as RoleOption[]) ?? [...DEFAULT_REQUIRED_ROLES]);
   }, [data?.request?._id, defaultDeadline]);
 
@@ -305,12 +310,6 @@ export default function NewRequestPage() {
   }, [enforcedRoles]);
 
   useEffect(() => {
-    if (fundingSource === "Отгрузки проекта" && !paidBy) {
-      setPaidBy(defaultDeadline);
-    }
-  }, [fundingSource, paidBy, defaultDeadline]);
-
-  useEffect(() => {
     if (!isFundingSourceAllowedForCategory(category, fundingSource)) {
       setFundingError("Так не бывает");
     } else {
@@ -404,9 +403,6 @@ export default function NewRequestPage() {
       if (category === "Welcome-бонус" && !investmentReturn.trim()) {
         throw new Error("Укажите, как будем возвращать инвестиции");
       }
-      if (fundingSource === "Отгрузки проекта" && !paidBy) {
-        throw new Error("Укажите дату, когда заплатят нам");
-      }
       const resolvedAmounts = resolveVatAmounts({
         amountWithoutVat: effectiveAmountWithoutVatInput,
         amountWithVat: parseMoneyInput(amountWithVat),
@@ -458,7 +454,7 @@ export default function NewRequestPage() {
         approvalDeadline: approvalDeadline ? new Date(approvalDeadline).getTime() : undefined,
         neededBy: neededBy ? new Date(neededBy).getTime() : undefined,
         paidBy:
-          fundingSource === "Отгрузки проекта" && paidBy
+          showClientTransitPaidBy && paidBy
             ? new Date(paidBy).getTime()
             : undefined,
         requiredRoles,
@@ -892,27 +888,26 @@ export default function NewRequestPage() {
               )}
 
               {fundingSource === "Отгрузки проекта" && (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="financeLinks">Ссылки на финплан (по одной в строке)</Label>
-                    <Textarea
-                      id="financeLinks"
-                      value={financeLinks}
-                      onChange={(event) => setFinanceLinks(event.target.value)}
-                      rows={3}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="paidBy">Когда заплатят нам</Label>
-                    <Input
-                      id="paidBy"
-                      type="date"
-                      value={paidBy}
-                      onChange={(event) => setPaidBy(event.target.value)}
-                      min={minDateValue}
-                      required
-                    />
-                  </div>
+                <div className="space-y-2">
+                  <Label htmlFor="financeLinks">Ссылки на финплан (по одной в строке)</Label>
+                  <Textarea
+                    id="financeLinks"
+                    value={financeLinks}
+                    onChange={(event) => setFinanceLinks(event.target.value)}
+                    rows={3}
+                  />
+                </div>
+              )}
+
+              {showClientTransitPaidBy && (
+                <div className="space-y-2 sm:max-w-xs">
+                  <Label htmlFor="paidBy">Когда заплатят нам</Label>
+                  <Input
+                    id="paidBy"
+                    type="date"
+                    value={paidBy}
+                    onChange={(event) => setPaidBy(event.target.value)}
+                  />
                 </div>
               )}
               {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
