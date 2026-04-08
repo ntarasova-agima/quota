@@ -3,7 +3,7 @@
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/convex";
 
 const BOOTSTRAP_TIMEOUT_MS = 8000;
@@ -16,13 +16,13 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const bootstrapStartedRef = useRef(false);
   const [autoAttempted, setAutoAttempted] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
   const [linkCode, setLinkCode] = useState<string | undefined>(undefined);
   const [linkEmail, setLinkEmail] = useState<string | undefined>(undefined);
   const [linkChecked, setLinkChecked] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
-  const [bootstrapRequested, setBootstrapRequested] = useState(false);
   const [redirectingToProfile, setRedirectingToProfile] = useState(false);
 
   const linkParams = useMemo(() => {
@@ -46,38 +46,37 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isAuthenticated) {
+      bootstrapStartedRef.current = false;
       setBootstrapping(false);
-      setBootstrapRequested(false);
       setRedirectingToProfile(false);
       setAccessError(null);
       return;
     }
-    if (profile === undefined || bootstrapping || redirectingToProfile) {
+    if (profile === undefined) {
       return;
     }
 
-    if (!profile?.hasRoleRecord) {
-      if (bootstrapRequested) {
+    const hasRoleRecord = profile?.hasRoleRecord ?? false;
+    const needsOnboarding = profile?.needsOnboarding ?? false;
+
+    if (!hasRoleRecord) {
+      if (bootstrapStartedRef.current) {
         return;
       }
-      let cancelled = false;
+      bootstrapStartedRef.current = true;
       setBootstrapping(true);
-      setBootstrapRequested(true);
       setAccessError(null);
 
-      Promise.race([
-        ensureCurrentUserRole({}),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Не удалось быстро создать профиль. Обновите страницу.")), BOOTSTRAP_TIMEOUT_MS),
-        ),
-      ])
+      const timeoutId = window.setTimeout(() => {
+        setBootstrapping(false);
+        bootstrapStartedRef.current = false;
+        setAccessError("Не удалось быстро создать профиль. Обновите страницу и попробуйте еще раз.");
+      }, BOOTSTRAP_TIMEOUT_MS);
+
+      ensureCurrentUserRole({})
         .catch(async (err) => {
-          if (cancelled) {
-            return;
-          }
           const message = err instanceof Error ? err.message : "Не удалось проверить доступ";
           setAccessError(message);
-          setBootstrapRequested(false);
           if (message.includes("@agima.ru") || message.includes("архивирован")) {
             if (typeof window !== "undefined") {
               sessionStorage.removeItem("auth_code");
@@ -89,20 +88,21 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
               // Ignore sign-out failures and still route the user back to sign-in.
             }
             router.replace(`/sign-in?error=${encodeURIComponent(message)}`);
+          } else {
+            bootstrapStartedRef.current = false;
           }
         })
         .finally(() => {
-          if (!cancelled) {
-            setBootstrapping(false);
-          }
+          window.clearTimeout(timeoutId);
+          setBootstrapping(false);
         });
 
-      return () => {
-        cancelled = true;
-      };
+      return;
     }
 
-    if (profile.needsOnboarding && pathname !== "/profile") {
+    bootstrapStartedRef.current = false;
+
+    if (needsOnboarding && pathname !== "/profile") {
       setRedirectingToProfile(true);
       const params = new URLSearchParams();
       params.set("onboarding", "1");
@@ -113,18 +113,11 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
         }
       }
       router.replace(`/profile?${params.toString()}`);
+      return;
     }
-  }, [
-    bootstrapping,
-    bootstrapRequested,
-    ensureCurrentUserRole,
-    isAuthenticated,
-    pathname,
-    profile,
-    redirectingToProfile,
-    router,
-    signOut,
-  ]);
+
+    setRedirectingToProfile(false);
+  }, [ensureCurrentUserRole, isAuthenticated, pathname, profile, router, signOut]);
 
   useEffect(() => {
     if (isLoading || isAuthenticated || !linkChecked || autoAttempted) {
@@ -141,7 +134,7 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
       return;
     }
     router.replace("/sign-in");
-  }, [isAuthenticated, isLoading, router, linkParams, linkChecked, autoAttempted]);
+  }, [autoAttempted, isAuthenticated, isLoading, linkChecked, linkParams, router]);
 
   const shouldShowLoader =
     !isAuthenticated ||
@@ -167,9 +160,7 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
                     : "Проверяем доступ..."}
             </p>
             {accessError && (
-              <p className="mt-2 text-sm text-destructive">
-                {accessError}
-              </p>
+              <p className="mt-2 text-sm text-destructive">{accessError}</p>
             )}
           </div>
         </main>
