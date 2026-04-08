@@ -192,7 +192,7 @@ export default function RequestsPage() {
     <RequireAuth>
       <div className="min-h-screen bg-background text-foreground">
         <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-12">
-          <AppHeader title="Заявки" showAdmin={isAdmin} showCreateRequest />
+          <AppHeader title="Заявки" showAdmin={isAdmin} />
 
           {activeView === "my" && (
           <Card className="border-emerald-400 ring-1 ring-emerald-300/70 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(255,255,255,0.98)_55%,rgba(248,250,252,0.92)_100%)] shadow-[0_8px_24px_rgba(15,23,42,0.04)]">

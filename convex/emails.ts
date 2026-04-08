@@ -541,6 +541,54 @@ export const sendPaidNotification = internalAction({
   },
 });
 
+export const sendPaymentAmountChanged = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    previousAmount: v.optional(v.number()),
+    previousAmountWithVat: v.optional(v.number()),
+    nextAmount: v.optional(v.number()),
+    nextAmountWithVat: v.optional(v.number()),
+    actorEmail: v.string(),
+    actorName: v.optional(v.string()),
+    changedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request } = data;
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const actor = args.actorName ? `${args.actorName} · ${args.actorEmail}` : args.actorEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "payment_amount_changed",
+      to: [request.createdByEmail],
+      subject: `Сумма оплаты изменена: ${request.clientName}`,
+      html: `
+        <p>BUH изменил сумму оплаты по заявке.</p>
+        <p>Кто изменил: ${actor}</p>
+        <p>Когда: ${new Date(args.changedAt).toLocaleString("ru-RU")}</p>
+        <p>Было: ${formatAmountPair({
+          amountWithoutVat: args.previousAmount,
+          amountWithVat: args.previousAmountWithVat,
+          currency: request.currency,
+          vatRate: request.vatRate,
+        })}</p>
+        <p>Стало: ${formatAmountPair({
+          amountWithoutVat: args.nextAmount,
+          amountWithVat: args.nextAmountWithVat,
+          currency: request.currency,
+          vatRate: request.vatRate,
+        })}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
 export const sendCloseDeadlineReminder = internalAction({
   args: {
     requestId: v.id("requests"),

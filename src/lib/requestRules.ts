@@ -8,7 +8,8 @@ export const UNKNOWN_FUNDING_SOURCE = "Я не знаю";
 export const LEGACY_SERVICE_PURCHASE_CATEGORY = "Закупка сервисов";
 export const LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI-инструментов)";
 export const SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI)";
-export const AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент\\подписка";
+export const LEGACY_AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент\\подписка";
+export const AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент/подписка";
 export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Сервисы/транзиты для клиентов";
 
 export const SERVICE_PURCHASE_FUNDING_SOURCES = [
@@ -33,9 +34,13 @@ export function normalizeFundingSource(fundingSource: string) {
 }
 
 export function normalizeRequestCategory(category: string) {
-  return [LEGACY_SERVICE_PURCHASE_CATEGORY, LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY].includes(category)
-    ? SERVICE_PURCHASE_CATEGORY
-    : category;
+  if ([LEGACY_SERVICE_PURCHASE_CATEGORY, LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY].includes(category)) {
+    return SERVICE_PURCHASE_CATEGORY;
+  }
+  if (category === LEGACY_AI_TOOLS_REQUEST_CATEGORY) {
+    return AI_TOOLS_REQUEST_CATEGORY;
+  }
+  return category;
 }
 
 export function isAiToolsFundingSource(fundingSource: string) {
