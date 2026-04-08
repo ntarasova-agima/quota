@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
@@ -18,6 +19,19 @@ import RequestMetaSummary from "@/components/request-meta-summary";
 import { getApprovalStatusClass, getRequestStatusSummary } from "@/lib/requestStatus";
 import { HOD_DEPARTMENTS } from "@/lib/constants";
 import { getRoleLabel } from "@/lib/roleLabels";
+import {
+  AI_TOOLS_REQUEST_CATEGORY,
+  SERVICE_PURCHASE_CATEGORY,
+  isAiToolsFundingSource as isAiToolsFundingSourceValue,
+  isServiceRecipientCategory,
+  normalizeFundingSource,
+} from "@/lib/requestRules";
+import {
+  DEFAULT_VAT_RATE,
+  calculateAmountWithVat,
+  formatAmountPair,
+  matchesCalculatedAmountWithVat,
+} from "@/lib/vat";
 import { Paperclip, Upload } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
 
@@ -164,6 +178,7 @@ export default function RequestDetailPage() {
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
   const [actualPaidAmount, setActualPaidAmount] = useState("");
   const [actualPaidAmountWithVat, setActualPaidAmountWithVat] = useState("");
+  const [autoCalculatePaymentAmountWithVat, setAutoCalculatePaymentAmountWithVat] = useState(true);
   const [paymentResidualAmount, setPaymentResidualAmount] = useState("");
   const [paymentCurrencyRate, setPaymentCurrencyRate] = useState("");
   const [confirmLatePaymentPlan, setConfirmLatePaymentPlan] = useState(false);
@@ -218,10 +233,12 @@ export default function RequestDetailPage() {
     [quotaReferenceTimestamp],
   );
   const isAiToolsFundingSource = useMemo(
-    () =>
-      data?.request?.fundingSource === "Квоты на AI-инструменты" ||
-      data?.request?.fundingSource === "Квота на AI-подписки",
+    () => (data?.request?.fundingSource ? isAiToolsFundingSourceValue(data.request.fundingSource) : false),
     [data?.request?.fundingSource],
+  );
+  const paymentVatRate = useMemo(
+    () => data?.request?.vatRate ?? DEFAULT_VAT_RATE,
+    [data?.request?.vatRate],
   );
   const showNbdQuotaSummary = Boolean(
     isAuthenticated &&
@@ -233,7 +250,9 @@ export default function RequestDetailPage() {
     isAuthenticated &&
       isAiBoss &&
       isAiToolsFundingSource &&
-      data?.request?.category === "Закупка сервисов",
+      [AI_TOOLS_REQUEST_CATEGORY, SERVICE_PURCHASE_CATEGORY].includes(
+        data?.request?.category as typeof AI_TOOLS_REQUEST_CATEGORY | typeof SERVICE_PURCHASE_CATEGORY,
+      ),
   );
   const showCooQuotaSummary = Boolean(
     isAuthenticated && isCoo && data?.request?.fundingSource === "Квота на внутренние затраты",
@@ -302,6 +321,18 @@ export default function RequestDetailPage() {
 
   useEffect(() => {
     if (data?.request) {
+      const paymentAmountWithoutVat =
+        data.request.status === "partially_paid"
+          ? undefined
+          : data.request.status === "payment_planned" || data.request.status === "awaiting_payment"
+            ? data.request.plannedPaymentAmount
+            : data.request.actualPaidAmount;
+      const paymentAmountWithVat =
+        data.request.status === "partially_paid"
+          ? undefined
+          : data.request.status === "payment_planned" || data.request.status === "awaiting_payment"
+            ? data.request.plannedPaymentAmountWithVat
+            : data.request.actualPaidAmountWithVat;
       setSelectedTag(data.request.cfdTag ?? "");
       setCustomTagName("");
       setFinplanCostIdsRaw((data.request.finplanCostIds ?? []).join(", "));
@@ -310,27 +341,15 @@ export default function RequestDetailPage() {
           ? new Date(data.request.paymentPlannedAt).toISOString().slice(0, 10)
           : "",
       );
-      setActualPaidAmount(
-        data.request.status === "partially_paid"
-          ? ""
-          : data.request.status === "payment_planned" || data.request.status === "awaiting_payment"
-            ? data.request.plannedPaymentAmount !== undefined
-              ? String(data.request.plannedPaymentAmount)
-              : ""
-            : data.request.actualPaidAmount !== undefined
-              ? String(data.request.actualPaidAmount)
-              : "",
-      );
-      setActualPaidAmountWithVat(
-        data.request.status === "partially_paid"
-          ? ""
-          : data.request.status === "payment_planned" || data.request.status === "awaiting_payment"
-            ? data.request.plannedPaymentAmountWithVat !== undefined
-              ? String(data.request.plannedPaymentAmountWithVat)
-              : ""
-            : data.request.actualPaidAmountWithVat !== undefined
-              ? String(data.request.actualPaidAmountWithVat)
-              : "",
+      setActualPaidAmount(paymentAmountWithoutVat !== undefined ? String(paymentAmountWithoutVat) : "");
+      setActualPaidAmountWithVat(paymentAmountWithVat !== undefined ? String(paymentAmountWithVat) : "");
+      setAutoCalculatePaymentAmountWithVat(
+        paymentAmountWithVat === undefined ||
+          matchesCalculatedAmountWithVat(
+            paymentAmountWithoutVat,
+            paymentAmountWithVat,
+            data.request.vatRate,
+          ),
       );
       setPaymentResidualAmount(
         data.request.paymentResidualAmount !== undefined
@@ -347,6 +366,7 @@ export default function RequestDetailPage() {
     data?.request?._id,
     data?.request?.cfdTag,
     data?.request?.paymentPlannedAt,
+    data?.request?.status,
     data?.request?.plannedPaymentAmount,
     data?.request?.plannedPaymentAmountWithVat,
     data?.request?.finplanCostIds,
@@ -354,7 +374,23 @@ export default function RequestDetailPage() {
     data?.request?.actualPaidAmountWithVat,
     data?.request?.paymentResidualAmount,
     data?.request?.paymentCurrencyRate,
+    data?.request?.vatRate,
   ]);
+  useEffect(() => {
+    if (!autoCalculatePaymentAmountWithVat) {
+      return;
+    }
+    if (!actualPaidAmount) {
+      setActualPaidAmountWithVat("");
+      return;
+    }
+    const normalizedAmount = Number(actualPaidAmount.replace(/\s+/g, ""));
+    if (!Number.isFinite(normalizedAmount)) {
+      setActualPaidAmountWithVat("");
+      return;
+    }
+    setActualPaidAmountWithVat(String(calculateAmountWithVat(normalizedAmount, paymentVatRate)));
+  }, [actualPaidAmount, autoCalculatePaymentAmountWithVat, paymentVatRate]);
   useEffect(() => {
     const next: Record<string, SpecialistView> = {};
     for (const item of (data?.request?.specialists ?? []) as SpecialistView[]) {
@@ -388,6 +424,7 @@ export default function RequestDetailPage() {
   }
 
   const { request, approvals } = data;
+  const isServiceCategory = isServiceRecipientCategory(request.category);
   const isCreator = data.isCreator;
   const canCancel = isCreator;
   const hasPendingHodValidation = Boolean(
@@ -599,7 +636,9 @@ export default function RequestDetailPage() {
                   clientName={request.clientName}
                   category={request.category}
                   amount={request.amount}
+                  amountWithVat={request.amountWithVat}
                   currency={request.currency}
+                  vatRate={request.vatRate}
                 />
               </CardDescription>
             </CardHeader>
@@ -632,7 +671,7 @@ export default function RequestDetailPage() {
                   {statusSummary.label}
                 </span>
                 <span className="rounded-full border border-border px-3 py-1 text-xs">
-                  Источник: {request.fundingSource === "Квота на AI-подписки" ? "Квоты на AI-инструменты" : request.fundingSource}
+                  Источник: {normalizeFundingSource(request.fundingSource)}
                 </span>
                 {request.cfdTag ? (
                   <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
@@ -690,9 +729,13 @@ export default function RequestDetailPage() {
               ) : null}
               {request.paymentResidualAmount !== undefined ? (
                 <div>
-                  <div className="text-muted-foreground">Остаток к оплате без НДС</div>
+                  <div className="text-muted-foreground">Остаток к оплате</div>
                   <p className="mt-1">
-                    {request.paymentResidualAmount} {request.currency}
+                    {formatAmountPair({
+                      amountWithoutVat: request.paymentResidualAmount,
+                      currency: request.currency,
+                      vatRate: request.vatRate,
+                    })}
                   </p>
                 </div>
               ) : null}
@@ -1078,8 +1121,23 @@ export default function RequestDetailPage() {
                             onChange={(event) =>
                               setActualPaidAmountWithVat(event.target.value.replace(/\s+/g, ""))
                             }
-                            placeholder={`Например, ${request.amount}`}
+                            placeholder={`Например, ${
+                              request.amountWithVat ?? calculateAmountWithVat(request.amount, paymentVatRate)
+                            }`}
+                            disabled={autoCalculatePaymentAmountWithVat}
                           />
+                          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Checkbox
+                              checked={autoCalculatePaymentAmountWithVat}
+                              onCheckedChange={(checked) =>
+                                setAutoCalculatePaymentAmountWithVat(Boolean(checked))
+                              }
+                            />
+                            Рассчитать автоматически по ставке НДС заявки
+                          </label>
+                          <p className="text-xs text-muted-foreground">
+                            Используем ставку {paymentVatRate}% из заявки.
+                          </p>
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="paymentResidualAmount">Остаток к оплате без НДС</Label>
@@ -1438,7 +1496,7 @@ export default function RequestDetailPage() {
               ) : null}
               {request.category !== "Конкурсное задание" &&
               request.category !== "Welcome-бонус" &&
-              request.category !== "Закупка сервисов" ? (
+              !isServiceCategory ? (
                 <div>
                   <div className="text-muted-foreground">Контрагент</div>
                   <p className="mt-1">{request.counterparty || "Не указан"}</p>
@@ -1481,7 +1539,7 @@ export default function RequestDetailPage() {
                 </div>
               ) : null}
               {request.category !== "Конкурсное задание" &&
-              request.category !== "Закупка сервисов" ? (
+              !isServiceCategory ? (
                 <div>
                   <div className="text-muted-foreground">Контакты клиента</div>
                   {request.contacts.length ? (
@@ -1497,7 +1555,7 @@ export default function RequestDetailPage() {
               ) : null}
               {request.category !== "Конкурсное задание" &&
               request.category !== "Welcome-бонус" &&
-              request.category !== "Закупка сервисов" ? (
+              !isServiceCategory ? (
                 <div>
                   <div className="text-muted-foreground">Ссылки</div>
                   {request.links.length ? (
@@ -1697,6 +1755,8 @@ export default function RequestDetailPage() {
                         : nbdQuotaSummary
                     )?.map((item) => {
                       const remaining = item.quota - item.spent;
+                      const remainingWithVat =
+                        (item.quotaWithVat ?? item.quota) - (item.spentWithVat ?? item.spent);
                       const isHighlighted = item.monthKey === highlightedQuotaMonthKey;
                       return (
                         <div
@@ -1711,8 +1771,13 @@ export default function RequestDetailPage() {
                             {formatMonthLabel(item.monthKey)}
                           </div>
                           <div className="mt-2 text-xs text-muted-foreground">Остаток</div>
-                          <div className="text-lg font-semibold text-emerald-950">
-                            {remaining.toLocaleString("ru-RU")} ₽
+                          <div className="mt-1 space-y-1">
+                            <div className="text-sm text-emerald-900">
+                              Без НДС: {remaining.toLocaleString("ru-RU")} ₽
+                            </div>
+                            <div className="text-lg font-semibold text-emerald-950">
+                              С НДС: {remainingWithVat.toLocaleString("ru-RU")} ₽
+                            </div>
                           </div>
                         </div>
                       );
@@ -1731,6 +1796,9 @@ export default function RequestDetailPage() {
                   <div className="mt-3 grid gap-2 md:grid-cols-3">
                     {cooQuotaSummary.map((item) => {
                       const remaining = item.adjustedQuota - item.spent;
+                      const remainingWithVat =
+                        (item.adjustedQuotaWithVat ?? item.adjustedQuota) -
+                        (item.spentWithVat ?? item.spent);
                       const isHighlighted = item.monthKey === highlightedQuotaMonthKey;
                       return (
                         <div
@@ -1745,8 +1813,13 @@ export default function RequestDetailPage() {
                             {formatMonthLabel(item.monthKey)}
                           </div>
                           <div className="mt-2 text-xs text-muted-foreground">Остаток</div>
-                          <div className="text-lg font-semibold text-slate-950">
-                            {remaining.toLocaleString("ru-RU")} ₽
+                          <div className="mt-1 space-y-1">
+                            <div className="text-sm text-slate-700">
+                              Без НДС: {remaining.toLocaleString("ru-RU")} ₽
+                            </div>
+                            <div className="text-lg font-semibold text-slate-950">
+                              С НДС: {remainingWithVat.toLocaleString("ru-RU")} ₽
+                            </div>
                           </div>
                         </div>
                       );

@@ -1,6 +1,8 @@
 "use client";
 
 import { HoverHint } from "@/components/ui/hover-hint";
+import { isServiceRecipientCategory } from "@/lib/requestRules";
+import { formatAmountPair } from "@/lib/vat";
 import { cn } from "@/lib/utils";
 
 type RequestMetaSummaryProps = {
@@ -8,7 +10,9 @@ type RequestMetaSummaryProps = {
   clientName: string;
   category: string;
   amount?: number;
+  amountWithVat?: number;
   currency?: string;
+  vatRate?: number;
   className?: string;
 };
 
@@ -17,10 +21,12 @@ export default function RequestMetaSummary({
   clientName,
   category,
   amount,
+  amountWithVat,
   currency,
+  vatRate,
   className,
 }: RequestMetaSummaryProps) {
-  const ownerLabel = category === "Закупка сервисов" ? "Получатель сервиса" : "Клиент";
+  const ownerLabel = isServiceRecipientCategory(category) ? "Получатель сервиса" : "Клиент";
 
   return (
     <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground", className)}>
@@ -44,7 +50,12 @@ export default function RequestMetaSummary({
           <span aria-hidden="true">·</span>
           <HoverHint label="Сумма заявки">
             <span>
-              {amount} {currency}
+              {formatAmountPair({
+                amountWithoutVat: amount,
+                amountWithVat,
+                currency,
+                vatRate,
+              })}
             </span>
           </HoverHint>
         </>

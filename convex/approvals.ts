@@ -4,6 +4,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
+import { isAiToolsFundingSource } from "../src/lib/requestRules";
+import { getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -22,10 +24,7 @@ function getQuotaTableName(fundingSource: string) {
   if (fundingSource === "Квота на пресейлы") {
     return "presalesQuotas";
   }
-  if (
-    fundingSource === "Квоты на AI-инструменты" ||
-    fundingSource === "Квота на AI-подписки"
-  ) {
+  if (isAiToolsFundingSource(fundingSource)) {
     return "aiToolQuotas";
   }
   return null;
@@ -254,9 +253,13 @@ export const decide = mutation({
         .query(quotaTableName)
         .withIndex("by_monthKey", (q: any) => q.eq("monthKey", key))
         .first();
+      const requestAmountWithVat =
+        getAmountWithVat(request.amount, request.amountWithVat, request.vatRate) ?? request.amount;
       if (existing) {
         await ctx.db.patch(existing._id, {
           spent: existing.spent + request.amount,
+          spentWithVat: (existing.spentWithVat ?? existing.spent) + requestAmountWithVat,
+          vatRate: normalizeVatRate(existing.vatRate ?? request.vatRate),
           updatedAt: Date.now(),
         });
       } else {
@@ -265,7 +268,10 @@ export const decide = mutation({
           year: date.getFullYear(),
           month: date.getMonth() + 1,
           quota: 0,
+          quotaWithVat: 0,
+          vatRate: normalizeVatRate(request.vatRate),
           spent: request.amount,
+          spentWithVat: requestAmountWithVat,
           updatedAt: Date.now(),
         });
       }
@@ -403,9 +409,13 @@ export const adminApproveAsRole = mutation({
         .query(quotaTableName)
         .withIndex("by_monthKey", (q: any) => q.eq("monthKey", key))
         .first();
+      const requestAmountWithVat =
+        getAmountWithVat(request.amount, request.amountWithVat, request.vatRate) ?? request.amount;
       if (existing) {
         await ctx.db.patch(existing._id, {
           spent: existing.spent + request.amount,
+          spentWithVat: (existing.spentWithVat ?? existing.spent) + requestAmountWithVat,
+          vatRate: normalizeVatRate(existing.vatRate ?? request.vatRate),
           updatedAt: Date.now(),
         });
       } else {
@@ -414,7 +424,10 @@ export const adminApproveAsRole = mutation({
           year: date.getFullYear(),
           month: date.getMonth() + 1,
           quota: 0,
+          quotaWithVat: 0,
+          vatRate: normalizeVatRate(request.vatRate),
           spent: request.amount,
+          spentWithVat: requestAmountWithVat,
           updatedAt: Date.now(),
         });
       }

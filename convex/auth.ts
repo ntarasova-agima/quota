@@ -1,20 +1,6 @@
 import { convexAuth } from "@convex-dev/auth/server";
 import { Email } from "@convex-dev/auth/providers/Email";
-
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
-}
-
-function isAgimaEmail(email: string) {
-  return /^[^@\s]+@agima\.ru$/i.test(email.trim());
-}
-
-function isAllowedSignInEmail(email: string) {
-  return (
-    isAgimaEmail(email) ||
-    (process.env.NODE_ENV !== "production" && /^[^@\s]+@quota\.local$/i.test(email.trim()))
-  );
-}
+import { isAllowedSignInEmail, normalizeEmail } from "../src/lib/authRules";
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [

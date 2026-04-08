@@ -22,6 +22,20 @@ import {
   ROLE_OPTIONS,
   type RoleOption,
 } from "@/lib/constants";
+import {
+  AI_TOOLS_FUNDING_SOURCE,
+  getDefaultFundingSourceForCategory,
+  getEnforcedRolesForFundingSource,
+  isAiToolsRequestCategory,
+  isFundingSourceAllowedForCategory,
+  isServiceRecipientCategory,
+} from "@/lib/requestRules";
+import {
+  DEFAULT_VAT_RATE,
+  calculateAmountWithVat,
+  matchesCalculatedAmountWithVat,
+  resolveVatAmounts,
+} from "@/lib/vat";
 
 type SpecialistDraft = {
   id: string;
@@ -56,6 +70,9 @@ export default function NewRequestPage() {
   const [category, setCategory] = useState("Welcome-бонус");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
+  const [amountWithVat, setAmountWithVat] = useState("");
+  const [vatRate, setVatRate] = useState(String(DEFAULT_VAT_RATE));
+  const [autoCalculateAmountWithVat, setAutoCalculateAmountWithVat] = useState(true);
   const [currency, setCurrency] = useState("RUB");
   const [fundingSource, setFundingSource] = useState("Квота на пресейлы");
   const [justification, setJustification] = useState("");
@@ -92,7 +109,9 @@ export default function NewRequestPage() {
   );
   const aiToolQuotas = useQuery(
     api.quotas.listAiToolByMonthKeys,
-    isAiBoss && fundingSource === "Квоты на AI-инструменты" ? { monthKeys: presalesMonthKeys } : "skip",
+    isAiBoss && fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(category)
+      ? { monthKeys: presalesMonthKeys }
+      : "skip",
   );
   const currentMonthKey = useMemo(() => {
     const now = new Date();
@@ -118,6 +137,7 @@ export default function NewRequestPage() {
     },
     [],
   );
+  const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
 
   const contactsList = useMemo(
     () =>
@@ -169,6 +189,15 @@ export default function NewRequestPage() {
       specialistsPayload.reduce((sum, item) => sum + (item.directCost ?? 0), 0),
     [specialistsPayload],
   );
+  const effectiveAmountWithoutVatInput = useMemo(
+    () =>
+      contestHasSpecialists
+        ? contestAmount
+        : amount
+          ? Number(amount.replace(/\s+/g, ""))
+          : undefined,
+    [amount, contestAmount, contestHasSpecialists],
+  );
   const financeLinksList = useMemo(
     () =>
       financeLinks
@@ -179,21 +208,7 @@ export default function NewRequestPage() {
   );
 
   const enforcedRoles = useMemo(() => {
-    const enforced = new Set<RoleOption>();
-    if (fundingSource === "Квота на пресейлы") {
-      enforced.add("NBD");
-    }
-    if (fundingSource === "Квоты на AI-инструменты") {
-      enforced.add("AI-BOSS");
-    }
-    if (fundingSource === "Прибыль компании") {
-      enforced.add("COO");
-      enforced.add("CFD");
-    }
-    if (fundingSource === "Квота на внутренние затраты") {
-      enforced.add("COO");
-    }
-    return enforced;
+    return new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
   }, [fundingSource]);
 
   useEffect(() => {
@@ -214,10 +229,7 @@ export default function NewRequestPage() {
   }, [fundingSource, paidBy, defaultDeadline]);
 
   useEffect(() => {
-    if (
-      fundingSource === "Отгрузки проекта" &&
-      ["Welcome-бонус", "Конкурсное задание"].includes(category)
-    ) {
+    if (!isFundingSourceAllowedForCategory(category, fundingSource)) {
       setFundingError("Так не бывает");
     } else {
       setFundingError(null);
@@ -225,13 +237,24 @@ export default function NewRequestPage() {
   }, [fundingSource, category]);
 
   useEffect(() => {
-    if (
-      category === "Закупка сервисов" &&
-      !["Квота на внутренние затраты", "Квоты на AI-инструменты"].includes(fundingSource)
-    ) {
-      setFundingSource("Квота на внутренние затраты");
+    if (!autoCalculateAmountWithVat) {
+      return;
     }
-  }, [category, fundingSource]);
+    if (effectiveAmountWithoutVatInput === undefined || !Number.isFinite(effectiveAmountWithoutVatInput)) {
+      setAmountWithVat("");
+      return;
+    }
+    const normalizedVatRate = Number(vatRate.replace(/\s+/g, ""));
+    setAmountWithVat(String(calculateAmountWithVat(effectiveAmountWithoutVatInput, normalizedVatRate)));
+  }, [autoCalculateAmountWithVat, effectiveAmountWithoutVatInput, vatRate]);
+
+  function handleCategoryChange(nextCategory: string) {
+    setCategory(nextCategory);
+    const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
+    if (defaultFundingSource) {
+      setFundingSource(defaultFundingSource);
+    }
+  }
 
   function toggleRole(role: RoleOption) {
     if (enforcedRoles.has(role)) {
@@ -268,13 +291,24 @@ export default function NewRequestPage() {
       if (fundingSource === "Отгрузки проекта" && !paidBy) {
         throw new Error("Укажите дату, когда заплатят нам");
       }
-      const normalizedAmount = contestHasSpecialists
-        ? String(contestAmount)
-        : amount.replace(/\s+/g, "");
+      const resolvedAmounts = resolveVatAmounts({
+        amountWithoutVat: effectiveAmountWithoutVatInput,
+        amountWithVat: amountWithVat ? Number(amountWithVat.replace(/\s+/g, "")) : undefined,
+        vatRate: vatRate ? Number(vatRate.replace(/\s+/g, "")) : undefined,
+        autoCalculateAmountWithVat,
+      });
+      if (resolvedAmounts.amountWithoutVat === undefined || resolvedAmounts.amountWithoutVat <= 0) {
+        throw new Error("Укажите сумму без НДС или сумму с НДС");
+      }
+      if (resolvedAmounts.amountWithVat === undefined || resolvedAmounts.amountWithVat <= 0) {
+        throw new Error("Укажите сумму с НДС или сумму без НДС");
+      }
       const id = await createRequest({
         title,
         category,
-        amount: Number(normalizedAmount || 0),
+        amount: resolvedAmounts.amountWithoutVat,
+        amountWithVat: resolvedAmounts.amountWithVat,
+        vatRate: resolvedAmounts.vatRate,
         currency,
         fundingSource,
         justification,
@@ -283,22 +317,22 @@ export default function NewRequestPage() {
         counterparty:
           category === "Конкурсное задание" ||
           category === "Welcome-бонус" ||
-          category === "Закупка сервисов"
+          isServiceCategory
             ? ""
             : counterparty,
-        contacts: category === "Конкурсное задание" || category === "Закупка сервисов" ? [] : contactsList,
+        contacts: category === "Конкурсное задание" || isServiceCategory ? [] : contactsList,
         relatedRequests: relatedRequestsList,
         links:
           category === "Конкурсное задание" ||
           category === "Welcome-бонус" ||
-          category === "Закупка сервисов"
+          isServiceCategory
             ? []
             : linksList,
         specialists: category === "Конкурсное задание" ? specialistsPayload : undefined,
         financePlanLinks:
           category === "Конкурсное задание" ||
           category === "Welcome-бонус" ||
-          category === "Закупка сервисов"
+          isServiceCategory
             ? undefined
             : financeLinksList.length
               ? financeLinksList
@@ -311,7 +345,7 @@ export default function NewRequestPage() {
             : undefined,
         requiredRoles,
         submit,
-      });
+      } as any);
       router.push(`/requests/${id}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось создать заявку";
@@ -345,7 +379,7 @@ export default function NewRequestPage() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label>Категория</Label>
-                    <Select value={category} onValueChange={setCategory}>
+                    <Select value={category} onValueChange={handleCategoryChange}>
                       <SelectTrigger>
                         <SelectValue placeholder="Выберите категорию" />
                       </SelectTrigger>
@@ -388,10 +422,15 @@ export default function NewRequestPage() {
                     required
                   />
                 </div>
-                <div className="space-y-2 sm:col-span-2">
+                <div className="space-y-2 sm:col-span-3">
                   <Label htmlFor="clientName">
-                    {category === "Закупка сервисов" ? "Получатель сервиса" : "Клиент"}
+                    {isServiceCategory ? "Получатель сервиса" : "Клиент"}
                   </Label>
+                  {isServiceCategory ? (
+                    <p className="text-xs text-muted-foreground">
+                      Имя сотрудника или наименование отдела
+                    </p>
+                  ) : null}
                   <Input
                     id="clientName"
                     value={clientName}
@@ -399,28 +438,61 @@ export default function NewRequestPage() {
                     required
                   />
                 </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
-                  <Label htmlFor="amount">Сумма</Label>
+                  <Label htmlFor="amount">Сумма без НДС</Label>
                   <Input
                     id="amount"
                     type="text"
                     inputMode="decimal"
                     value={contestHasSpecialists ? String(contestAmount) : amount}
                     onChange={(event) => setAmount(event.target.value.replace(/\s+/g, ""))}
-                    required={!contestHasSpecialists}
                     disabled={contestHasSpecialists}
                   />
                   {contestHasSpecialists ? (
                     <p className="text-xs text-muted-foreground">
-                      Сумма считается автоматически по прямым затратам специалистов.
+                      Сумма без НДС считается автоматически по прямым затратам специалистов.
                     </p>
                   ) : null}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="amountWithVat">Сумма с НДС</Label>
+                  <Input
+                    id="amountWithVat"
+                    type="text"
+                    inputMode="decimal"
+                    value={amountWithVat}
+                    onChange={(event) => setAmountWithVat(event.target.value.replace(/\s+/g, ""))}
+                    disabled={autoCalculateAmountWithVat}
+                  />
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Checkbox
+                      checked={autoCalculateAmountWithVat}
+                      onCheckedChange={(checked) => setAutoCalculateAmountWithVat(Boolean(checked))}
+                    />
+                    Рассчитать автоматически
+                  </label>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vatRate">Ставка НДС, %</Label>
+                  <Input
+                    id="vatRate"
+                    type="text"
+                    inputMode="decimal"
+                    value={vatRate}
+                    onChange={(event) => setVatRate(event.target.value.replace(/\s+/g, ""))}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    По умолчанию {DEFAULT_VAT_RATE}%. Можно изменить.
+                  </p>
                 </div>
               </div>
 
               {category !== "Конкурсное задание" &&
               category !== "Welcome-бонус" &&
-              category !== "Закупка сервисов" && (
+              !isServiceCategory && (
                 <div className="space-y-2">
                   <Label htmlFor="counterparty">Контрагент (кому платим)</Label>
                   <Input
@@ -448,7 +520,7 @@ export default function NewRequestPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                {category !== "Конкурсное задание" && category !== "Закупка сервисов" && (
+                {category !== "Конкурсное задание" && !isServiceCategory && (
                   <div className="space-y-2 sm:col-span-2">
                     <Label htmlFor="contacts">Контакты клиента</Label>
                     <Textarea
@@ -474,7 +546,7 @@ export default function NewRequestPage() {
 
               {category !== "Конкурсное задание" &&
               category !== "Welcome-бонус" &&
-              category !== "Закупка сервисов" && (
+              !isServiceCategory && (
                 <div className="space-y-2">
                   <Label htmlFor="links">Ссылки на материалы (по одной в строке)</Label>
                   <Textarea
@@ -647,12 +719,12 @@ export default function NewRequestPage() {
                 </div>
               )}
               {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
-                (fundingSource === "Квоты на AI-инструменты" && category === "Закупка сервисов" && isAiBoss && aiToolQuotas?.length)) ? (
+                (fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(category) && isAiBoss && aiToolQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
                   <div className="font-medium">Остаток квот</div>
                   <div className="mt-2 grid gap-2">
                     {(
-                      fundingSource === "Квоты на AI-инструменты"
+                      fundingSource === AI_TOOLS_FUNDING_SOURCE
                           ? aiToolQuotas
                           : presalesQuotas
                     )?.map((item) => (

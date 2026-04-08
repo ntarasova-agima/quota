@@ -16,6 +16,7 @@ import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import { getRequestStatusSummary } from "@/lib/requestStatus";
 import { EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
+import { formatAmountPair } from "@/lib/vat";
 
 function getRequestDisplayTitle(request: {
   title?: string;
@@ -311,6 +312,10 @@ export default function RequestsPage() {
                               requestCode={request.requestCode}
                               clientName={request.clientName}
                               category={request.category}
+                              amount={request.amount}
+                              amountWithVat={request.amountWithVat}
+                              currency={request.currency}
+                              vatRate={request.vatRate}
                             />
                             <div className="text-muted-foreground">
                               <HoverHint label="Дата создания заявки">
@@ -432,7 +437,12 @@ export default function RequestsPage() {
                         <div className="text-right font-medium">
                           <HoverHint label="Сумма заявки">
                             <span>
-                              {request.amount} {request.currency}
+                              {formatAmountPair({
+                                amountWithoutVat: request.amount,
+                                amountWithVat: request.amountWithVat,
+                                currency: request.currency,
+                                vatRate: request.vatRate,
+                              })}
                             </span>
                           </HoverHint>
                         </div>
@@ -634,11 +644,20 @@ export default function RequestsPage() {
                               requestCode={request.requestCode}
                               clientName={request.clientName}
                               category={request.category}
+                              amount={request.amount}
+                              amountWithVat={request.amountWithVat}
+                              currency={request.currency}
+                              vatRate={request.vatRate}
                             />
                             <div className="text-muted-foreground">
                               <HoverHint label="Сумма заявки">
                                 <span>
-                                  {request.amount} {request.currency}
+                                  {formatAmountPair({
+                                    amountWithoutVat: request.amount,
+                                    amountWithVat: request.amountWithVat,
+                                    currency: request.currency,
+                                    vatRate: request.vatRate,
+                                  })}
                                 </span>
                               </HoverHint>
                             </div>
@@ -661,7 +680,12 @@ export default function RequestsPage() {
                         <div className="text-right font-medium">
                           <HoverHint label="Сумма заявки">
                             <span>
-                              {request.amount} {request.currency}
+                              {formatAmountPair({
+                                amountWithoutVat: request.amount,
+                                amountWithVat: request.amountWithVat,
+                                currency: request.currency,
+                                vatRate: request.vatRate,
+                              })}
                             </span>
                           </HoverHint>
                         </div>

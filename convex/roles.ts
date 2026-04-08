@@ -3,6 +3,12 @@ import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
+import {
+  hasCompletedProfile,
+  isAgimaEmail,
+  isDevTestEmail,
+  normalizeEmail,
+} from "../src/lib/authRules";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -14,22 +20,6 @@ const roleEnum = v.union(
   v.literal("HOD"),
   v.literal("ADMIN"),
 );
-
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
-}
-
-function isAgimaEmail(email: string) {
-  return /^[^@\s]+@agima\.ru$/i.test(email.trim());
-}
-
-function isDevTestEmail(email: string) {
-  return process.env.NODE_ENV !== "production" && /^[^@\s]+@quota\.local$/i.test(email.trim());
-}
-
-function hasCompletedProfile(record: { fullName?: string; creatorTitle?: string } | null | undefined) {
-  return Boolean(record?.fullName?.trim() && record?.creatorTitle?.trim());
-}
 
 export const myProfile = query({
   args: {},

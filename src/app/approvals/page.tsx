@@ -5,6 +5,7 @@ import { useQuery } from "convex/react";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
+import { formatAmountPair } from "@/lib/vat";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { HoverHint } from "@/components/ui/hover-hint";
 import { api } from "@/lib/convex";
@@ -56,6 +57,10 @@ export default function ApprovalsPage() {
                             requestCode={request.requestCode}
                             clientName={request.clientName}
                             category={request.category}
+                            amount={request.amount}
+                            amountWithVat={request.amountWithVat}
+                            currency={request.currency}
+                            vatRate={request.vatRate}
                             className="text-sm"
                           />
                           {request.createdByName ? (
@@ -101,7 +106,12 @@ export default function ApprovalsPage() {
                               </div>
                               {request.paymentResidualAmount !== undefined ? (
                                 <div>
-                                  Остаток: {request.paymentResidualAmount} {request.currency}
+                                  Остаток:{" "}
+                                  {formatAmountPair({
+                                    amountWithoutVat: request.paymentResidualAmount,
+                                    currency: request.currency,
+                                    vatRate: request.vatRate,
+                                  })}
                                 </div>
                               ) : null}
                             </div>
@@ -115,7 +125,12 @@ export default function ApprovalsPage() {
                       <div className="text-right font-medium">
                         <HoverHint label="Сумма заявки">
                           <span>
-                            {request.amount} {request.currency}
+                            {formatAmountPair({
+                              amountWithoutVat: request.amount,
+                              amountWithVat: request.amountWithVat,
+                              currency: request.currency,
+                              vatRate: request.vatRate,
+                            })}
                           </span>
                         </HoverHint>
                       </div>

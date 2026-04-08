@@ -1,3 +1,5 @@
+import { AI_TOOLS_REQUEST_CATEGORY, SERVICE_PURCHASE_CATEGORY } from "./requestRules";
+
 export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "CFD"] as const;
 export const DEFAULT_REQUIRED_ROLES = ["NBD", "COO", "CFD"] as const;
 export const ALL_ROLES = ["AD", "NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"] as const;
@@ -25,7 +27,8 @@ export const EXPENSE_CATEGORIES = [
   "Welcome-бонус",
   "Подарки",
   "Конкурсное задание",
-  "Закупка сервисов",
+  SERVICE_PURCHASE_CATEGORY,
+  AI_TOOLS_REQUEST_CATEGORY,
   "Неформальное мероприятие",
   "Совместный мерч",
 ] as const;
@@ -46,7 +49,8 @@ export const REQUEST_CATEGORY_CODES: Record<string, string> = {
   "Welcome-бонус": "WB",
   "Подарки": "GI",
   "Конкурсное задание": "CT",
-  "Закупка сервисов": "SV",
+  [SERVICE_PURCHASE_CATEGORY]: "SV",
+  [AI_TOOLS_REQUEST_CATEGORY]: "AI",
   "Неформальное мероприятие": "EV",
   "Совместный мерч": "MR",
 };

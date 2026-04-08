@@ -3,6 +3,12 @@ import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getCurrentEmail } from "./authHelpers";
 import { sumQuotaUsageByMonth, sumQuotaUsageByMonthAndTag } from "./quotaUsage";
+import {
+  AI_TOOLS_REQUEST_CATEGORY,
+  SERVICE_PURCHASE_CATEGORY,
+  isAiToolsFundingSource,
+} from "../src/lib/requestRules";
+import { DEFAULT_VAT_RATE, getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
 
 function monthKeyFromDate(date: Date) {
   const year = date.getFullYear();
@@ -17,9 +23,22 @@ function monthInfoFromKey(key: string) {
 
 function isAiToolsQuotaRequest(request: { fundingSource: string; category: string }) {
   return (
-    ["Квоты на AI-инструменты", "Квота на AI-подписки"].includes(request.fundingSource) &&
-    request.category === "Закупка сервисов"
+    isAiToolsFundingSource(request.fundingSource) &&
+    [AI_TOOLS_REQUEST_CATEGORY, SERVICE_PURCHASE_CATEGORY].includes(
+      request.category as typeof AI_TOOLS_REQUEST_CATEGORY | typeof SERVICE_PURCHASE_CATEGORY,
+    )
   );
+}
+
+function getQuotaWithVat(quota: number, quotaWithVat?: number, vatRate?: number) {
+  return getAmountWithVat(quota, quotaWithVat, vatRate) ?? quota;
+}
+
+function getSpentPair(
+  spentByMonth: Map<string, { amountWithoutVat: number; amountWithVat: number }>,
+  key: string,
+) {
+  return spentByMonth.get(key) ?? { amountWithoutVat: 0, amountWithVat: 0 };
 }
 
 async function ensureRole(ctx: any, role: "NBD" | "AI-BOSS" | "CFD" | "COO") {
@@ -78,16 +97,25 @@ export const listByMonthKeys = query({
     for (const key of args.monthKeys) {
       const existing = map.get(key);
       const { year, month } = monthInfoFromKey(key);
-      const spent = spentByMonth.get(key) ?? 0;
+      const spent = getSpentPair(spentByMonth, key);
       results.push(
         existing
-          ? { ...existing, spent }
+          ? {
+              ...existing,
+              quotaWithVat: getQuotaWithVat(existing.quota, existing.quotaWithVat, existing.vatRate),
+              vatRate: normalizeVatRate(existing.vatRate),
+              spent: spent.amountWithoutVat,
+              spentWithVat: spent.amountWithVat,
+            }
           : {
               monthKey: key,
               year,
               month,
               quota: 0,
-              spent,
+              quotaWithVat: 0,
+              vatRate: DEFAULT_VAT_RATE,
+              spent: spent.amountWithoutVat,
+              spentWithVat: spent.amountWithVat,
               updatedAt: 0,
             },
       );
@@ -100,6 +128,8 @@ export const updateQuota = mutation({
   args: {
     monthKey: v.string(),
     quota: v.number(),
+    quotaWithVat: v.optional(v.number()),
+    vatRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await ensureNbd(ctx);
@@ -108,7 +138,9 @@ export const updateQuota = mutation({
     const spent = sumQuotaUsageByMonth(
       requests,
       (request) => request.fundingSource === "Квота на пресейлы",
-    ).get(args.monthKey) ?? 0;
+    ).get(args.monthKey) ?? { amountWithoutVat: 0, amountWithVat: 0 };
+    const vatRate = normalizeVatRate(args.vatRate);
+    const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
 
     const existing = await ctx.db
       .query("presalesQuotas")
@@ -117,7 +149,10 @@ export const updateQuota = mutation({
     if (existing) {
       await ctx.db.patch(existing._id, {
         quota: args.quota,
-        spent,
+        quotaWithVat,
+        vatRate,
+        spent: spent.amountWithoutVat,
+        spentWithVat: spent.amountWithVat,
         updatedAt: Date.now(),
       });
       return existing._id;
@@ -127,7 +162,10 @@ export const updateQuota = mutation({
       year,
       month,
       quota: args.quota,
-      spent,
+      quotaWithVat,
+      vatRate,
+      spent: spent.amountWithoutVat,
+      spentWithVat: spent.amountWithVat,
       updatedAt: Date.now(),
     });
   },
@@ -149,19 +187,29 @@ export const listAiToolByMonthKeys = query({
     for (const key of args.monthKeys) {
       const existing = map.get(key);
       const { year, month } = monthInfoFromKey(key);
-      const spent = spentByMonth.get(key) ?? 0;
+      const spent = getSpentPair(spentByMonth, key);
       const tagBreakdown = Array.from(spentByMonthAndTag.get(key)?.entries() ?? [])
-        .sort((a, b) => b[1] - a[1])
-        .map(([tag, amount]) => ({ tag, amount }));
+        .sort((a, b) => b[1].amountWithVat - a[1].amountWithVat)
+        .map(([tag, amount]) => ({ tag, ...amount }));
       results.push(
         existing
-          ? { ...existing, spent, tagBreakdown }
+          ? {
+              ...existing,
+              quotaWithVat: getQuotaWithVat(existing.quota, existing.quotaWithVat, existing.vatRate),
+              vatRate: normalizeVatRate(existing.vatRate),
+              spent: spent.amountWithoutVat,
+              spentWithVat: spent.amountWithVat,
+              tagBreakdown,
+            }
           : {
               monthKey: key,
               year,
               month,
               quota: 0,
-              spent,
+              quotaWithVat: 0,
+              vatRate: DEFAULT_VAT_RATE,
+              spent: spent.amountWithoutVat,
+              spentWithVat: spent.amountWithVat,
               tagBreakdown,
               updatedAt: 0,
             },
@@ -175,12 +223,18 @@ export const updateAiToolQuota = mutation({
   args: {
     monthKey: v.string(),
     quota: v.number(),
+    quotaWithVat: v.optional(v.number()),
+    vatRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await ensureAiBoss(ctx);
     const { year, month } = monthInfoFromKey(args.monthKey);
     const requests = await ctx.db.query("requests").collect();
-    const spent = sumQuotaUsageByMonth(requests, (request) => isAiToolsQuotaRequest(request)).get(args.monthKey) ?? 0;
+    const spent =
+      sumQuotaUsageByMonth(requests, (request) => isAiToolsQuotaRequest(request)).get(args.monthKey) ??
+      { amountWithoutVat: 0, amountWithVat: 0 };
+    const vatRate = normalizeVatRate(args.vatRate);
+    const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
 
     const existing = await ctx.db
       .query("aiToolQuotas")
@@ -189,7 +243,10 @@ export const updateAiToolQuota = mutation({
     if (existing) {
       await ctx.db.patch(existing._id, {
         quota: args.quota,
-        spent,
+        quotaWithVat,
+        vatRate,
+        spent: spent.amountWithoutVat,
+        spentWithVat: spent.amountWithVat,
         updatedAt: Date.now(),
       });
       return existing._id;
@@ -199,7 +256,10 @@ export const updateAiToolQuota = mutation({
       year,
       month,
       quota: args.quota,
-      spent,
+      quotaWithVat,
+      vatRate,
+      spent: spent.amountWithoutVat,
+      spentWithVat: spent.amountWithVat,
       updatedAt: Date.now(),
     });
   },
@@ -219,17 +279,32 @@ export const listCfdByMonthKeys = query({
     for (const key of args.monthKeys) {
       const existing = map.get(key);
       const { year, month } = monthInfoFromKey(key);
-      const spent = spentByMonth.get(key) ?? 0;
+      const spent = getSpentPair(spentByMonth, key);
       results.push(
         existing
-          ? { ...existing, spent }
+          ? {
+              ...existing,
+              quotaWithVat: getQuotaWithVat(existing.quota, existing.quotaWithVat, existing.vatRate),
+              adjustedQuotaWithVat: getQuotaWithVat(
+                existing.adjustedQuota,
+                existing.adjustedQuotaWithVat,
+                existing.vatRate,
+              ),
+              vatRate: normalizeVatRate(existing.vatRate),
+              spent: spent.amountWithoutVat,
+              spentWithVat: spent.amountWithVat,
+            }
           : {
               monthKey: key,
               year,
               month,
               quota: 0,
+              quotaWithVat: 0,
               adjustedQuota: 0,
-              spent,
+              adjustedQuotaWithVat: 0,
+              vatRate: DEFAULT_VAT_RATE,
+              spent: spent.amountWithoutVat,
+              spentWithVat: spent.amountWithVat,
               updatedAt: 0,
             },
       );
@@ -242,13 +317,25 @@ export const updateCfdQuota = mutation({
   args: {
     monthKey: v.string(),
     quota: v.number(),
+    quotaWithVat: v.optional(v.number()),
     adjustedQuota: v.number(),
+    adjustedQuotaWithVat: v.optional(v.number()),
+    vatRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await ensureCfd(ctx);
     const { year, month } = monthInfoFromKey(args.monthKey);
     const requests = await ctx.db.query("requests").collect();
-    const spent = sumQuotaUsageByMonth(requests, () => true).get(args.monthKey) ?? 0;
+    const spent =
+      sumQuotaUsageByMonth(requests, () => true).get(args.monthKey) ??
+      { amountWithoutVat: 0, amountWithVat: 0 };
+    const vatRate = normalizeVatRate(args.vatRate);
+    const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
+    const adjustedQuotaWithVat = getQuotaWithVat(
+      args.adjustedQuota,
+      args.adjustedQuotaWithVat,
+      vatRate,
+    );
 
     const existing = await ctx.db
       .query("cfdQuotas")
@@ -257,8 +344,12 @@ export const updateCfdQuota = mutation({
     if (existing) {
       await ctx.db.patch(existing._id, {
         quota: args.quota,
+        quotaWithVat,
         adjustedQuota: args.adjustedQuota,
-        spent,
+        adjustedQuotaWithVat,
+        vatRate,
+        spent: spent.amountWithoutVat,
+        spentWithVat: spent.amountWithVat,
         updatedAt: Date.now(),
       });
       return existing._id;
@@ -268,8 +359,12 @@ export const updateCfdQuota = mutation({
       year,
       month,
       quota: args.quota,
+      quotaWithVat,
       adjustedQuota: args.adjustedQuota,
-      spent,
+      adjustedQuotaWithVat,
+      vatRate,
+      spent: spent.amountWithoutVat,
+      spentWithVat: spent.amountWithVat,
       updatedAt: Date.now(),
     });
   },
@@ -292,17 +387,32 @@ export const listCooByMonthKeys = query({
     for (const key of args.monthKeys) {
       const existing = map.get(key);
       const { year, month } = monthInfoFromKey(key);
-      const spent = spentByMonth.get(key) ?? 0;
+      const spent = getSpentPair(spentByMonth, key);
       results.push(
         existing
-          ? { ...existing, spent }
+          ? {
+              ...existing,
+              quotaWithVat: getQuotaWithVat(existing.quota, existing.quotaWithVat, existing.vatRate),
+              adjustedQuotaWithVat: getQuotaWithVat(
+                existing.adjustedQuota,
+                existing.adjustedQuotaWithVat,
+                existing.vatRate,
+              ),
+              vatRate: normalizeVatRate(existing.vatRate),
+              spent: spent.amountWithoutVat,
+              spentWithVat: spent.amountWithVat,
+            }
           : {
               monthKey: key,
               year,
               month,
               quota: 0,
+              quotaWithVat: 0,
               adjustedQuota: 0,
-              spent,
+              adjustedQuotaWithVat: 0,
+              vatRate: DEFAULT_VAT_RATE,
+              spent: spent.amountWithoutVat,
+              spentWithVat: spent.amountWithVat,
               updatedAt: 0,
             },
       );
@@ -315,7 +425,10 @@ export const updateCooQuota = mutation({
   args: {
     monthKey: v.string(),
     quota: v.number(),
+    quotaWithVat: v.optional(v.number()),
     adjustedQuota: v.number(),
+    adjustedQuotaWithVat: v.optional(v.number()),
+    vatRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await ensureCoo(ctx);
@@ -324,7 +437,14 @@ export const updateCooQuota = mutation({
     const spent = sumQuotaUsageByMonth(
       requests,
       (request) => request.fundingSource === "Квота на внутренние затраты",
-    ).get(args.monthKey) ?? 0;
+    ).get(args.monthKey) ?? { amountWithoutVat: 0, amountWithVat: 0 };
+    const vatRate = normalizeVatRate(args.vatRate);
+    const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
+    const adjustedQuotaWithVat = getQuotaWithVat(
+      args.adjustedQuota,
+      args.adjustedQuotaWithVat,
+      vatRate,
+    );
     const existing = await ctx.db
       .query("cooQuotas")
       .withIndex("by_monthKey", (q: any) => q.eq("monthKey", args.monthKey))
@@ -332,8 +452,12 @@ export const updateCooQuota = mutation({
     if (existing) {
       await ctx.db.patch(existing._id, {
         quota: args.quota,
+        quotaWithVat,
         adjustedQuota: args.adjustedQuota,
-        spent,
+        adjustedQuotaWithVat,
+        vatRate,
+        spent: spent.amountWithoutVat,
+        spentWithVat: spent.amountWithVat,
         updatedAt: Date.now(),
       });
       return existing._id;
@@ -343,8 +467,12 @@ export const updateCooQuota = mutation({
       year,
       month,
       quota: args.quota,
+      quotaWithVat,
       adjustedQuota: args.adjustedQuota,
-      spent,
+      adjustedQuotaWithVat,
+      vatRate,
+      spent: spent.amountWithoutVat,
+      spentWithVat: spent.amountWithVat,
       updatedAt: Date.now(),
     });
   },

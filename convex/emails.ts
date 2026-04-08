@@ -1,6 +1,9 @@
 import { internalAction, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { dedupeEmails, getApprovalRecipients } from "../src/lib/approvalRecipients";
+import { isServiceRecipientCategory } from "../src/lib/requestRules";
+import { formatAmountPair } from "../src/lib/vat";
 
 const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
 const roleEnum = v.union(
@@ -46,7 +49,7 @@ function formatApprovalStatusLabel(status: string) {
 }
 
 function getRequestOwnerLabel(request: { category: string; clientName: string }) {
-  return request.category === "Закупка сервисов"
+  return isServiceRecipientCategory(request.category)
     ? {
         label: "Получатель сервиса",
         value: request.clientName,
@@ -61,55 +64,18 @@ function getBaseUrl() {
   return process.env.EMAIL_BASE_URL ?? "http://localhost:3000";
 }
 
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
-}
-
-function dedupeEmails(emails: string[], excludedEmails: string[] = []) {
-  const excluded = new Set(excludedEmails.map(normalizeEmail));
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const email of emails) {
-    const normalized = normalizeEmail(email);
-    if (!normalized || excluded.has(normalized) || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    result.push(email);
-  }
-  return result;
-}
-
-function getActiveRoleEmails(roleDocs: Array<{ active: boolean; roles: string[]; email: string }>, roles: string[]) {
-  if (!roles.length) {
-    return [];
-  }
-  return dedupeEmails(
-    roleDocs
-      .filter((doc) => doc.active && doc.roles.some((role) => roles.includes(role)))
-      .map((doc) => doc.email),
-  );
-}
-
-function getApprovalRecipients(
-  roleDocs: Array<{ active: boolean; roles: string[]; email: string }>,
-  roles: string[],
-  excludedEmails: string[] = [],
-) {
-  if (!roles.length) {
-    return [];
-  }
-  const recipients = new Set<string>();
-  const adminFallback = dedupeEmails(getActiveRoleEmails(roleDocs, ["ADMIN"]), excludedEmails);
-  for (const role of roles) {
-    const assignedRecipients = dedupeEmails(getActiveRoleEmails(roleDocs, [role]), excludedEmails);
-    if (assignedRecipients.length > 0) {
-      assignedRecipients.forEach((email) => recipients.add(email));
-      continue;
-    }
-    adminFallback.forEach((email) => recipients.add(email));
-  }
-  return Array.from(recipients);
+function getRequestAmountLabel(request: {
+  amount: number;
+  amountWithVat?: number;
+  currency: string;
+  vatRate?: number;
+}) {
+  return formatAmountPair({
+    amountWithoutVat: request.amount,
+    amountWithVat: request.amountWithVat,
+    currency: request.currency,
+    vatRate: request.vatRate,
+  });
 }
 
 async function sendEmail(
@@ -233,7 +199,7 @@ export const sendRequestSubmitted = internalAction({
         <p>Наименование заявки: <strong>${requestTitle}</strong></p>
         <p>ID заявки: ${request.requestCode ?? "будет присвоен для новых заявок"}</p>
         <p><strong>${title}</strong></p>
-        <p>Сумма: ${request.amount} ${request.currency}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Дедлайн согласования: ${approvalDeadline}</p>
         <p>Нужны деньги к: ${neededBy}</p>
         <p>Review: <a href="${link}">${link}</a></p>
@@ -283,7 +249,7 @@ export const sendDecision = internalAction({
         <p>Дата: ${new Date().toLocaleDateString("ru-RU")}</p>
         <p>${owner.label}: ${owner.value}</p>
         <p>Источник финансирования: ${request.fundingSource}</p>
-        <p>Сумма: ${request.amount} ${request.currency}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Статус согласования: ${formatApprovalStatusLabel(args.requestStatus)}</p>
         <p>Кто согласовал: ${decisionBy}</p>
         ${isFinalApproval ? "<p>Передайте заявку в оплату.</p>" : ""}
@@ -333,7 +299,7 @@ export const sendPaymentRequested = internalAction({
         <p>${owner.label}: ${owner.value}</p>
         <p>Автор заявки: ${author}</p>
         <p>Дедлайн оплаты: ${paymentDeadline}</p>
-        <p>Сумма: ${request.amount} ${request.currency}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -455,7 +421,7 @@ export const sendApprovalRequestedToRecipients = internalAction({
         <p>Наименование заявки: <strong>${title}</strong></p>
         <p>${owner.label}: ${owner.value}</p>
         <p>Источник финансирования: ${request.fundingSource}</p>
-        <p>Сумма: ${request.amount} ${request.currency}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Дедлайн согласования: ${approvalDeadline}</p>
         ${
           args.summaryLines.length
@@ -535,7 +501,7 @@ export const sendPaymentDeadlineReminder = internalAction({
       subject: `Дедлайн оплаты истек: ${request.clientName}`,
       html: `
         <p>Срок оплаты по заявке истек вчера.</p>
-        <p>Сумма: ${request.amount} ${request.currency}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });

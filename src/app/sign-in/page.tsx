@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { isAllowedSignInEmail, normalizeEmail } from "@/lib/authRules";
 import { api } from "@/lib/convex";
 
 const captureParams = `
@@ -24,21 +25,6 @@ const captureParams = `
   } catch {}
 })();
 `;
-
-function normalizeEmail(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function isAgimaEmail(value: string) {
-  return /^[^@\s]+@agima\.ru$/i.test(value.trim());
-}
-
-function isAllowedSignInEmail(value: string) {
-  return (
-    isAgimaEmail(value) ||
-    (process.env.NODE_ENV !== "production" && /^[^@\s]+@quota\.local$/i.test(value.trim()))
-  );
-}
 
 export default function SignInPage() {
   const { signIn } = useAuthActions();

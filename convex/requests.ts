@@ -4,6 +4,21 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
+import {
+  AI_TOOLS_REQUEST_CATEGORY,
+  COMPANY_PROFIT_FUNDING_SOURCE,
+  INTERNAL_COSTS_FUNDING_SOURCE,
+  PRESALES_FUNDING_SOURCE,
+  SERVICE_PURCHASE_CATEGORY,
+  getFundingOwnerRoles,
+  isFundingSourceAllowedForCategory,
+  isServiceRecipientCategory,
+} from "../src/lib/requestRules";
+import {
+  getAmountWithVat,
+  normalizeVatRate,
+  resolveVatAmounts,
+} from "../src/lib/vat";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -33,7 +48,8 @@ const requestCategoryCodes: Record<string, string> = {
   "Welcome-бонус": "WB",
   "Подарки": "GI",
   "Конкурсное задание": "CT",
-  "Закупка сервисов": "SV",
+  [SERVICE_PURCHASE_CATEGORY]: "SV",
+  [AI_TOOLS_REQUEST_CATEGORY]: "AI",
   "Неформальное мероприятие": "EV",
   "Совместный мерч": "MR",
 };
@@ -46,22 +62,6 @@ const fundingSourceCodes: Record<string, string> = {
   "Квота на внутренние затраты": "QI",
   "Я не знаю": "UN",
 };
-
-function getFundingOwnerRoles(fundingSource: string) {
-  if (fundingSource === "Квота на пресейлы") {
-    return ["NBD"] as const;
-  }
-  if (fundingSource === "Квоты на AI-инструменты") {
-    return ["AI-BOSS"] as const;
-  }
-  if (fundingSource === "Квота на внутренние затраты") {
-    return ["COO"] as const;
-  }
-  if (fundingSource === "Прибыль компании") {
-    return ["COO", "CFD"] as const;
-  }
-  return [] as const;
-}
 
 function getMonthKey(timestamp?: number) {
   if (!timestamp) {
@@ -339,8 +339,103 @@ function validateOptionalRate(value: number | undefined) {
   }
 }
 
+function validateOptionalVatRate(value: number | undefined) {
+  if (value === undefined) {
+    return;
+  }
+  if (!Number.isFinite(value) || value < 0 || value > 100) {
+    throw new Error("Ставка НДС должна быть от 0 до 100");
+  }
+}
+
 function sumPaymentSplitAmounts(paymentSplits: Array<{ amountWithoutVat?: number }>) {
   return paymentSplits.reduce((sum, split) => sum + (split.amountWithoutVat ?? 0), 0);
+}
+
+function sumPaymentSplitAmountsWithVat(
+  paymentSplits: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>,
+  vatRate?: number,
+) {
+  return paymentSplits.reduce((sum, split) => {
+    const resolved = resolveVatAmounts({
+      amountWithoutVat: split.amountWithoutVat,
+      amountWithVat: split.amountWithVat,
+      vatRate: split.vatRate ?? vatRate,
+      autoCalculateAmountWithVat: split.amountWithoutVat !== undefined && split.amountWithVat === undefined,
+    });
+    return sum + (resolved.amountWithVat ?? 0);
+  }, 0);
+}
+
+function hasExplicitPaymentAmountInput(params: {
+  actualPaidAmount?: number;
+  actualPaidAmountWithVat?: number;
+}) {
+  return params.actualPaidAmount !== undefined || params.actualPaidAmountWithVat !== undefined;
+}
+
+function resolvePaymentAmountInput(params: {
+  amountWithoutVat?: number;
+  amountWithVat?: number;
+  vatRate?: number;
+}) {
+  return resolveVatAmounts({
+    amountWithoutVat: params.amountWithoutVat,
+    amountWithVat: params.amountWithVat,
+    vatRate: params.vatRate,
+    autoCalculateAmountWithVat:
+      params.amountWithoutVat !== undefined && params.amountWithVat === undefined,
+  });
+}
+
+function resolveStoredPaymentAmountInput(request: {
+  amount: number;
+  amountWithVat?: number;
+  actualPaidAmount?: number;
+  actualPaidAmountWithVat?: number;
+  plannedPaymentAmount?: number;
+  plannedPaymentAmountWithVat?: number;
+  paymentResidualAmount?: number;
+  vatRate?: number;
+}) {
+  return resolvePaymentAmountInput({
+    amountWithoutVat:
+      request.paymentResidualAmount ??
+      request.plannedPaymentAmount ??
+      request.actualPaidAmount ??
+      request.amount,
+    amountWithVat:
+      request.plannedPaymentAmountWithVat ??
+      request.actualPaidAmountWithVat ??
+      request.amountWithVat,
+    vatRate: request.vatRate,
+  });
+}
+
+function resolveRequestAmounts(
+  params: {
+    category: string;
+    amount: number;
+    amountWithVat?: number;
+    vatRate?: number;
+  },
+  specialists: Array<{ directCost?: number }> = [],
+) {
+  const amountWithoutVat = calculateContestAmount(
+    params.category,
+    specialists,
+    params.amount,
+  );
+  const resolved = resolveVatAmounts({
+    amountWithoutVat,
+    amountWithVat: params.amountWithVat,
+    vatRate: params.vatRate,
+  });
+  return {
+    amount: resolved.amountWithoutVat ?? amountWithoutVat,
+    amountWithVat: resolved.amountWithVat,
+    vatRate: resolved.vatRate,
+  };
 }
 
 async function getNextRequestCode(ctx: { db: any }, category: string, fundingSource: string) {
@@ -381,6 +476,8 @@ const requestPayloadValidator = {
   title: v.string(),
   category: v.string(),
   amount: v.number(),
+  amountWithVat: v.optional(v.number()),
+  vatRate: v.optional(v.number()),
   currency: v.string(),
   fundingSource: v.string(),
   counterparty: v.string(),
@@ -402,7 +499,9 @@ const requestPayloadValidator = {
 const requestFieldLabels: Record<string, string> = {
   title: "Название заявки",
   category: "Категория",
-  amount: "Сумма",
+  amount: "Сумма без НДС",
+  amountWithVat: "Сумма с НДС",
+  vatRate: "Ставка НДС",
   currency: "Валюта",
   fundingSource: "Источник финансирования",
   counterparty: "Контрагент",
@@ -498,6 +597,8 @@ function diffRequestFields(previous: any, next: any) {
     "title",
     "category",
     "amount",
+    "amountWithVat",
+    "vatRate",
     "currency",
     "fundingSource",
     "counterparty",
@@ -545,7 +646,9 @@ function buildEditImpact(previous: any, next: any, approvals: any[]) {
   const newFundingOwners = getFundingOwnerRoles(next.fundingSource);
   const oldMonthKey = getMonthKey(previous.approvalDeadline);
   const newMonthKey = getMonthKey(next.approvalDeadline);
-  const amountChanged = previous.amount !== next.amount;
+  const amountChanged =
+    previous.amount !== next.amount ||
+    previous.amountWithVat !== next.amountWithVat;
   const fundingChanged = previous.fundingSource !== next.fundingSource;
   const categoryChanged = previous.category !== next.category;
   const counterpartyChanged = (previous.counterparty ?? "") !== (next.counterparty ?? "");
@@ -656,16 +759,30 @@ function validateRequestPayload(args: any) {
   const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
   const contestWithSpecialists =
     args.category === "Конкурсное задание" && hasContestSpecialists(normalizedSpecialists);
-  const effectiveAmount = calculateContestAmount(
-    args.category,
+  validateOptionalVatRate(args.vatRate);
+  validateOptionalMoney(args.amount, "Сумма без НДС");
+  validateOptionalMoney(args.amountWithVat, "Сумма с НДС");
+  const effectiveAmounts = resolveRequestAmounts(
+    {
+      category: args.category,
+      amount: args.amount,
+      amountWithVat: args.amountWithVat,
+      vatRate: args.vatRate,
+    },
     normalizedSpecialists,
-    args.amount,
   );
+  const effectiveAmount = effectiveAmounts.amount;
   if (
     (!Number.isFinite(effectiveAmount) || effectiveAmount <= 0) &&
     !(contestWithSpecialists && effectiveAmount === 0)
   ) {
     throw new Error("Amount must be greater than 0");
+  }
+  if (
+    effectiveAmounts.amountWithVat !== undefined &&
+    effectiveAmounts.amountWithVat < effectiveAmount
+  ) {
+    throw new Error("Сумма с НДС не может быть меньше суммы без НДС");
   }
   if (!args.title.trim()) {
     throw new Error("Название заявки обязательно");
@@ -685,13 +802,8 @@ function validateRequestPayload(args: any) {
   ) {
     throw new Error("Так не бывает");
   }
-  if (
-    args.category === "Закупка сервисов" &&
-    !["Квота на внутренние затраты", "Квоты на AI-инструменты"].includes(args.fundingSource)
-  ) {
-    throw new Error(
-      "Для закупки сервисов доступны только источники Квота на внутренние затраты и Квоты на AI-инструменты",
-    );
+  if (!isFundingSourceAllowedForCategory(args.category, args.fundingSource)) {
+    throw new Error("Так не бывает");
   }
   if (
     args.approvalDeadline !== undefined &&
@@ -727,7 +839,7 @@ function validateRequestPayload(args: any) {
   if (args.fundingSource === "Отгрузки проекта" && !args.paidBy) {
     throw new Error("Укажите дату, когда заплатят нам");
   }
-  if (args.fundingSource === "Квота на пресейлы" && !args.requiredRoles.includes("NBD")) {
+  if (args.fundingSource === PRESALES_FUNDING_SOURCE && !args.requiredRoles.includes("NBD")) {
     throw new Error("Для квот NBD обязателен NBD");
   }
   if (
@@ -737,13 +849,13 @@ function validateRequestPayload(args: any) {
     throw new Error("Для квот на AI-инструменты обязателен AI-BOSS");
   }
   if (
-    args.fundingSource === "Квота на внутренние затраты" &&
+    args.fundingSource === INTERNAL_COSTS_FUNDING_SOURCE &&
     !args.requiredRoles.includes("COO")
   ) {
     throw new Error("Для квоты на внутренние затраты обязателен COO");
   }
   if (
-    args.fundingSource === "Прибыль компании" &&
+    args.fundingSource === COMPANY_PROFIT_FUNDING_SOURCE &&
     (!args.requiredRoles.includes("COO") || !args.requiredRoles.includes("CFD"))
   ) {
     throw new Error("Для прибыли компании обязательны COO и CFD");
@@ -751,7 +863,7 @@ function validateRequestPayload(args: any) {
   if (args.category === "Welcome-бонус" && (!args.investmentReturn || !args.investmentReturn.trim())) {
     throw new Error("Укажите, как будем возвращать инвестиции");
   }
-  if (args.category === "Закупка сервисов" && (!args.clientName || !args.clientName.trim())) {
+  if (isServiceRecipientCategory(args.category) && (!args.clientName || !args.clientName.trim())) {
     throw new Error("Укажите получателя сервиса");
   }
 }
@@ -1155,16 +1267,22 @@ export const previewEditImpact = query({
     }
 
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
-    const effectiveAmount = calculateContestAmount(
-      args.category,
+    const effectiveAmounts = resolveRequestAmounts(
+      {
+        category: args.category,
+        amount: args.amount,
+        amountWithVat: args.amountWithVat,
+        vatRate: args.vatRate,
+      },
       normalizedSpecialists,
-      args.amount,
     );
     const nextBase = {
       ...request,
       title: args.title.trim(),
       category: args.category,
-      amount: effectiveAmount,
+      amount: effectiveAmounts.amount,
+      amountWithVat: effectiveAmounts.amountWithVat,
+      vatRate: effectiveAmounts.vatRate,
       currency: args.currency,
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
@@ -1221,10 +1339,14 @@ export const editRequest = mutation({
     const actorName = roleRecord?.fullName ?? identity?.name ?? undefined;
     const creatorRoles = roleRecord?.roles ?? [];
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
-    const effectiveAmount = calculateContestAmount(
-      args.category,
+    const effectiveAmounts = resolveRequestAmounts(
+      {
+        category: args.category,
+        amount: args.amount,
+        amountWithVat: args.amountWithVat,
+        vatRate: args.vatRate,
+      },
       normalizedSpecialists,
-      args.amount,
     );
     const contestNeedsHodValidation =
       args.category === "Конкурсное задание" &&
@@ -1235,7 +1357,9 @@ export const editRequest = mutation({
     const nextBase = {
       title: args.title.trim(),
       category: args.category,
-      amount: effectiveAmount,
+      amount: effectiveAmounts.amount,
+      amountWithVat: effectiveAmounts.amountWithVat,
+      vatRate: effectiveAmounts.vatRate,
       currency: args.currency,
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
@@ -1610,10 +1734,14 @@ export const createRequest = mutation({
         : args.requiredRoles.some((role) => !creatorRoles.includes(role))
           ? "pending"
           : "approved";
-    const effectiveAmount = calculateContestAmount(
-      args.category,
+    const effectiveAmounts = resolveRequestAmounts(
+      {
+        category: args.category,
+        amount: args.amount,
+        amountWithVat: args.amountWithVat,
+        vatRate: args.vatRate,
+      },
       normalizedSpecialists,
-      args.amount,
     );
 
     const requestId = await ctx.db.insert("requests", {
@@ -1623,7 +1751,9 @@ export const createRequest = mutation({
       createdByEmail: email,
       createdByName: roleRecord?.fullName ?? identity?.name ?? undefined,
       category: args.category,
-      amount: effectiveAmount,
+      amount: effectiveAmounts.amount,
+      amountWithVat: effectiveAmounts.amountWithVat,
+      vatRate: effectiveAmounts.vatRate,
       currency: args.currency,
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
@@ -1758,6 +1888,7 @@ export const updateContestSpecialist = mutation({
     };
     specialists[index] = nextSpecialist;
     const nextAmount = calculateContestAmount("Конкурсное задание", specialists, request.amount);
+    const nextAmountWithVat = getAmountWithVat(nextAmount, undefined, request.vatRate);
     const shouldReleaseToApprovals =
       request.status === "hod_pending" && areContestDepartmentsValidated(specialists);
     let nextStatus = request.status;
@@ -1786,6 +1917,7 @@ export const updateContestSpecialist = mutation({
     await ctx.db.patch(request._id, {
       specialists,
       amount: nextAmount,
+      amountWithVat: nextAmountWithVat,
       status: nextStatus,
       submittedAt: shouldReleaseToApprovals ? Date.now() : request.submittedAt,
       updatedAt: Date.now(),
@@ -2127,20 +2259,31 @@ export const updatePaymentStatus = mutation({
         throw new Error("Дата оплаты позже даты, когда нужны деньги");
       }
       const nextStatus = (request.paymentSplits?.length ?? 0) > 0 ? "partially_paid" : "payment_planned";
-      const plannedAmount =
-        args.actualPaidAmount !== undefined
-          ? args.actualPaidAmount
-          : request.paymentResidualAmount ?? request.plannedPaymentAmount ?? request.amount;
+      const explicitPlannedAmounts = hasExplicitPaymentAmountInput(args)
+        ? resolvePaymentAmountInput({
+            amountWithoutVat: args.actualPaidAmount,
+            amountWithVat: args.actualPaidAmountWithVat,
+            vatRate: request.vatRate,
+          })
+        : null;
+      const fallbackPlannedAmounts = resolveStoredPaymentAmountInput(request);
+      const plannedAmounts =
+        explicitPlannedAmounts?.amountWithoutVat !== undefined ||
+        explicitPlannedAmounts?.amountWithVat !== undefined
+          ? explicitPlannedAmounts
+          : fallbackPlannedAmounts;
+      const plannedAmount = plannedAmounts.amountWithoutVat;
+      const plannedAmountWithVat = plannedAmounts.amountWithVat;
+      if (!isPositiveFinite(plannedAmount)) {
+        throw new Error("Укажите сумму планируемой оплаты");
+      }
       await ctx.db.patch(request._id, {
         status: nextStatus,
         paymentPlannedAt: args.paymentPlannedAt,
         paymentPlannedByEmail: email,
         paymentPlannedByName: actorName,
         plannedPaymentAmount: plannedAmount,
-        plannedPaymentAmountWithVat:
-          args.actualPaidAmountWithVat !== undefined
-            ? args.actualPaidAmountWithVat
-            : request.plannedPaymentAmountWithVat,
+        plannedPaymentAmountWithVat: plannedAmountWithVat,
         paymentCurrencyRate: effectiveCurrencyRate,
         finplanCostIds: finplanCostIds.length ? finplanCostIds : undefined,
         paymentReminderSentAt: undefined,
@@ -2166,7 +2309,12 @@ export const updatePaymentStatus = mutation({
     }
 
     if (args.status === "partially_paid") {
-      if (!isPositiveFinite(args.actualPaidAmount)) {
+      const resolvedCurrentPayment = resolvePaymentAmountInput({
+        amountWithoutVat: args.actualPaidAmount,
+        amountWithVat: args.actualPaidAmountWithVat,
+        vatRate: request.vatRate,
+      });
+      if (!isPositiveFinite(resolvedCurrentPayment.amountWithoutVat)) {
         throw new Error("Укажите сумму текущего платежа");
       }
       if (!isPositiveFinite(args.paymentResidualAmount)) {
@@ -2187,10 +2335,15 @@ export const updatePaymentStatus = mutation({
       if (existingSplits.length >= 5) {
         throw new Error("Можно указать не более 5 траншей");
       }
+      const residualAmounts = resolvePaymentAmountInput({
+        amountWithoutVat: args.paymentResidualAmount,
+        vatRate: request.vatRate,
+      });
       const nextSplit = {
         splitNumber: existingSplits.length + 1,
-        amountWithoutVat: args.actualPaidAmount!,
-        amountWithVat: args.actualPaidAmountWithVat,
+        amountWithoutVat: resolvedCurrentPayment.amountWithoutVat!,
+        amountWithVat: resolvedCurrentPayment.amountWithVat,
+        vatRate: request.vatRate,
         currencyRate: effectiveCurrencyRate,
         paidAt: now,
         nextPaymentAt: args.paymentPlannedAt,
@@ -2202,10 +2355,7 @@ export const updatePaymentStatus = mutation({
       };
       const updatedSplits = [...existingSplits, nextSplit];
       const cumulativePaid = sumPaymentSplitAmounts(updatedSplits);
-      const cumulativePaidWithVat = updatedSplits.reduce(
-        (sum, split) => sum + (split.amountWithVat ?? 0),
-        0,
-      );
+      const cumulativePaidWithVat = sumPaymentSplitAmountsWithVat(updatedSplits, request.vatRate);
       await ctx.db.patch(request._id, {
         status: "partially_paid",
         paymentSplits: updatedSplits,
@@ -2214,7 +2364,7 @@ export const updatePaymentStatus = mutation({
         paymentPlannedByName: actorName,
         paymentResidualAmount: args.paymentResidualAmount,
         plannedPaymentAmount: args.paymentResidualAmount,
-        plannedPaymentAmountWithVat: undefined,
+        plannedPaymentAmountWithVat: residualAmounts.amountWithVat,
         paymentCurrencyRate: effectiveCurrencyRate,
         finplanCostIds: finplanCostIds.length
           ? Array.from(new Set([...(request.finplanCostIds ?? []), ...finplanCostIds]))
@@ -2229,7 +2379,7 @@ export const updatePaymentStatus = mutation({
         requestId: request._id,
         type: "payment_partially_paid",
         title: "Отмечена частичная оплата",
-        description: `${args.actualPaidAmount} ${request.currency} без НДС, остаток ${args.paymentResidualAmount} ${request.currency}`,
+        description: `${resolvedCurrentPayment.amountWithoutVat} ${request.currency} без НДС, остаток ${args.paymentResidualAmount} ${request.currency}`,
         actorEmail: email,
         actorName,
       });
@@ -2244,19 +2394,38 @@ export const updatePaymentStatus = mutation({
     if (args.status === "paid") {
       const existingSplits = request.paymentSplits ?? [];
       const splitTotal = sumPaymentSplitAmounts(existingSplits);
-      const finalPaidAmount =
-        args.actualPaidAmount !== undefined
-          ? existingSplits.length > 0
-            ? splitTotal + args.actualPaidAmount
-            : args.actualPaidAmount
+      const splitTotalWithVat = sumPaymentSplitAmountsWithVat(existingSplits, request.vatRate);
+      const explicitFinalPayment = hasExplicitPaymentAmountInput(args)
+        ? resolvePaymentAmountInput({
+            amountWithoutVat: args.actualPaidAmount,
+            amountWithVat: args.actualPaidAmountWithVat,
+            vatRate: request.vatRate,
+          })
+        : null;
+      const resolvedFinalPayment =
+        explicitFinalPayment?.amountWithoutVat !== undefined ||
+        explicitFinalPayment?.amountWithVat !== undefined
+          ? explicitFinalPayment
           : request.paymentResidualAmount !== undefined
-            ? splitTotal + request.paymentResidualAmount
-            : request.plannedPaymentAmount ?? request.actualPaidAmount ?? request.amount;
+            ? resolvePaymentAmountInput({
+                amountWithoutVat: request.paymentResidualAmount,
+                amountWithVat: request.plannedPaymentAmountWithVat,
+                vatRate: request.vatRate,
+              })
+            : resolveStoredPaymentAmountInput(request);
+      const finalPaidAmount =
+        existingSplits.length > 0 &&
+        (hasExplicitPaymentAmountInput(args) || request.paymentResidualAmount !== undefined)
+          ? splitTotal + (resolvedFinalPayment.amountWithoutVat ?? 0)
+          : resolvedFinalPayment.amountWithoutVat;
       const finalPaidAmountWithVat =
-        args.actualPaidAmountWithVat !== undefined
-          ? existingSplits.reduce((sum, split) => sum + (split.amountWithVat ?? 0), 0) +
-            args.actualPaidAmountWithVat
-          : request.actualPaidAmountWithVat;
+        existingSplits.length > 0 &&
+        (hasExplicitPaymentAmountInput(args) || request.paymentResidualAmount !== undefined)
+          ? splitTotalWithVat + (resolvedFinalPayment.amountWithVat ?? 0)
+          : resolvedFinalPayment.amountWithVat;
+      if (!isPositiveFinite(finalPaidAmount)) {
+        throw new Error("Укажите сумму оплаты");
+      }
       await ctx.db.patch(request._id, {
         status: args.status,
         paidAt: now,
