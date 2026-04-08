@@ -423,16 +423,16 @@ function resolveStoredPaymentAmountInput(request: {
   plannedPaymentAmount?: number;
   plannedPaymentAmountWithVat?: number;
   paymentResidualAmount?: number;
+  paymentResidualAmountWithVat?: number;
   vatRate?: number;
 }) {
   return resolvePaymentAmountInput({
     amountWithoutVat:
       request.paymentResidualAmount ??
-      request.plannedPaymentAmount ??
       request.actualPaidAmount ??
       request.amount,
     amountWithVat:
-      request.plannedPaymentAmountWithVat ??
+      request.paymentResidualAmountWithVat ??
       request.actualPaidAmountWithVat ??
       request.amountWithVat,
     vatRate: request.vatRate,
@@ -447,24 +447,23 @@ function getRequestPaymentTargetAmounts(request: {
   plannedPaymentAmount?: number;
   plannedPaymentAmountWithVat?: number;
   paymentResidualAmount?: number;
+  paymentResidualAmountWithVat?: number;
   paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
   vatRate?: number;
 }) {
   const existingSplits = request.paymentSplits ?? [];
   const splitTotal = sumPaymentSplitAmounts(existingSplits);
   const splitTotalWithVat = sumPaymentSplitAmountsWithVat(existingSplits, request.vatRate);
-  if (existingSplits.length > 0) {
-    const remaining = resolvePaymentAmountInput({
-      amountWithoutVat: request.paymentResidualAmount,
-      amountWithVat: request.plannedPaymentAmountWithVat,
-      vatRate: request.vatRate,
-    });
-    if (remaining.amountWithoutVat !== undefined || remaining.amountWithVat !== undefined) {
-      return {
-        amountWithoutVat: splitTotal + (remaining.amountWithoutVat ?? 0),
-        amountWithVat: splitTotalWithVat + (remaining.amountWithVat ?? 0),
-      };
-    }
+  const remaining = resolvePaymentAmountInput({
+    amountWithoutVat: request.paymentResidualAmount,
+    amountWithVat: request.paymentResidualAmountWithVat,
+    vatRate: request.vatRate,
+  });
+  if (remaining.amountWithoutVat !== undefined || remaining.amountWithVat !== undefined) {
+    return {
+      amountWithoutVat: splitTotal + (remaining.amountWithoutVat ?? 0),
+      amountWithVat: splitTotalWithVat + (remaining.amountWithVat ?? 0),
+    };
   }
   return resolveStoredPaymentAmountInput(request);
 }
@@ -477,26 +476,19 @@ function getRequestPaymentRemainingAmounts(request: {
   plannedPaymentAmount?: number;
   plannedPaymentAmountWithVat?: number;
   paymentResidualAmount?: number;
+  paymentResidualAmountWithVat?: number;
   paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
   vatRate?: number;
 }) {
-  const target = getRequestPaymentTargetAmounts(request);
-  const existingSplits = request.paymentSplits ?? [];
-  if (existingSplits.length === 0) {
-    return target;
+  const residual = resolvePaymentAmountInput({
+    amountWithoutVat: request.paymentResidualAmount,
+    amountWithVat: request.paymentResidualAmountWithVat,
+    vatRate: request.vatRate,
+  });
+  if (residual.amountWithoutVat !== undefined || residual.amountWithVat !== undefined) {
+    return residual;
   }
-  const splitTotal = sumPaymentSplitAmounts(existingSplits);
-  const splitTotalWithVat = sumPaymentSplitAmountsWithVat(existingSplits, request.vatRate);
-  return {
-    amountWithoutVat:
-      target.amountWithoutVat !== undefined
-        ? Math.max(target.amountWithoutVat - splitTotal, 0)
-        : undefined,
-    amountWithVat:
-      target.amountWithVat !== undefined
-        ? Math.max(target.amountWithVat - splitTotalWithVat, 0)
-        : undefined,
-  };
+  return getRequestPaymentTargetAmounts(request);
 }
 
 function hasPaymentAmountDifference(
@@ -2378,6 +2370,8 @@ export const updatePaymentStatus = mutation({
     actualPaidAmount: v.optional(v.number()),
     actualPaidAmountWithVat: v.optional(v.number()),
     actualPaidAt: v.optional(v.number()),
+    plannedPaymentAmount: v.optional(v.number()),
+    plannedPaymentAmountWithVat: v.optional(v.number()),
     paymentResidualAmount: v.optional(v.number()),
     paymentCurrencyRate: v.optional(v.number()),
     allowLatePaymentPlan: v.optional(v.boolean()),
@@ -2464,6 +2458,8 @@ export const updatePaymentStatus = mutation({
 
     validateOptionalMoney(args.actualPaidAmount, "Сумма оплаты без НДС");
     validateOptionalMoney(args.actualPaidAmountWithVat, "Сумма оплаты с НДС");
+    validateOptionalMoney(args.plannedPaymentAmount, "Сумма следующего платежа без НДС");
+    validateOptionalMoney(args.plannedPaymentAmountWithVat, "Сумма следующего платежа с НДС");
     validateOptionalMoney(args.paymentResidualAmount, "Остаток к оплате");
     validateOptionalRate(args.paymentCurrencyRate);
     if (args.actualPaidAt !== undefined && (!Number.isFinite(args.actualPaidAt) || args.actualPaidAt <= 0)) {
@@ -2493,6 +2489,7 @@ export const updatePaymentStatus = mutation({
         paymentPlannedByEmail: undefined,
         paymentPlannedByName: undefined,
         paymentResidualAmount: undefined,
+        paymentResidualAmountWithVat: undefined,
         plannedPaymentAmount: undefined,
         plannedPaymentAmountWithVat: undefined,
         paymentCurrencyRate: undefined,
@@ -2555,13 +2552,35 @@ export const updatePaymentStatus = mutation({
       if (existingSplits.length > 0 && targetAmount! <= splitTotal) {
         throw new Error("Остаток уже оплачен. Для завершения используйте кнопку «Оплачено»");
       }
-      const plannedAmount = existingSplits.length > 0 ? targetAmount! - splitTotal : targetAmount!;
-      const plannedAmountWithVat =
+      const remainingAmount = existingSplits.length > 0 ? targetAmount! - splitTotal : targetAmount!;
+      const remainingAmountWithVat =
         targetAmountWithVat !== undefined
           ? existingSplits.length > 0
             ? Math.max(targetAmountWithVat - splitTotalWithVat, 0)
             : targetAmountWithVat
           : undefined;
+      const explicitPlannedAmounts =
+        args.plannedPaymentAmount !== undefined || args.plannedPaymentAmountWithVat !== undefined
+          ? resolvePaymentAmountInput({
+              amountWithoutVat: args.plannedPaymentAmount,
+              amountWithVat: args.plannedPaymentAmountWithVat,
+              vatRate: request.vatRate,
+            })
+          : null;
+      const plannedAmount =
+        explicitPlannedAmounts?.amountWithoutVat !== undefined
+          ? explicitPlannedAmounts.amountWithoutVat
+          : remainingAmount;
+      const plannedAmountWithVat =
+        explicitPlannedAmounts?.amountWithVat !== undefined
+          ? explicitPlannedAmounts.amountWithVat
+          : remainingAmountWithVat;
+      if (!isPositiveFinite(plannedAmount)) {
+        throw new Error("Укажите сумму следующего платежа");
+      }
+      if (plannedAmount > remainingAmount) {
+        throw new Error("Сумма следующего платежа не может быть больше остатка");
+      }
       await ctx.db.patch(request._id, {
         status: nextStatus,
         paymentPlannedAt: args.paymentPlannedAt,
@@ -2569,7 +2588,8 @@ export const updatePaymentStatus = mutation({
         paymentPlannedByName: actorName,
         plannedPaymentAmount: plannedAmount,
         plannedPaymentAmountWithVat: plannedAmountWithVat,
-        paymentResidualAmount: existingSplits.length > 0 ? plannedAmount : undefined,
+        paymentResidualAmount: remainingAmount,
+        paymentResidualAmountWithVat: remainingAmountWithVat,
         paymentCurrencyRate: effectiveCurrencyRate,
         finplanCostIds: finplanCostIds.length ? finplanCostIds : undefined,
         paymentReminderSentAt: undefined,
@@ -2612,7 +2632,16 @@ export const updatePaymentStatus = mutation({
         amountWithVat: args.actualPaidAmountWithVat,
         vatRate: request.vatRate,
       });
-      if (!isPositiveFinite(resolvedCurrentPayment.amountWithoutVat)) {
+      const fallbackCurrentPayment =
+        resolvedCurrentPayment.amountWithoutVat !== undefined ||
+        resolvedCurrentPayment.amountWithVat !== undefined
+          ? resolvedCurrentPayment
+          : resolvePaymentAmountInput({
+              amountWithoutVat: request.plannedPaymentAmount,
+              amountWithVat: request.plannedPaymentAmountWithVat,
+              vatRate: request.vatRate,
+            });
+      if (!isPositiveFinite(fallbackCurrentPayment.amountWithoutVat)) {
         throw new Error("Укажите сумму текущего платежа");
       }
       const existingSplits = request.paymentSplits ?? [];
@@ -2627,7 +2656,7 @@ export const updatePaymentStatus = mutation({
       ) {
         throw new Error("Остаток уже оплачен. Для завершения используйте кнопку «Оплачено»");
       }
-      if (resolvedCurrentPayment.amountWithoutVat! >= remainingBeforePayment.amountWithoutVat) {
+      if (fallbackCurrentPayment.amountWithoutVat! >= remainingBeforePayment.amountWithoutVat) {
         throw new Error("Для последнего платежа используйте кнопку «Оплачено»");
       }
       const paidAt = args.actualPaidAt ?? now;
@@ -2643,8 +2672,8 @@ export const updatePaymentStatus = mutation({
       }
       const splitTotal = sumPaymentSplitAmounts(existingSplits);
       const splitTotalWithVat = sumPaymentSplitAmountsWithVat(existingSplits, request.vatRate);
-      const cumulativePaid = splitTotal + resolvedCurrentPayment.amountWithoutVat!;
-      const cumulativePaidWithVat = splitTotalWithVat + (resolvedCurrentPayment.amountWithVat ?? 0);
+      const cumulativePaid = splitTotal + fallbackCurrentPayment.amountWithoutVat!;
+      const cumulativePaidWithVat = splitTotalWithVat + (fallbackCurrentPayment.amountWithVat ?? 0);
       const nextResidualAmount = Math.max(
         (currentTargetAmounts.amountWithoutVat ?? 0) - cumulativePaid,
         0,
@@ -2655,8 +2684,8 @@ export const updatePaymentStatus = mutation({
           : undefined;
       const nextSplit = {
         splitNumber: existingSplits.length + 1,
-        amountWithoutVat: resolvedCurrentPayment.amountWithoutVat!,
-        amountWithVat: resolvedCurrentPayment.amountWithVat,
+        amountWithoutVat: fallbackCurrentPayment.amountWithoutVat!,
+        amountWithVat: fallbackCurrentPayment.amountWithVat,
         vatRate: request.vatRate,
         currencyRate: effectiveCurrencyRate,
         paidAt,
@@ -2671,12 +2700,13 @@ export const updatePaymentStatus = mutation({
       await ctx.db.patch(request._id, {
         status: "partially_paid",
         paymentSplits: updatedSplits,
-        paymentPlannedAt: args.paymentPlannedAt,
-        paymentPlannedByEmail: args.paymentPlannedAt ? email : undefined,
-        paymentPlannedByName: args.paymentPlannedAt ? actorName : undefined,
+        paymentPlannedAt: undefined,
+        paymentPlannedByEmail: undefined,
+        paymentPlannedByName: undefined,
         paymentResidualAmount: nextResidualAmount,
-        plannedPaymentAmount: nextResidualAmount,
-        plannedPaymentAmountWithVat: nextResidualAmountWithVat,
+        paymentResidualAmountWithVat: nextResidualAmountWithVat,
+        plannedPaymentAmount: undefined,
+        plannedPaymentAmountWithVat: undefined,
         paymentCurrencyRate: effectiveCurrencyRate,
         finplanCostIds: finplanCostIds.length
           ? Array.from(new Set([...(request.finplanCostIds ?? []), ...finplanCostIds]))
@@ -2691,7 +2721,7 @@ export const updatePaymentStatus = mutation({
         requestId: request._id,
         type: "payment_partially_paid",
         title: "Отмечена частичная оплата",
-        description: `${resolvedCurrentPayment.amountWithoutVat} ${request.currency} без НДС, остаток ${nextResidualAmount} ${request.currency}`,
+        description: `${fallbackCurrentPayment.amountWithoutVat} ${request.currency} без НДС, остаток ${nextResidualAmount} ${request.currency}`,
         actorEmail: email,
         actorName,
       });
@@ -2755,6 +2785,7 @@ export const updatePaymentStatus = mutation({
         actualPaidAmount: finalPaidAmount,
         actualPaidAmountWithVat: finalPaidAmountWithVat,
         paymentResidualAmount: undefined,
+        paymentResidualAmountWithVat: undefined,
         plannedPaymentAmount: finalPaidAmount,
         plannedPaymentAmountWithVat: finalPaidAmountWithVat,
         paymentCurrencyRate: effectiveCurrencyRate,

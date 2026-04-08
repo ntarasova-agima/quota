@@ -169,32 +169,29 @@ function getPaymentTargetAmounts(request: {
   plannedPaymentAmount?: number;
   plannedPaymentAmountWithVat?: number;
   paymentResidualAmount?: number;
+  paymentResidualAmountWithVat?: number;
   paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
   vatRate?: number;
 }) {
   const splits = request.paymentSplits ?? [];
   const splitTotal = sumPaymentSplitAmounts(splits);
   const splitTotalWithVat = sumPaymentSplitAmountsWithVat(splits, request.vatRate);
-  if (splits.length > 0) {
-    const residual = resolvePaymentPair({
-      amountWithoutVat: request.paymentResidualAmount,
-      amountWithVat: request.plannedPaymentAmountWithVat,
-      vatRate: request.vatRate,
-    });
-    if (residual.amountWithoutVat !== undefined || residual.amountWithVat !== undefined) {
-      return {
-        amountWithoutVat: splitTotal + (residual.amountWithoutVat ?? 0),
-        amountWithVat: splitTotalWithVat + (residual.amountWithVat ?? 0),
-      };
-    }
+  const residual = resolvePaymentPair({
+    amountWithoutVat: request.paymentResidualAmount,
+    amountWithVat: request.paymentResidualAmountWithVat,
+    vatRate: request.vatRate,
+  });
+  if (residual.amountWithoutVat !== undefined || residual.amountWithVat !== undefined) {
+    return {
+      amountWithoutVat: splitTotal + (residual.amountWithoutVat ?? 0),
+      amountWithVat: splitTotalWithVat + (residual.amountWithVat ?? 0),
+    };
   }
   return resolvePaymentPair({
     amountWithoutVat:
-      request.plannedPaymentAmount ??
       request.actualPaidAmount ??
       request.amount,
     amountWithVat:
-      request.plannedPaymentAmountWithVat ??
       request.actualPaidAmountWithVat ??
       request.amountWithVat,
     vatRate: request.vatRate,
@@ -209,6 +206,7 @@ function getPaymentRemainingAmounts(request: {
   plannedPaymentAmount?: number;
   plannedPaymentAmountWithVat?: number;
   paymentResidualAmount?: number;
+  paymentResidualAmountWithVat?: number;
   paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
   vatRate?: number;
   status: string;
@@ -219,23 +217,15 @@ function getPaymentRemainingAmounts(request: {
       amountWithVat: 0,
     };
   }
-  const target = getPaymentTargetAmounts(request);
-  const splits = request.paymentSplits ?? [];
-  if (splits.length === 0) {
-    return target;
+  const residual = resolvePaymentPair({
+    amountWithoutVat: request.paymentResidualAmount,
+    amountWithVat: request.paymentResidualAmountWithVat,
+    vatRate: request.vatRate,
+  });
+  if (residual.amountWithoutVat !== undefined || residual.amountWithVat !== undefined) {
+    return residual;
   }
-  const splitTotal = sumPaymentSplitAmounts(splits);
-  const splitTotalWithVat = sumPaymentSplitAmountsWithVat(splits, request.vatRate);
-  return {
-    amountWithoutVat:
-      target.amountWithoutVat !== undefined
-        ? Math.max(target.amountWithoutVat - splitTotal, 0)
-        : undefined,
-    amountWithVat:
-      target.amountWithVat !== undefined
-        ? Math.max(target.amountWithVat - splitTotalWithVat, 0)
-        : undefined,
-  };
+  return getPaymentTargetAmounts(request);
 }
 
 function getPendingStatusPresentation(isActionableForViewer: boolean) {
@@ -302,6 +292,8 @@ export default function RequestDetailPage() {
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
   const [paymentTargetAmount, setPaymentTargetAmount] = useState("");
   const [paymentTargetAmountWithVat, setPaymentTargetAmountWithVat] = useState("");
+  const [paymentPlannedAmount, setPaymentPlannedAmount] = useState("");
+  const [paymentPlannedAmountWithVat, setPaymentPlannedAmountWithVat] = useState("");
   const [paymentExecutedAmount, setPaymentExecutedAmount] = useState("");
   const [paymentExecutedAmountWithVat, setPaymentExecutedAmountWithVat] = useState("");
   const [paymentExecutedDate, setPaymentExecutedDate] = useState("");
@@ -466,11 +458,33 @@ export default function RequestDetailPage() {
       setPaymentTargetAmountWithVat(
         targetAmounts.amountWithVat !== undefined ? String(targetAmounts.amountWithVat) : "",
       );
+      setPaymentPlannedAmount(
+        data.request.plannedPaymentAmount !== undefined
+          ? String(data.request.plannedPaymentAmount)
+          : remainingAmounts.amountWithoutVat !== undefined
+            ? String(remainingAmounts.amountWithoutVat)
+            : "",
+      );
+      setPaymentPlannedAmountWithVat(
+        data.request.plannedPaymentAmountWithVat !== undefined
+          ? String(data.request.plannedPaymentAmountWithVat)
+          : remainingAmounts.amountWithVat !== undefined
+            ? String(remainingAmounts.amountWithVat)
+            : "",
+      );
       setPaymentExecutedAmount(
-        remainingAmounts.amountWithoutVat !== undefined ? String(remainingAmounts.amountWithoutVat) : "",
+        data.request.plannedPaymentAmount !== undefined
+          ? String(data.request.plannedPaymentAmount)
+          : remainingAmounts.amountWithoutVat !== undefined
+            ? String(remainingAmounts.amountWithoutVat)
+            : "",
       );
       setPaymentExecutedAmountWithVat(
-        remainingAmounts.amountWithVat !== undefined ? String(remainingAmounts.amountWithVat) : "",
+        data.request.plannedPaymentAmountWithVat !== undefined
+          ? String(data.request.plannedPaymentAmountWithVat)
+          : remainingAmounts.amountWithVat !== undefined
+            ? String(remainingAmounts.amountWithVat)
+            : "",
       );
       setPaymentExecutedDate(
         data.request.paidAt
@@ -494,6 +508,7 @@ export default function RequestDetailPage() {
     data?.request?.actualPaidAmount,
     data?.request?.actualPaidAmountWithVat,
     data?.request?.paymentResidualAmount,
+    data?.request?.paymentResidualAmountWithVat,
     data?.request?.paymentSplits,
     data?.request?.amount,
     data?.request?.amountWithVat,
@@ -1156,7 +1171,7 @@ export default function RequestDetailPage() {
                           </Button>
                         </div>
                       ) : null}
-                      <div className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)]">
                         <div className="space-y-2">
                           <Label htmlFor="finplanIds">ID затрат в Финплане</Label>
                           <Input
@@ -1164,20 +1179,6 @@ export default function RequestDetailPage() {
                             value={finplanCostIdsRaw}
                             onChange={(event) => setFinplanCostIdsRaw(event.target.value)}
                             placeholder="12345, 67890"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="paymentDate">Когда оплатим</Label>
-                          <Input
-                            id="paymentDate"
-                            type="date"
-                            value={paymentPlannedDate}
-                            onChange={(event) => {
-                              setPaymentPlannedDate(event.target.value);
-                              setPaymentActionError(null);
-                              setConfirmLatePaymentPlan(false);
-                            }}
-                            min={todayDate}
                           />
                         </div>
                         <div className="space-y-2">
@@ -1196,7 +1197,7 @@ export default function RequestDetailPage() {
 
                       <div className="space-y-2 rounded-lg border border-border/70 p-3">
                         <div className="text-sm font-medium">Сумма оплаты</div>
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                           <div className="space-y-2">
                             <Label htmlFor="paymentTargetAmount">Без НДС</Label>
                             <Input
@@ -1239,58 +1240,125 @@ export default function RequestDetailPage() {
                               }`}
                             />
                           </div>
-                          <div className="flex items-end">
-                            {canSetPaymentPlanned ? (
-                              <Button
-                                type="button"
-                                className="h-9 border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                                disabled={
-                                  updatingStatus ||
-                                  !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
-                                }
-                                onClick={async () => {
-                                  setPaymentActionError(null);
-                                  if (!paymentPlannedDate) {
-                                    setPaymentActionError("Укажите дату оплаты");
-                                    return;
-                                  }
-                                  if (isLatePaymentPlan && !confirmLatePaymentPlan) {
-                                    setPaymentActionError(
-                                      "Дата позже нужной. Подтвердите, что сохраняете ее",
-                                    );
-                                    return;
-                                  }
-                                  setUpdatingStatus(true);
-                                  try {
-                                    await updatePaymentStatus({
-                                      id: request._id,
-                                      status: "payment_planned",
-                                      paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
-                                      finplanCostIdsRaw,
-                                      actualPaidAmount: parseMoneyInput(paymentTargetAmount),
-                                      actualPaidAmountWithVat: parseMoneyInput(paymentTargetAmountWithVat),
-                                      paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
-                                      allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
-                                    });
-                                    router.refresh();
-                                  } catch (err) {
-                                    setPaymentActionError(
-                                      err instanceof Error ? err.message : "Не удалось запланировать оплату",
-                                    );
-                                  } finally {
-                                    setUpdatingStatus(false);
-                                  }
-                                }}
-                              >
-                                {nextPaymentButtonLabel}
-                              </Button>
-                            ) : null}
-                          </div>
                         </div>
                         <p className="text-xs text-muted-foreground">
                           По умолчанию здесь сумма из заявки. Если BUH меняет ее, автор получит письмо.
                         </p>
                       </div>
+
+                      {canSetPaymentPlanned ? (
+                        <div className="space-y-2 rounded-lg border border-border/70 p-3">
+                          <div className="text-sm font-medium">Следующий платеж</div>
+                          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto] xl:items-end">
+                            <div className="space-y-2">
+                              <Label htmlFor="paymentPlannedAmount">Сумма следующего платежа без НДС</Label>
+                              <Input
+                                id="paymentPlannedAmount"
+                                inputMode="decimal"
+                                value={paymentPlannedAmount}
+                                onChange={(event) => {
+                                  const nextAmount = sanitizeNumericInput(event.target.value);
+                                  setPaymentPlannedAmount(nextAmount);
+                                  const synced = syncVatInputPair({
+                                    amountWithoutVatInput: nextAmount,
+                                    amountWithVatInput: paymentPlannedAmountWithVat,
+                                    vatRateInput: String(paymentVatRate),
+                                    source: "without",
+                                  });
+                                  setPaymentPlannedAmountWithVat(synced.amountWithVatInput);
+                                }}
+                                placeholder={`Например, ${remainingPaymentAmounts.amountWithoutVat ?? request.amount}`}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="paymentPlannedAmountWithVat">Сумма следующего платежа с НДС</Label>
+                              <Input
+                                id="paymentPlannedAmountWithVat"
+                                inputMode="decimal"
+                                value={paymentPlannedAmountWithVat}
+                                onChange={(event) => {
+                                  const nextAmountWithVat = sanitizeNumericInput(event.target.value);
+                                  setPaymentPlannedAmountWithVat(nextAmountWithVat);
+                                  const synced = syncVatInputPair({
+                                    amountWithoutVatInput: paymentPlannedAmount,
+                                    amountWithVatInput: nextAmountWithVat,
+                                    vatRateInput: String(paymentVatRate),
+                                    source: "with",
+                                  });
+                                  setPaymentPlannedAmount(synced.amountWithoutVatInput);
+                                }}
+                                placeholder={`Например, ${
+                                  remainingPaymentAmounts.amountWithVat ??
+                                  request.amountWithVat ??
+                                  calculateAmountWithVat(request.amount, paymentVatRate)
+                                }`}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="paymentDatePlanned">Дата следующего платежа</Label>
+                              <Input
+                                id="paymentDatePlanned"
+                                type="date"
+                                value={paymentPlannedDate}
+                                onChange={(event) => {
+                                  setPaymentPlannedDate(event.target.value);
+                                  setPaymentActionError(null);
+                                  setConfirmLatePaymentPlan(false);
+                                }}
+                                min={todayDate}
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              className="h-9 border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                              disabled={
+                                updatingStatus ||
+                                !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                              }
+                              onClick={async () => {
+                                setPaymentActionError(null);
+                                if (!paymentPlannedDate) {
+                                  setPaymentActionError("Укажите дату оплаты");
+                                  return;
+                                }
+                                if (isLatePaymentPlan && !confirmLatePaymentPlan) {
+                                  setPaymentActionError(
+                                    "Дата позже нужной. Подтвердите, что сохраняете ее",
+                                  );
+                                  return;
+                                }
+                                setUpdatingStatus(true);
+                                try {
+                                  await updatePaymentStatus({
+                                    id: request._id,
+                                    status: "payment_planned",
+                                    paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
+                                    finplanCostIdsRaw,
+                                    actualPaidAmount: parseMoneyInput(paymentTargetAmount),
+                                    actualPaidAmountWithVat: parseMoneyInput(paymentTargetAmountWithVat),
+                                    plannedPaymentAmount: parseMoneyInput(paymentPlannedAmount),
+                                    plannedPaymentAmountWithVat: parseMoneyInput(paymentPlannedAmountWithVat),
+                                    paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+                                    allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
+                                  });
+                                  router.refresh();
+                                } catch (err) {
+                                  setPaymentActionError(
+                                    err instanceof Error ? err.message : "Не удалось запланировать оплату",
+                                  );
+                                } finally {
+                                  setUpdatingStatus(false);
+                                }
+                              }}
+                            >
+                              {nextPaymentButtonLabel}
+                            </Button>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Здесь можно запланировать как полный остаток, так и только часть следующего транша.
+                          </p>
+                        </div>
+                      ) : null}
 
                       {canSetPaid && hasRemainingPayment ? (
                         <div className="space-y-2 rounded-lg border border-border/70 p-3">

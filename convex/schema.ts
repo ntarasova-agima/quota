@@ -122,6 +122,7 @@ const schema = defineSchema({
     actualPaidAmount: v.optional(v.number()),
     actualPaidAmountWithVat: v.optional(v.number()),
     paymentResidualAmount: v.optional(v.number()),
+    paymentResidualAmountWithVat: v.optional(v.number()),
     plannedPaymentAmount: v.optional(v.number()),
     plannedPaymentAmountWithVat: v.optional(v.number()),
     paymentCurrencyRate: v.optional(v.number()),
