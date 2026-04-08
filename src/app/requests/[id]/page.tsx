@@ -178,6 +178,7 @@ export default function RequestDetailPage() {
   const canDecide = useMemo(() => new Set(myRoles), [myRoles]);
   const isAdmin = useMemo(() => myRoles.includes("ADMIN"), [myRoles]);
   const isNbd = useMemo(() => myRoles.includes("NBD"), [myRoles]);
+  const isAiBoss = useMemo(() => myRoles.includes("AI-BOSS"), [myRoles]);
   const isCoo = useMemo(() => myRoles.includes("COO"), [myRoles]);
   const canSetCfdTag = useMemo(
     () =>
@@ -221,6 +222,12 @@ export default function RequestDetailPage() {
       ((data?.request?.fundingSource === "Квота на пресейлы" && data?.request?.category !== "Welcome-бонус") ||
         (data?.request?.fundingSource === "Квота на AI-подписки" && data?.request?.category === "Закупка сервисов")),
   );
+  const showAiBossQuotaSummary = Boolean(
+    isAuthenticated &&
+      isAiBoss &&
+      data?.request?.fundingSource === "Квоты на AI-инструменты" &&
+      data?.request?.category === "Закупка сервисов",
+  );
   const showCooQuotaSummary = Boolean(
     isAuthenticated && isCoo && data?.request?.fundingSource === "Квота на внутренние затраты",
   );
@@ -231,6 +238,10 @@ export default function RequestDetailPage() {
   const nbdAiQuotaSummary = useQuery(
     api.quotas.listNbdServiceByMonthKeys,
     showNbdQuotaSummary && data?.request?.fundingSource === "Квота на AI-подписки" ? { monthKeys: quotaMonthKeys } : "skip",
+  );
+  const aiBossQuotaSummary = useQuery(
+    api.quotas.listAiToolByMonthKeys,
+    showAiBossQuotaSummary ? { monthKeys: quotaMonthKeys } : "skip",
   );
   const cooQuotaSummary = useQuery(
     api.quotas.listCooByMonthKeys,
@@ -1664,13 +1675,28 @@ export default function RequestDetailPage() {
             </CardContent>
           </Card>
 
-          {showNbdQuotaSummary && (data?.request?.fundingSource === "Квота на AI-подписки" ? nbdAiQuotaSummary?.length : nbdQuotaSummary?.length) ? (
+          {(showNbdQuotaSummary || showAiBossQuotaSummary) &&
+          (
+            showAiBossQuotaSummary
+              ? aiBossQuotaSummary?.length
+              : data?.request?.fundingSource === "Квота на AI-подписки"
+                ? nbdAiQuotaSummary?.length
+                : nbdQuotaSummary?.length
+          ) ? (
             <Card>
               <CardContent className="pt-6">
                 <div className="rounded-xl border border-emerald-200/80 bg-[linear-gradient(180deg,rgba(240,253,244,0.92)_0%,rgba(236,253,245,0.85)_100%)] p-4">
-                  <div className="font-medium text-emerald-900">Остаток квоты NBD</div>
+                  <div className="font-medium text-emerald-900">
+                    {showAiBossQuotaSummary ? "Остаток квоты AI-BOSS" : "Остаток квоты NBD"}
+                  </div>
                   <div className="mt-3 grid gap-2 md:grid-cols-3">
-                    {(data?.request?.fundingSource === "Квота на AI-подписки" ? nbdAiQuotaSummary : nbdQuotaSummary)?.map((item) => {
+                    {(
+                      showAiBossQuotaSummary
+                        ? aiBossQuotaSummary
+                        : data?.request?.fundingSource === "Квота на AI-подписки"
+                          ? nbdAiQuotaSummary
+                          : nbdQuotaSummary
+                    )?.map((item) => {
                       const remaining = item.quota - item.spent;
                       const isHighlighted = item.monthKey === highlightedQuotaMonthKey;
                       return (

@@ -92,7 +92,7 @@ export default function RequestsPage() {
   const { isAuthenticated } = useConvexAuth();
   const myRoles = useQuery(api.roles.myRoles, isAuthenticated ? {} : "skip");
   const isApprover = useMemo(
-    () => myRoles?.some((role) => ["NBD", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)),
+    () => myRoles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)),
     [myRoles],
   );
   const isAdmin = useMemo(() => myRoles?.includes("ADMIN") ?? false, [myRoles]);

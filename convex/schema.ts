@@ -5,6 +5,7 @@ import { v } from "convex/values";
 const roleEnum = v.union(
   v.literal("AD"),
   v.literal("NBD"),
+  v.literal("AI-BOSS"),
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),
@@ -205,6 +206,14 @@ const schema = defineSchema({
       updatedAt: v.number(),
     }).index("by_monthKey", ["monthKey"]),
   nbdServiceQuotas: defineTable({
+    monthKey: v.string(),
+    year: v.number(),
+    month: v.number(),
+    quota: v.number(),
+    spent: v.number(),
+    updatedAt: v.number(),
+  }).index("by_monthKey", ["monthKey"]),
+  aiToolQuotas: defineTable({
     monthKey: v.string(),
     year: v.number(),
     month: v.number(),

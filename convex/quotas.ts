@@ -15,7 +15,7 @@ function monthInfoFromKey(key: string) {
   return { year: Number(yearStr), month: Number(monthStr) };
 }
 
-async function ensureRole(ctx: any, role: "NBD" | "CFD" | "COO") {
+async function ensureRole(ctx: any, role: "NBD" | "AI-BOSS" | "CFD" | "COO") {
   const userId = await getAuthUserId(ctx);
   if (!userId) {
     if (process.env.ALLOW_DEV_QUOTA_DELETE === "true") {
@@ -40,6 +40,10 @@ async function ensureRole(ctx: any, role: "NBD" | "CFD" | "COO") {
 
 async function ensureNbd(ctx: any) {
   return await ensureRole(ctx, "NBD");
+}
+
+async function ensureAiBoss(ctx: any) {
+  return await ensureRole(ctx, "AI-BOSS");
 }
 
 async function ensureCfd(ctx: any) {
@@ -191,6 +195,85 @@ export const updateNbdServiceQuota = mutation({
       return existing._id;
     }
     return await ctx.db.insert("nbdServiceQuotas", {
+      monthKey: args.monthKey,
+      year,
+      month,
+      quota: args.quota,
+      spent,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const listAiToolByMonthKeys = query({
+  args: {
+    monthKeys: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ensureAiBoss(ctx);
+    const items = await ctx.db.query("aiToolQuotas").collect();
+    const map = new Map(items.map((item) => [item.monthKey, item]));
+    const requests = await ctx.db.query("requests").collect();
+    const predicate = (request: any) =>
+      request.fundingSource === "Квоты на AI-инструменты" &&
+      request.category === "Закупка сервисов";
+    const spentByMonth = sumQuotaUsageByMonth(requests, predicate);
+    const spentByMonthAndTag = sumQuotaUsageByMonthAndTag(requests, predicate);
+    const results = [];
+    for (const key of args.monthKeys) {
+      const existing = map.get(key);
+      const { year, month } = monthInfoFromKey(key);
+      const spent = spentByMonth.get(key) ?? 0;
+      const tagBreakdown = Array.from(spentByMonthAndTag.get(key)?.entries() ?? [])
+        .sort((a, b) => b[1] - a[1])
+        .map(([tag, amount]) => ({ tag, amount }));
+      results.push(
+        existing
+          ? { ...existing, spent, tagBreakdown }
+          : {
+              monthKey: key,
+              year,
+              month,
+              quota: 0,
+              spent,
+              tagBreakdown,
+              updatedAt: 0,
+            },
+      );
+    }
+    return results;
+  },
+});
+
+export const updateAiToolQuota = mutation({
+  args: {
+    monthKey: v.string(),
+    quota: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ensureAiBoss(ctx);
+    const { year, month } = monthInfoFromKey(args.monthKey);
+    const requests = await ctx.db.query("requests").collect();
+    const spent = sumQuotaUsageByMonth(
+      requests,
+      (request) =>
+        request.fundingSource === "Квоты на AI-инструменты" &&
+        request.category === "Закупка сервисов",
+    ).get(args.monthKey) ?? 0;
+
+    const existing = await ctx.db
+      .query("aiToolQuotas")
+      .withIndex("by_monthKey", (q: any) => q.eq("monthKey", args.monthKey))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        quota: args.quota,
+        spent,
+        updatedAt: Date.now(),
+      });
+      return existing._id;
+    }
+    return await ctx.db.insert("aiToolQuotas", {
       monthKey: args.monthKey,
       year,
       month,

@@ -7,6 +7,7 @@ import { logTimelineEvent } from "./timelineHelpers";
 const roleEnum = v.union(
   v.literal("AD"),
   v.literal("NBD"),
+  v.literal("AI-BOSS"),
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),
@@ -77,7 +78,7 @@ export const listRoles = query({
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
     const canManage = record?.roles?.some((role) =>
-      ["ADMIN", "NBD", "COO", "CFD"].includes(role),
+      ["ADMIN", "NBD", "AI-BOSS", "COO", "CFD"].includes(role),
     );
     if (!canManage) {
       return [];
@@ -102,7 +103,7 @@ export const listAdContacts = query({
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
     const canView = record?.roles?.some((role) =>
-      ["ADMIN", "NBD", "COO", "CFD"].includes(role),
+      ["ADMIN", "NBD", "AI-BOSS", "COO", "CFD"].includes(role),
     );
     if (!canView) {
       return [];
@@ -143,7 +144,7 @@ export const upsertRole = mutation({
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
     const canManage = selfRecord?.roles?.some((role) =>
-      ["ADMIN", "NBD", "COO", "CFD"].includes(role),
+      ["ADMIN", "NBD", "AI-BOSS", "COO", "CFD"].includes(role),
     );
     const normalizedEmail = normalizeEmail(args.email);
     if (anyRoles && !canManage) {
@@ -209,7 +210,7 @@ export const deleteRole = mutation({
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
     const canManage = selfRecord?.roles?.some((role) =>
-      ["ADMIN", "NBD", "COO", "CFD"].includes(role),
+      ["ADMIN", "NBD", "AI-BOSS", "COO", "CFD"].includes(role),
     );
     if (!canManage) {
       throw new Error("Not authorized");
@@ -312,6 +313,7 @@ export const seedTestRoles = mutation({
     const emails = [
       { email: "ad.test@quota.local", roles: ["AD"] as const, isTest: true },
       { email: "nbd.test@quota.local", roles: ["NBD"] as const, isTest: true },
+      { email: "ai-boss.test@quota.local", roles: ["AI-BOSS"] as const, isTest: true },
       { email: "coo.test@quota.local", roles: ["COO"] as const, isTest: true },
       { email: "cfd.test@quota.local", roles: ["CFD"] as const, isTest: true },
       { email: "admin.test@quota.local", roles: ["ADMIN"] as const, isTest: true },

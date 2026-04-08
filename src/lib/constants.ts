@@ -1,8 +1,10 @@
-export const ROLE_OPTIONS = ["NBD", "COO", "CFD"] as const;
-export const ALL_ROLES = ["AD", "NBD", "COO", "CFD", "BUH", "HOD", "ADMIN"] as const;
+export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "CFD"] as const;
+export const DEFAULT_REQUIRED_ROLES = ["NBD", "COO", "CFD"] as const;
+export const ALL_ROLES = ["AD", "NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"] as const;
 export const ALL_ROLES_WITH_HOD = [
   "AD",
   "NBD",
+  "AI-BOSS",
   "COO",
   "CFD",
   "BUH",
@@ -15,6 +17,7 @@ export const FUNDING_SOURCES = [
   "Прибыль компании",
   "Квота на пресейлы",
   "Квота на AI-подписки",
+  "Квоты на AI-инструменты",
   "Квота на внутренние затраты",
   "Я не знаю",
 ] as const;
@@ -54,6 +57,7 @@ export const FUNDING_SOURCE_CODES: Record<string, string> = {
   "Прибыль компании": "PC",
   "Квота на пресейлы": "QS",
   "Квота на AI-подписки": "QA",
+  "Квоты на AI-инструменты": "QT",
   "Квота на внутренние затраты": "QI",
   "Я не знаю": "UN",
 };

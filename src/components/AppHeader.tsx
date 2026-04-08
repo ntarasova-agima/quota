@@ -23,12 +23,13 @@ export default function AppHeader({
   const roles = profile?.roles?.length ? profile.roles.join(", ") : "роль не назначена";
   const name = profile?.fullName || profile?.email || "";
   const canViewAllRequests =
-    profile?.roles?.some((role) => ["NBD", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)) ||
+    profile?.roles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)) ||
     hasHistoricalApprovalAccess;
   const canApprove = profile?.roles?.some((role) =>
-    ["NBD", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role),
+    ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role),
   );
   const isNbd = profile?.roles?.includes("NBD");
+  const isAiBoss = profile?.roles?.includes("AI-BOSS");
   const isCfd = profile?.roles?.includes("CFD");
   const isCoo = profile?.roles?.includes("COO");
   const isBuh = profile?.roles?.includes("BUH");
@@ -91,6 +92,11 @@ export default function AppHeader({
               <Link href="/nbd-services-quota">Квоты AI-подписок</Link>
             </Button>
           </>
+        )}
+        {isAiBoss && (
+          <Button asChild variant={pathname === "/ai-tools-quota" ? "default" : "outline"}>
+            <Link href="/ai-tools-quota">Квоты на AI-инструменты</Link>
+          </Button>
         )}
         {isCfd && (
           <>

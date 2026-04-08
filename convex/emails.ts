@@ -6,6 +6,7 @@ const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
 const roleEnum = v.union(
   v.literal("AD"),
   v.literal("NBD"),
+  v.literal("AI-BOSS"),
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),

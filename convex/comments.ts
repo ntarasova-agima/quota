@@ -42,7 +42,7 @@ async function canViewRequest(ctx: any, requestId: any) {
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
   const canViewAll = record?.roles?.some((role: string) =>
-    ["NBD", "COO", "CFD", "BUH", "ADMIN"].includes(role),
+    ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role),
   );
   const canHodView = hasHodAccessToRequest(record, request);
   const canViewByHistory = await hasHistoricalApprovalAccess(ctx, requestId, email);

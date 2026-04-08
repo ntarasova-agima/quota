@@ -8,6 +8,7 @@ import { logTimelineEvent } from "./timelineHelpers";
 const roleEnum = v.union(
   v.literal("AD"),
   v.literal("NBD"),
+  v.literal("AI-BOSS"),
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),
@@ -42,6 +43,7 @@ const fundingSourceCodes: Record<string, string> = {
   "Прибыль компании": "PC",
   "Квота на пресейлы": "QS",
   "Квота на AI-подписки": "QA",
+  "Квоты на AI-инструменты": "QT",
   "Квота на внутренние затраты": "QI",
   "Я не знаю": "UN",
 };
@@ -49,6 +51,9 @@ const fundingSourceCodes: Record<string, string> = {
 function getFundingOwnerRoles(fundingSource: string) {
   if (fundingSource === "Квота на пресейлы" || fundingSource === "Квота на AI-подписки") {
     return ["NBD"] as const;
+  }
+  if (fundingSource === "Квоты на AI-инструменты") {
+    return ["AI-BOSS"] as const;
   }
   if (fundingSource === "Квота на внутренние затраты") {
     return ["COO"] as const;
@@ -665,9 +670,11 @@ function validateRequestPayload(args: any) {
   }
   if (
     args.category === "Закупка сервисов" &&
-    !["Квота на внутренние затраты", "Квота на AI-подписки"].includes(args.fundingSource)
+    !["Квота на внутренние затраты", "Квота на AI-подписки", "Квоты на AI-инструменты"].includes(args.fundingSource)
   ) {
-    throw new Error("Для закупки сервисов доступны только источники Квота на внутренние затраты и Квота на AI-подписки");
+    throw new Error(
+      "Для закупки сервисов доступны только источники Квота на внутренние затраты, Квота на AI-подписки и Квоты на AI-инструменты",
+    );
   }
   if (
     args.approvalDeadline !== undefined &&
@@ -708,6 +715,12 @@ function validateRequestPayload(args: any) {
     !args.requiredRoles.includes("NBD")
   ) {
     throw new Error("Для квот NBD обязателен NBD");
+  }
+  if (
+    args.fundingSource === "Квоты на AI-инструменты" &&
+    !args.requiredRoles.includes("AI-BOSS")
+  ) {
+    throw new Error("Для квот на AI-инструменты обязателен AI-BOSS");
   }
   if (
     args.fundingSource === "Квота на внутренние затраты" &&
@@ -881,7 +894,7 @@ export const listAllRequests = query({
     }
     const record = await getRoleRecord(ctx, email);
     const canViewAll = record?.roles?.some((role: string) =>
-      ["NBD", "COO", "CFD", "BUH", "ADMIN", "HOD"].includes(role),
+      ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN", "HOD"].includes(role),
     );
     const hasReviewedAny = email
       ? (
@@ -930,7 +943,7 @@ export const listAllRequests = query({
     });
     const scopedToCurrentRole =
       record?.roles?.includes("HOD") &&
-      !record.roles.some((role: string) => ["NBD", "COO", "CFD", "BUH", "ADMIN"].includes(role))
+      !record.roles.some((role: string) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role))
         ? filtered.filter((req) => hasHodAccessToRequest(record, req))
         : canViewAll
           ? filtered
@@ -1033,7 +1046,7 @@ export const getRequest = query({
     }
     const record = await getRoleRecord(ctx, email);
     const canViewAll = record?.roles?.some((role: string) =>
-      ["NBD", "COO", "CFD", "BUH", "ADMIN"].includes(role),
+      ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role),
     );
     const canHodView = hasHodAccessToRequest(record, request);
     const canViewByHistory = await hasHistoricalApprovalAccess(ctx, args.id, email);
@@ -1080,7 +1093,7 @@ export const listChangeHistory = query({
     }
     const record = await getRoleRecord(ctx, email);
     const canViewAll = record?.roles?.some((role: string) =>
-      ["NBD", "COO", "CFD", "BUH", "ADMIN"].includes(role),
+      ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role),
     );
     const canHodView = hasHodAccessToRequest(record, request);
     const canViewByHistory = await hasHistoricalApprovalAccess(ctx, args.requestId, email);

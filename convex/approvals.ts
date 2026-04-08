@@ -8,6 +8,7 @@ import { logTimelineEvent } from "./timelineHelpers";
 const roleEnum = v.union(
   v.literal("AD"),
   v.literal("NBD"),
+  v.literal("AI-BOSS"),
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),
@@ -16,6 +17,19 @@ const roleEnum = v.union(
 );
 
 const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
+
+function getQuotaTableName(fundingSource: string) {
+  if (fundingSource === "Квота на пресейлы") {
+    return "presalesQuotas";
+  }
+  if (fundingSource === "Квота на AI-подписки") {
+    return "nbdServiceQuotas";
+  }
+  if (fundingSource === "Квоты на AI-инструменты") {
+    return "aiToolQuotas";
+  }
+  return null;
+}
 
 export const listPendingForMe = query({
   args: {},
@@ -229,15 +243,15 @@ export const decide = mutation({
       },
     });
 
-    if (status === "approved" && ["Квота на пресейлы", "Квота на AI-подписки"].includes(request.fundingSource)) {
+    const quotaTableName = getQuotaTableName(request.fundingSource);
+    if (status === "approved" && quotaTableName) {
       if (!request.neededBy) {
-        throw new Error("Missing neededBy for NBD quota");
+        throw new Error("Missing neededBy for quota-backed request");
       }
       const date = new Date(request.neededBy);
       const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-      const tableName = request.fundingSource === "Квота на AI-подписки" ? "nbdServiceQuotas" : "presalesQuotas";
       const existing = await ctx.db
-        .query(tableName)
+        .query(quotaTableName)
         .withIndex("by_monthKey", (q: any) => q.eq("monthKey", key))
         .first();
       if (existing) {
@@ -246,7 +260,7 @@ export const decide = mutation({
           updatedAt: Date.now(),
         });
       } else {
-        await ctx.db.insert(tableName, {
+        await ctx.db.insert(quotaTableName, {
           monthKey: key,
           year: date.getFullYear(),
           month: date.getMonth() + 1,
@@ -378,15 +392,15 @@ export const adminApproveAsRole = mutation({
       updatedAt: now,
     });
 
-    if (status === "approved" && ["Квота на пресейлы", "Квота на AI-подписки"].includes(request.fundingSource)) {
+    const quotaTableName = getQuotaTableName(request.fundingSource);
+    if (status === "approved" && quotaTableName) {
       if (!request.neededBy) {
-        throw new Error("Missing neededBy for NBD quota");
+        throw new Error("Missing neededBy for quota-backed request");
       }
       const date = new Date(request.neededBy);
       const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-      const tableName = request.fundingSource === "Квота на AI-подписки" ? "nbdServiceQuotas" : "presalesQuotas";
       const existing = await ctx.db
-        .query(tableName)
+        .query(quotaTableName)
         .withIndex("by_monthKey", (q: any) => q.eq("monthKey", key))
         .first();
       if (existing) {
@@ -395,7 +409,7 @@ export const adminApproveAsRole = mutation({
           updatedAt: Date.now(),
         });
       } else {
-        await ctx.db.insert(tableName, {
+        await ctx.db.insert(quotaTableName, {
           monthKey: key,
           year: date.getFullYear(),
           month: date.getMonth() + 1,

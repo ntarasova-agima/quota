@@ -87,7 +87,7 @@ async function ensureCanAccessRequest(ctx: any, requestId: any) {
   }
   const roleRecord = await getRoleRecord(ctx, email);
   const canViewAll = roleRecord?.roles?.some((role: string) =>
-    ["NBD", "COO", "CFD", "BUH", "ADMIN"].includes(role),
+    ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role),
   );
   const canHodView = hasHodAccessToRequest(roleRecord, request);
   const isCreator = request.createdBy === userId || request.createdByEmail === email;

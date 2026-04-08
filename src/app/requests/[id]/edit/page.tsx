@@ -15,6 +15,7 @@ import AppHeader from "@/components/AppHeader";
 import { api } from "@/lib/convex";
 import {
   CURRENCIES,
+  DEFAULT_REQUIRED_ROLES,
   EXPENSE_CATEGORIES,
   FUNDING_SOURCES,
   HOD_DEPARTMENTS,
@@ -81,13 +82,14 @@ export default function NewRequestPage() {
   const [approvalDeadline, setApprovalDeadline] = useState(defaultDeadline);
   const [neededBy, setNeededBy] = useState(defaultDeadline);
   const [paidBy, setPaidBy] = useState(defaultDeadline);
-  const [requiredRoles, setRequiredRoles] = useState<RoleOption[]>([...ROLE_OPTIONS]);
+  const [requiredRoles, setRequiredRoles] = useState<RoleOption[]>([...DEFAULT_REQUIRED_ROLES]);
   const [error, setError] = useState<string | null>(null);
   const [fundingError, setFundingError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingEditConfirmation | null>(null);
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
+  const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
   const presalesMonthKeys = useMemo(() => {
     const now = new Date();
     return Array.from({ length: 3 }).map((_, index) => {
@@ -102,6 +104,10 @@ export default function NewRequestPage() {
   const aiServiceQuotas = useQuery(
     api.quotas.listNbdServiceByMonthKeys,
     isNbd && fundingSource === "Квота на AI-подписки" ? { monthKeys: presalesMonthKeys } : "skip",
+  );
+  const aiToolQuotas = useQuery(
+    api.quotas.listAiToolByMonthKeys,
+    isAiBoss && fundingSource === "Квоты на AI-инструменты" ? { monthKeys: presalesMonthKeys } : "skip",
   );
   const currentMonthKey = useMemo(() => {
     const now = new Date();
@@ -167,7 +173,7 @@ export default function NewRequestPage() {
       request.neededBy ? new Date(request.neededBy).toISOString().slice(0, 10) : defaultDeadline,
     );
     setPaidBy(request.paidBy ? new Date(request.paidBy).toISOString().slice(0, 10) : defaultDeadline);
-    setRequiredRoles((request.requiredRoles as RoleOption[]) ?? [...ROLE_OPTIONS]);
+    setRequiredRoles((request.requiredRoles as RoleOption[]) ?? [...DEFAULT_REQUIRED_ROLES]);
   }, [data?.request?._id, defaultDeadline]);
 
   const contactsList = useMemo(
@@ -245,6 +251,9 @@ export default function NewRequestPage() {
     if (fundingSource === "Квота на пресейлы" || fundingSource === "Квота на AI-подписки") {
       enforced.add("NBD");
     }
+    if (fundingSource === "Квоты на AI-инструменты") {
+      enforced.add("AI-BOSS");
+    }
     if (fundingSource === "Прибыль компании") {
       enforced.add("COO");
       enforced.add("CFD");
@@ -286,7 +295,7 @@ export default function NewRequestPage() {
   useEffect(() => {
     if (
       category === "Закупка сервисов" &&
-      !["Квота на внутренние затраты", "Квота на AI-подписки"].includes(fundingSource)
+      !["Квота на внутренние затраты", "Квота на AI-подписки", "Квоты на AI-инструменты"].includes(fundingSource)
     ) {
       setFundingSource("Квота на внутренние затраты");
     }
@@ -759,11 +768,18 @@ export default function NewRequestPage() {
                 </div>
               )}
               {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
-                (fundingSource === "Квота на AI-подписки" && category === "Закупка сервисов" && isNbd && aiServiceQuotas?.length)) ? (
+                (fundingSource === "Квота на AI-подписки" && category === "Закупка сервисов" && isNbd && aiServiceQuotas?.length) ||
+                (fundingSource === "Квоты на AI-инструменты" && category === "Закупка сервисов" && isAiBoss && aiToolQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
                   <div className="font-medium">Остаток квот</div>
                   <div className="mt-2 grid gap-2">
-                    {(fundingSource === "Квота на AI-подписки" ? aiServiceQuotas : presalesQuotas)?.map((item) => (
+                    {(
+                      fundingSource === "Квота на AI-подписки"
+                        ? aiServiceQuotas
+                        : fundingSource === "Квоты на AI-инструменты"
+                          ? aiToolQuotas
+                          : presalesQuotas
+                    )?.map((item) => (
                       <div
                         key={item.monthKey}
                         className={`flex items-center justify-between rounded-md px-3 py-2 ${
@@ -809,7 +825,7 @@ export default function NewRequestPage() {
 
               <div className="space-y-3">
                 <Label>Обязательные согласующие</Label>
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-4">
                   {ROLE_OPTIONS.map((role) => (
                     <label key={role} className="flex items-center gap-2 text-sm">
                       <Checkbox
