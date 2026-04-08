@@ -6,6 +6,7 @@ import {
   COMPANY_PROFIT_FUNDING_SOURCE,
   INTERNAL_COSTS_FUNDING_SOURCE,
   LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE,
+  LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY,
   LEGACY_SERVICE_PURCHASE_CATEGORY,
   PRESALES_FUNDING_SOURCE,
   PROJECT_REVENUE_FUNDING_SOURCE,
@@ -29,6 +30,7 @@ describe("requestRules", () => {
 
   it("normalizes legacy service purchase category", () => {
     expect(normalizeRequestCategory(LEGACY_SERVICE_PURCHASE_CATEGORY)).toBe(SERVICE_PURCHASE_CATEGORY);
+    expect(normalizeRequestCategory(LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY)).toBe(SERVICE_PURCHASE_CATEGORY);
   });
 
   it("returns enforced roles for funding sources", () => {

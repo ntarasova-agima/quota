@@ -1,7 +1,7 @@
 "use client";
 
 import { HoverHint } from "@/components/ui/hover-hint";
-import { isServiceRecipientCategory } from "@/lib/requestRules";
+import { isServiceRecipientCategory, normalizeRequestCategory } from "@/lib/requestRules";
 import { formatAmountPair } from "@/lib/vat";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,7 @@ export default function RequestMetaSummary({
   vatRate,
   className,
 }: RequestMetaSummaryProps) {
+  const normalizedCategory = normalizeRequestCategory(category);
   const ownerLabel = isServiceRecipientCategory(category) ? "Получатель сервиса" : "Клиент";
 
   return (
@@ -43,7 +44,7 @@ export default function RequestMetaSummary({
       </HoverHint>
       <span aria-hidden="true">·</span>
       <HoverHint label="Категория заявки">
-        <span>{category}</span>
+        <span>{normalizedCategory}</span>
       </HoverHint>
       {amount !== undefined && currency ? (
         <>

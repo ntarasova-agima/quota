@@ -9,13 +9,14 @@ import { formatAmountPair } from "@/lib/vat";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { HoverHint } from "@/components/ui/hover-hint";
 import { api } from "@/lib/convex";
+import { normalizeRequestCategory } from "@/lib/requestRules";
 
 function getRequestDisplayTitle(request: {
   title?: string;
   clientName: string;
   category: string;
 }) {
-  return request.title?.trim() || `${request.clientName} :: ${request.category}`;
+  return request.title?.trim() || `${request.clientName} :: ${normalizeRequestCategory(request.category)}`;
 }
 
 export default function ApprovalsPage() {

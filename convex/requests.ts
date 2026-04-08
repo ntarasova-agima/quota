@@ -14,6 +14,7 @@ import {
   getFundingOwnerRoles,
   isFundingSourceAllowedForCategory,
   isServiceRecipientCategory,
+  normalizeRequestCategory,
 } from "../src/lib/requestRules";
 import {
   getAmountWithVat,
@@ -940,7 +941,10 @@ export const listMyRequests = query({
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const hasExplicitDateRange = args.createdFrom !== undefined || args.createdTo !== undefined;
     const filteredRequests = Array.from(merged.values()).filter((request) => {
-      if (args.category && request.category !== args.category) {
+      if (
+        args.category &&
+        normalizeRequestCategory(request.category) !== normalizeRequestCategory(args.category)
+      ) {
         return false;
       }
       if (args.fundingSource && request.fundingSource !== args.fundingSource) {
@@ -1043,7 +1047,10 @@ export const listAllRequests = query({
       if (args.createdByEmail && req.createdByEmail !== args.createdByEmail) {
         return false;
       }
-      if (args.category && req.category !== args.category) {
+      if (
+        args.category &&
+        normalizeRequestCategory(req.category) !== normalizeRequestCategory(args.category)
+      ) {
         return false;
       }
       if (args.fundingSource && req.fundingSource !== args.fundingSource) {
