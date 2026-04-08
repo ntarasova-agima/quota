@@ -15,7 +15,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
-import { getApprovalStatusClass, getRequestStatusSummary } from "@/lib/requestStatus";
+import {
+  getApprovalStatusClass,
+  getBuhPaymentStatusSummary,
+  getRequestStatusSummary,
+  getUnallocatedPaymentAmounts,
+} from "@/lib/requestStatus";
 import { HOD_DEPARTMENTS } from "@/lib/constants";
 import { getRoleLabel } from "@/lib/roleLabels";
 import {
@@ -118,6 +123,28 @@ function buildMonthKeysFromTimestamp(timestamp: number) {
     const current = new Date(date.getFullYear(), date.getMonth() + index, 1);
     return `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}`;
   });
+}
+
+const MONEY_EPSILON = 0.000001;
+
+function isSameMoneyValue(left?: number, right?: number) {
+  if (left === undefined || right === undefined) {
+    return false;
+  }
+  return Math.abs(left - right) < MONEY_EPSILON;
+}
+
+function getDisplayErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) {
+    return fallback;
+  }
+  const matched = error.message.match(
+    /Error:\s*([\s\S]*?)(?:\s+at\s+[^(]+\s+\(\.\.\/convex\/|\s+Called by client|$)/,
+  );
+  if (matched?.[1]?.trim()) {
+    return matched[1].trim();
+  }
+  return error.message.trim() || fallback;
 }
 
 function formatMonthLabel(monthKey: string) {
@@ -552,13 +579,23 @@ export default function RequestDetailPage() {
   const { request, approvals } = data;
   const isServiceCategory = isServiceRecipientCategory(request.category);
   const remainingPaymentAmounts = getPaymentRemainingAmounts(request);
+  const currentPlannedPaymentAmounts = resolvePaymentPair({
+    amountWithoutVat: request.plannedPaymentAmount,
+    amountWithVat: request.plannedPaymentAmountWithVat,
+    vatRate: request.vatRate,
+  });
+  const unallocatedPaymentAmounts = getUnallocatedPaymentAmounts(request);
+  const hasUnallocatedPayment =
+    unallocatedPaymentAmounts.amountWithoutVat > MONEY_EPSILON;
   const hasRemainingPayment =
     remainingPaymentAmounts.amountWithoutVat !== undefined &&
     remainingPaymentAmounts.amountWithoutVat > 0;
-  const nextPaymentButtonLabel =
-    (request.paymentSplits?.length ?? 0) > 0 || request.status === "partially_paid"
+  const partialPlanButtonLabel =
+    hasUnallocatedPayment ||
+    (request.paymentSplits?.length ?? 0) > 0 ||
+    request.status === "partially_paid"
       ? "Запланировать следующий платеж"
-      : "Запланировать оплату";
+      : "Запланировать частичную оплату";
   const isCreator = data.isCreator;
   const canCancel = isCreator;
   const hasPendingHodValidation = Boolean(
@@ -580,7 +617,10 @@ export default function RequestDetailPage() {
       (item) => normalizeContestSpecialistSource(item.sourceType) === "contractor",
     ),
   };
-  const baseStatusSummary = getRequestStatusSummary(request, approvals);
+  const baseStatusSummary =
+    canSetPaymentPlanned && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+      ? getBuhPaymentStatusSummary(request)
+      : getRequestStatusSummary(request, approvals);
   const isActionableForViewer =
     request.status === "pending" &&
     approvals.some((approval) => approval.status === "pending" && canDecide.has(approval.role));
@@ -592,6 +632,10 @@ export default function RequestDetailPage() {
     ? "Провалидируйте часы и прямые затраты по специалистам вашего цеха"
     : isActionableForViewer
       ? "Ждет вашего решения"
+      : canSetPaymentPlanned &&
+          ["payment_planned", "partially_paid"].includes(request.status) &&
+          hasUnallocatedPayment
+        ? "Есть нераспределенный платеж"
       : canSetPaymentPlanned && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
         ? "Нужно запланировать или оплатить"
         : isCreator && request.status === "paid"
@@ -651,6 +695,176 @@ export default function RequestDetailPage() {
       setFileActionError(err instanceof Error ? err.message : "Не удалось прикрепить файлы");
     } finally {
       setUploadingFile(false);
+    }
+  }
+
+  async function handlePlanPayment(planningMode: "full" | "partial") {
+    setPaymentActionError(null);
+    if (!paymentPlannedDate) {
+      setPaymentActionError("Укажите дату оплаты");
+      return;
+    }
+    if (isLatePaymentPlan && !confirmLatePaymentPlan) {
+      setPaymentActionError("Дата позже нужной. Подтвердите, что сохраняете ее");
+      return;
+    }
+    const remainingAmount = remainingPaymentAmounts.amountWithoutVat;
+    const plannedAmounts = resolvePaymentPair({
+      amountWithoutVat: parseMoneyInput(paymentPlannedAmount),
+      amountWithVat: parseMoneyInput(paymentPlannedAmountWithVat),
+      vatRate: paymentVatRate,
+    });
+    if (planningMode === "partial") {
+      if (
+        request.status === "payment_planned" &&
+        currentPlannedPaymentAmounts.amountWithoutVat !== undefined &&
+        hasUnallocatedPayment &&
+        (request.paymentSplits?.length ?? 0) === 0
+      ) {
+        setPaymentActionError(
+          "Сначала зафиксируйте текущую частичную оплату, потом планируйте следующий платеж",
+        );
+        return;
+      }
+      if (
+        plannedAmounts.amountWithoutVat === undefined ||
+        plannedAmounts.amountWithoutVat <= 0
+      ) {
+        setPaymentActionError("Укажите сумму частичной оплаты");
+        return;
+      }
+      if (
+        remainingAmount !== undefined &&
+        plannedAmounts.amountWithoutVat > remainingAmount
+      ) {
+        setPaymentActionError("Сумма частичной оплаты не может быть больше остатка платежа");
+        return;
+      }
+      if (
+        remainingAmount !== undefined &&
+        isSameMoneyValue(plannedAmounts.amountWithoutVat, remainingAmount)
+      ) {
+        setPaymentActionError(
+          "Сумма совпадает с остатком платежа. Чтобы закрыть весь платеж, нажмите «Запланировать оплату»",
+        );
+        return;
+      }
+    }
+
+    setUpdatingStatus(true);
+    try {
+      await updatePaymentStatus({
+        id: request._id,
+        status: "payment_planned",
+        paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
+        finplanCostIdsRaw,
+        actualPaidAmount: parseMoneyInput(paymentTargetAmount),
+        actualPaidAmountWithVat: parseMoneyInput(paymentTargetAmountWithVat),
+        plannedPaymentAmount:
+          planningMode === "partial" ? plannedAmounts.amountWithoutVat : undefined,
+        plannedPaymentAmountWithVat:
+          planningMode === "partial" ? plannedAmounts.amountWithVat : undefined,
+        planningMode,
+        paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+        allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
+      });
+      router.refresh();
+    } catch (err) {
+      setPaymentActionError(
+        getDisplayErrorMessage(
+          err,
+          planningMode === "partial"
+            ? "Не удалось запланировать частичную оплату"
+            : "Не удалось запланировать оплату",
+        ),
+      );
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
+
+  async function handlePartialPayment() {
+    setPaymentActionError(null);
+    if (!paymentExecutedDate) {
+      setPaymentActionError("Укажите дату оплаты");
+      return;
+    }
+    const executedAmounts = resolvePaymentPair({
+      amountWithoutVat: parseMoneyInput(paymentExecutedAmount),
+      amountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
+      vatRate: paymentVatRate,
+    });
+    if (
+      executedAmounts.amountWithoutVat === undefined ||
+      executedAmounts.amountWithoutVat <= 0
+    ) {
+      setPaymentActionError("Укажите сумму текущего платежа");
+      return;
+    }
+    if (
+      remainingPaymentAmounts.amountWithoutVat !== undefined &&
+      executedAmounts.amountWithoutVat > remainingPaymentAmounts.amountWithoutVat
+    ) {
+      setPaymentActionError("Сумма частичной оплаты не может быть больше остатка платежа");
+      return;
+    }
+    if (
+      remainingPaymentAmounts.amountWithoutVat !== undefined &&
+      isSameMoneyValue(
+        executedAmounts.amountWithoutVat,
+        remainingPaymentAmounts.amountWithoutVat,
+      )
+    ) {
+      setPaymentActionError(
+        "Сумма совпадает с остатком платежа. Чтобы закрыть весь платеж, нажмите «Оплачено»",
+      );
+      return;
+    }
+    setUpdatingStatus(true);
+    try {
+      await updatePaymentStatus({
+        id: request._id,
+        status: "partially_paid",
+        finplanCostIdsRaw,
+        actualPaidAmount: executedAmounts.amountWithoutVat,
+        actualPaidAmountWithVat: executedAmounts.amountWithVat,
+        actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
+        paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+      });
+      router.refresh();
+    } catch (err) {
+      setPaymentActionError(
+        getDisplayErrorMessage(err, "Не удалось сохранить частичную оплату"),
+      );
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
+
+  async function handlePaid() {
+    setPaymentActionError(null);
+    if (!paymentExecutedDate) {
+      setPaymentActionError("Укажите дату оплаты");
+      return;
+    }
+    setUpdatingStatus(true);
+    try {
+      await updatePaymentStatus({
+        id: request._id,
+        status: "paid",
+        finplanCostIdsRaw,
+        actualPaidAmount: parseMoneyInput(paymentExecutedAmount),
+        actualPaidAmountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
+        actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
+        paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+      });
+      router.refresh();
+    } catch (err) {
+      setPaymentActionError(
+        getDisplayErrorMessage(err, "Не удалось обновить статус"),
+      );
+    } finally {
+      setUpdatingStatus(false);
     }
   }
 
@@ -1248,10 +1462,10 @@ export default function RequestDetailPage() {
 
                       {canSetPaymentPlanned ? (
                         <div className="space-y-2 rounded-lg border border-border/70 p-3">
-                          <div className="text-sm font-medium">Следующий платеж</div>
-                          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto] xl:items-end">
+                          <div className="text-sm font-medium">Планирование платежей</div>
+                          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
                             <div className="space-y-2">
-                              <Label htmlFor="paymentPlannedAmount">Сумма следующего платежа без НДС</Label>
+                              <Label htmlFor="paymentPlannedAmount">Сумма планируемого платежа без НДС</Label>
                               <Input
                                 id="paymentPlannedAmount"
                                 inputMode="decimal"
@@ -1259,6 +1473,7 @@ export default function RequestDetailPage() {
                                 onChange={(event) => {
                                   const nextAmount = sanitizeNumericInput(event.target.value);
                                   setPaymentPlannedAmount(nextAmount);
+                                  setPaymentActionError(null);
                                   const synced = syncVatInputPair({
                                     amountWithoutVatInput: nextAmount,
                                     amountWithVatInput: paymentPlannedAmountWithVat,
@@ -1271,7 +1486,7 @@ export default function RequestDetailPage() {
                               />
                             </div>
                             <div className="space-y-2">
-                              <Label htmlFor="paymentPlannedAmountWithVat">Сумма следующего платежа с НДС</Label>
+                              <Label htmlFor="paymentPlannedAmountWithVat">Сумма планируемого платежа с НДС</Label>
                               <Input
                                 id="paymentPlannedAmountWithVat"
                                 inputMode="decimal"
@@ -1279,6 +1494,7 @@ export default function RequestDetailPage() {
                                 onChange={(event) => {
                                   const nextAmountWithVat = sanitizeNumericInput(event.target.value);
                                   setPaymentPlannedAmountWithVat(nextAmountWithVat);
+                                  setPaymentActionError(null);
                                   const synced = syncVatInputPair({
                                     amountWithoutVatInput: paymentPlannedAmount,
                                     amountWithVatInput: nextAmountWithVat,
@@ -1295,7 +1511,7 @@ export default function RequestDetailPage() {
                               />
                             </div>
                             <div className="space-y-2">
-                              <Label htmlFor="paymentDatePlanned">Дата следующего платежа</Label>
+                              <Label htmlFor="paymentDatePlanned">Дата оплаты</Label>
                               <Input
                                 id="paymentDatePlanned"
                                 type="date"
@@ -1308,6 +1524,8 @@ export default function RequestDetailPage() {
                                 min={todayDate}
                               />
                             </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2 pt-1">
                             <Button
                               type="button"
                               className="h-9 border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100"
@@ -1315,47 +1533,40 @@ export default function RequestDetailPage() {
                                 updatingStatus ||
                                 !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
                               }
-                              onClick={async () => {
-                                setPaymentActionError(null);
-                                if (!paymentPlannedDate) {
-                                  setPaymentActionError("Укажите дату оплаты");
-                                  return;
-                                }
-                                if (isLatePaymentPlan && !confirmLatePaymentPlan) {
-                                  setPaymentActionError(
-                                    "Дата позже нужной. Подтвердите, что сохраняете ее",
-                                  );
-                                  return;
-                                }
-                                setUpdatingStatus(true);
-                                try {
-                                  await updatePaymentStatus({
-                                    id: request._id,
-                                    status: "payment_planned",
-                                    paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
-                                    finplanCostIdsRaw,
-                                    actualPaidAmount: parseMoneyInput(paymentTargetAmount),
-                                    actualPaidAmountWithVat: parseMoneyInput(paymentTargetAmountWithVat),
-                                    plannedPaymentAmount: parseMoneyInput(paymentPlannedAmount),
-                                    plannedPaymentAmountWithVat: parseMoneyInput(paymentPlannedAmountWithVat),
-                                    paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
-                                    allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
-                                  });
-                                  router.refresh();
-                                } catch (err) {
-                                  setPaymentActionError(
-                                    err instanceof Error ? err.message : "Не удалось запланировать оплату",
-                                  );
-                                } finally {
-                                  setUpdatingStatus(false);
-                                }
-                              }}
+                              onClick={() => handlePlanPayment("full")}
                             >
-                              {nextPaymentButtonLabel}
+                              Запланировать оплату
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-9 border-blue-300 text-blue-700 hover:bg-blue-50"
+                              disabled={
+                                updatingStatus ||
+                                !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                              }
+                              onClick={() => handlePlanPayment("partial")}
+                            >
+                              {partialPlanButtonLabel}
                             </Button>
                           </div>
+                          {currentPlannedPaymentAmounts.amountWithoutVat !== undefined && request.paymentPlannedAt ? (
+                            <p className="text-xs text-muted-foreground">
+                              Запланированный платеж: {formatAmountPair({
+                                amountWithoutVat: currentPlannedPaymentAmounts.amountWithoutVat,
+                                amountWithVat: currentPlannedPaymentAmounts.amountWithVat,
+                                currency: request.currency,
+                                vatRate: request.vatRate,
+                              })} · {new Date(request.paymentPlannedAt).toLocaleDateString("ru-RU")}
+                            </p>
+                          ) : null}
                           <p className="text-xs text-muted-foreground">
-                            Здесь можно запланировать как полный остаток, так и только часть следующего транша.
+                            Нераспределенная сумма к оплате: {formatAmountPair({
+                              amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
+                              amountWithVat: unallocatedPaymentAmounts.amountWithVat,
+                              currency: request.currency,
+                              vatRate: request.vatRate,
+                            })}
                           </p>
                         </div>
                       ) : null}
@@ -1373,6 +1584,7 @@ export default function RequestDetailPage() {
                                 onChange={(event) => {
                                   const nextAmount = sanitizeNumericInput(event.target.value);
                                   setPaymentExecutedAmount(nextAmount);
+                                  setPaymentActionError(null);
                                   const synced = syncVatInputPair({
                                     amountWithoutVatInput: nextAmount,
                                     amountWithVatInput: paymentExecutedAmountWithVat,
@@ -1393,6 +1605,7 @@ export default function RequestDetailPage() {
                                 onChange={(event) => {
                                   const nextAmountWithVat = sanitizeNumericInput(event.target.value);
                                   setPaymentExecutedAmountWithVat(nextAmountWithVat);
+                                  setPaymentActionError(null);
                                   const synced = syncVatInputPair({
                                     amountWithoutVatInput: paymentExecutedAmount,
                                     amountWithVatInput: nextAmountWithVat,
@@ -1414,7 +1627,10 @@ export default function RequestDetailPage() {
                                 id="paymentExecutedDate"
                                 type="date"
                                 value={paymentExecutedDate}
-                                onChange={(event) => setPaymentExecutedDate(event.target.value)}
+                                onChange={(event) => {
+                                  setPaymentExecutedDate(event.target.value);
+                                  setPaymentActionError(null);
+                                }}
                               />
                             </div>
                             <Button
@@ -1424,36 +1640,7 @@ export default function RequestDetailPage() {
                                 updatingStatus ||
                                 !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
                               }
-                              onClick={async () => {
-                                setPaymentActionError(null);
-                                if (!paymentExecutedDate) {
-                                  setPaymentActionError("Укажите дату оплаты");
-                                  return;
-                                }
-                                if (!paymentExecutedAmount) {
-                                  setPaymentActionError("Укажите сумму текущего платежа");
-                                  return;
-                                }
-                                setUpdatingStatus(true);
-                                try {
-                                  await updatePaymentStatus({
-                                    id: request._id,
-                                    status: "partially_paid",
-                                    finplanCostIdsRaw,
-                                    actualPaidAmount: parseMoneyInput(paymentExecutedAmount),
-                                    actualPaidAmountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
-                                    actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
-                                    paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
-                                  });
-                                  router.refresh();
-                                } catch (err) {
-                                  setPaymentActionError(
-                                    err instanceof Error ? err.message : "Не удалось сохранить транш",
-                                  );
-                                } finally {
-                                  setUpdatingStatus(false);
-                                }
-                              }}
+                              onClick={handlePartialPayment}
                             >
                               Частично оплачено
                             </Button>
@@ -1464,32 +1651,7 @@ export default function RequestDetailPage() {
                                 updatingStatus ||
                                 !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
                               }
-                              onClick={async () => {
-                                setPaymentActionError(null);
-                                if (!paymentExecutedDate) {
-                                  setPaymentActionError("Укажите дату оплаты");
-                                  return;
-                                }
-                                setUpdatingStatus(true);
-                                try {
-                                  await updatePaymentStatus({
-                                    id: request._id,
-                                    status: "paid",
-                                    finplanCostIdsRaw,
-                                    actualPaidAmount: parseMoneyInput(paymentExecutedAmount),
-                                    actualPaidAmountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
-                                    actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
-                                    paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
-                                  });
-                                  router.refresh();
-                                } catch (err) {
-                                  setPaymentActionError(
-                                    err instanceof Error ? err.message : "Не удалось обновить статус",
-                                  );
-                                } finally {
-                                  setUpdatingStatus(false);
-                                }
-                              }}
+                              onClick={handlePaid}
                             >
                               Оплачено
                             </Button>
@@ -1515,7 +1677,9 @@ export default function RequestDetailPage() {
                         </label>
                       ) : null}
                       {paymentActionError ? (
-                        <p className="text-sm text-destructive">{paymentActionError}</p>
+                        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                          {paymentActionError}
+                        </div>
                       ) : null}
                     </div>
                   )}

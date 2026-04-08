@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
+import { getBuhPaymentStatusSummary, getUnallocatedPaymentAmounts } from "@/lib/requestStatus";
 import { formatAmountPair } from "@/lib/vat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -99,11 +100,18 @@ export default function ApprovalsPage() {
               <div className="space-y-3">
                 {visibleItems.length ? (
                   visibleItems.map(({ request, kind }) => (
-                    <Link
+                    (() => {
+                      const buhStatusSummary =
+                        kind === "payment" ? getBuhPaymentStatusSummary(request) : null;
+                      const unallocatedPaymentAmounts =
+                        kind === "payment" ? getUnallocatedPaymentAmounts(request) : null;
+
+                      return (
+                        <Link
                       key={request._id}
                       href={`/requests/${request._id}`}
                       className="grid min-h-[126px] gap-3 rounded-lg border border-zinc-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.985)_0%,rgba(252,252,251,0.96)_100%)] px-4 py-3 text-sm transition-all hover:border-amber-200 hover:bg-[linear-gradient(135deg,rgba(252,249,244,0.96)_0%,rgba(249,246,241,0.94)_100%)] hover:shadow-[0_10px_30px_rgba(63,63,70,0.08)] md:grid-cols-[minmax(0,1fr)_auto_auto]"
-                    >
+                        >
                       <div className="space-y-2">
                         <div>
                           <div className="font-medium">
@@ -170,6 +178,18 @@ export default function ApprovalsPage() {
                                   })}
                                 </div>
                               ) : null}
+                              {buhStatusSummary?.label === "Есть нераспределенный платеж" &&
+                              unallocatedPaymentAmounts ? (
+                                <div>
+                                  Нераспределено:{" "}
+                                  {formatAmountPair({
+                                    amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
+                                    amountWithVat: unallocatedPaymentAmounts.amountWithVat,
+                                    currency: request.currency,
+                                    vatRate: request.vatRate,
+                                  })}
+                                </div>
+                              ) : null}
                             </div>
                           ) : kind === "hod" ? (
                             <div className="mt-2 text-sm text-muted-foreground">
@@ -193,27 +213,21 @@ export default function ApprovalsPage() {
                       <span
                         className={`h-fit rounded-full border px-3 py-1 text-xs font-medium ${
                           kind === "payment"
-                            ? request.status === "partially_paid"
-                              ? "border-cyan-200 bg-cyan-50 text-cyan-700"
-                              : request.status === "payment_planned"
-                                ? "border-blue-200 bg-blue-50 text-blue-700"
-                                : "border-indigo-200 bg-indigo-50 text-indigo-700"
+                            ? buhStatusSummary?.className
                             : kind === "hod"
                               ? "border-violet-200 bg-violet-50 text-violet-700"
                             : "border-amber-200 bg-amber-100 text-amber-800"
                         }`}
                       >
                         {kind === "payment"
-                          ? request.status === "partially_paid"
-                            ? "Есть остаток к оплате"
-                            : request.status === "payment_planned"
-                              ? "Оплата запланирована"
-                              : "Нужно запланировать или оплатить"
+                          ? buhStatusSummary?.label
                           : kind === "hod"
                             ? "Провалидируйте затраты"
-                          : "Ждет вашего решения"}
+                            : "Ждет вашего решения"}
                       </span>
-                    </Link>
+                        </Link>
+                      );
+                    })()
                   ))
                 ) : (
                   <p className="text-sm text-muted-foreground">Пока нет заявок на согласование.</p>

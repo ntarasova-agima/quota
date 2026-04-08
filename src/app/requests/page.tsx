@@ -14,7 +14,7 @@ import { api } from "@/lib/convex";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
-import { getRequestStatusSummary } from "@/lib/requestStatus";
+import { getBuhPaymentStatusSummary, getRequestStatusSummary } from "@/lib/requestStatus";
 import { EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
 import { normalizeRequestCategory } from "@/lib/requestRules";
 import { formatAmountPair } from "@/lib/vat";
@@ -282,7 +282,10 @@ export default function RequestsPage() {
               <div className="space-y-3">
                 {myRequestItems.length ? (
                   myRequestItems.map(({ request, approvals }) => {
-                    const baseStatusSummary = getRequestStatusSummary(request, approvals);
+                    const baseStatusSummary =
+                      isBuh && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                        ? getBuhPaymentStatusSummary(request)
+                        : getRequestStatusSummary(request, approvals);
                     const isActionableForViewer =
                       request.status === "pending" &&
                       approvals.some(
@@ -657,7 +660,10 @@ export default function RequestsPage() {
                 <div className="space-y-3">
                   {allRequestItems.length ? (
                     allRequestItems.map(({ request, approvals }) => {
-                      const baseStatusSummary = getRequestStatusSummary(request, approvals);
+                      const baseStatusSummary =
+                        isBuh && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                          ? getBuhPaymentStatusSummary(request)
+                          : getRequestStatusSummary(request, approvals);
                       const isActionableForViewer =
                         request.status === "pending" &&
                         approvals.some(

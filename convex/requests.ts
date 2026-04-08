@@ -2372,6 +2372,7 @@ export const updatePaymentStatus = mutation({
     actualPaidAt: v.optional(v.number()),
     plannedPaymentAmount: v.optional(v.number()),
     plannedPaymentAmountWithVat: v.optional(v.number()),
+    planningMode: v.optional(v.union(v.literal("full"), v.literal("partial"))),
     paymentResidualAmount: v.optional(v.number()),
     paymentCurrencyRate: v.optional(v.number()),
     allowLatePaymentPlan: v.optional(v.boolean()),
@@ -2575,11 +2576,24 @@ export const updatePaymentStatus = mutation({
         explicitPlannedAmounts?.amountWithVat !== undefined
           ? explicitPlannedAmounts.amountWithVat
           : remainingAmountWithVat;
+      const planningMode =
+        args.planningMode ?? (explicitPlannedAmounts ? "partial" : "full");
       if (!isPositiveFinite(plannedAmount)) {
-        throw new Error("Укажите сумму следующего платежа");
+        throw new Error(
+          planningMode === "partial"
+            ? "Укажите сумму частичной оплаты"
+            : "Укажите сумму планируемой оплаты",
+        );
       }
-      if (plannedAmount > remainingAmount) {
-        throw new Error("Сумма следующего платежа не может быть больше остатка");
+      if (planningMode === "partial") {
+        if (plannedAmount > remainingAmount) {
+          throw new Error("Сумма частичной оплаты не может быть больше остатка платежа");
+        }
+        if (plannedAmount === remainingAmount) {
+          throw new Error("Сумма совпадает с остатком платежа. Чтобы закрыть весь платеж, нажмите «Запланировать оплату»");
+        }
+      } else if (plannedAmount > remainingAmount) {
+        throw new Error("Сумма оплаты не может быть больше остатка платежа");
       }
       await ctx.db.patch(request._id, {
         status: nextStatus,
@@ -2656,8 +2670,11 @@ export const updatePaymentStatus = mutation({
       ) {
         throw new Error("Остаток уже оплачен. Для завершения используйте кнопку «Оплачено»");
       }
-      if (fallbackCurrentPayment.amountWithoutVat! >= remainingBeforePayment.amountWithoutVat) {
-        throw new Error("Для последнего платежа используйте кнопку «Оплачено»");
+      if (fallbackCurrentPayment.amountWithoutVat! > remainingBeforePayment.amountWithoutVat) {
+        throw new Error("Сумма частичной оплаты не может быть больше остатка платежа");
+      }
+      if (fallbackCurrentPayment.amountWithoutVat! === remainingBeforePayment.amountWithoutVat) {
+        throw new Error("Сумма совпадает с остатком платежа. Чтобы закрыть весь платеж, нажмите «Оплачено»");
       }
       const paidAt = args.actualPaidAt ?? now;
       if (args.paymentPlannedAt) {
