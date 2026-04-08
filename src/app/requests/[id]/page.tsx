@@ -611,7 +611,7 @@ export default function RequestDetailPage() {
           <div className={activeTab === "details" ? "space-y-6" : "hidden"}>
           <Card>
             <CardHeader>
-              <CardTitle>{request.title || `${request.clientName} :: ${request.category}`}</CardTitle>
+              <CardTitle>{request.title || `${request.clientName} :: ${normalizedRequestCategory ?? request.category}`}</CardTitle>
               <CardDescription>
                 <RequestMetaSummary
                   requestCode={request.requestCode}

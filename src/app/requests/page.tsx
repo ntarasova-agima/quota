@@ -16,6 +16,7 @@ import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import { getRequestStatusSummary } from "@/lib/requestStatus";
 import { EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
+import { normalizeRequestCategory } from "@/lib/requestRules";
 import { formatAmountPair } from "@/lib/vat";
 
 function getRequestDisplayTitle(request: {
@@ -23,7 +24,7 @@ function getRequestDisplayTitle(request: {
   clientName: string;
   category: string;
 }) {
-  return request.title?.trim() || `${request.clientName} :: ${request.category}`;
+  return request.title?.trim() || `${request.clientName} :: ${normalizeRequestCategory(request.category)}`;
 }
 
 function getPendingStatusPresentation(isActionableForViewer: boolean) {

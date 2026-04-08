@@ -6,7 +6,8 @@ export const PROJECT_REVENUE_FUNDING_SOURCE = "Отгрузки проекта";
 export const COMPANY_PROFIT_FUNDING_SOURCE = "Прибыль компании";
 export const UNKNOWN_FUNDING_SOURCE = "Я не знаю";
 export const LEGACY_SERVICE_PURCHASE_CATEGORY = "Закупка сервисов";
-export const SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI-инструментов)";
+export const LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI-инструментов)";
+export const SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI)";
 export const AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент\\подписка";
 export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Сервисы/транзиты для клиентов";
 
@@ -32,7 +33,7 @@ export function normalizeFundingSource(fundingSource: string) {
 }
 
 export function normalizeRequestCategory(category: string) {
-  return category === LEGACY_SERVICE_PURCHASE_CATEGORY
+  return [LEGACY_SERVICE_PURCHASE_CATEGORY, LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY].includes(category)
     ? SERVICE_PURCHASE_CATEGORY
     : category;
 }
