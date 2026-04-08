@@ -9,9 +9,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   DEFAULT_VAT_RATE,
-  calculateAmountWithVat,
+  fillMissingVatAmounts,
   formatAmount,
   matchesCalculatedAmountWithVat,
+  parseMoneyInput,
+  parseVatRateInput,
   resolveVatAmounts,
 } from "@/lib/vat";
 
@@ -113,16 +115,12 @@ export default function AiToolsQuotaClient() {
                         onChange={(event) =>
                           setValues((prev) => {
                             const nextQuota = event.target.value.replace(/\s+/g, "");
-                            const nextVatRate = Number(vatRateValue);
                             return {
                               ...prev,
                               [row.monthKey]: {
                                 ...prev[row.monthKey],
                                 quota: nextQuota,
-                                quotaWithVat:
-                                  autoCalculateVat && nextQuota
-                                    ? String(calculateAmountWithVat(Number(nextQuota), nextVatRate))
-                                    : prev[row.monthKey]?.quotaWithVat ?? quotaWithVatValue,
+                                quotaWithVat: prev[row.monthKey]?.quotaWithVat ?? quotaWithVatValue,
                                 vatRate: vatRateValue,
                                 auto: autoCalculateVat,
                               },
@@ -144,12 +142,11 @@ export default function AiToolsQuotaClient() {
                               quota: quotaValue,
                               quotaWithVat: event.target.value.replace(/\s+/g, ""),
                               vatRate: vatRateValue,
-                              auto: false,
+                              auto: autoCalculateVat,
                             },
                           }))
                         }
                         inputMode="decimal"
-                        disabled={autoCalculateVat}
                       />
                     </div>
                   </div>
@@ -157,23 +154,34 @@ export default function AiToolsQuotaClient() {
                     <div className="flex items-center gap-2">
                       <Checkbox
                         checked={autoCalculateVat}
-                        onCheckedChange={(checked) =>
+                        onCheckedChange={(checked) => {
+                          const nextChecked = Boolean(checked);
+                          const resolved = fillMissingVatAmounts({
+                            amountWithoutVat: parseMoneyInput(quotaValue),
+                            amountWithVat: parseMoneyInput(quotaWithVatValue),
+                            vatRate: parseVatRateInput(vatRateValue),
+                          });
                           setValues((prev) => ({
                             ...prev,
                             [row.monthKey]: {
                               ...prev[row.monthKey],
-                              quota: quotaValue,
+                              quota:
+                                quotaValue ||
+                                (resolved.amountWithoutVat !== undefined
+                                  ? String(resolved.amountWithoutVat)
+                                  : quotaValue),
                               quotaWithVat:
-                                checked && quotaValue
-                                  ? String(calculateAmountWithVat(Number(quotaValue), Number(vatRateValue)))
-                                  : quotaWithVatValue,
+                                quotaWithVatValue ||
+                                (resolved.amountWithVat !== undefined
+                                  ? String(resolved.amountWithVat)
+                                  : quotaWithVatValue),
                               vatRate: vatRateValue,
-                              auto: Boolean(checked),
+                              auto: nextChecked,
                             },
-                          }))
-                        }
+                          }));
+                        }}
                       />
-                      <span className="text-xs text-muted-foreground">Авто НДС</span>
+                      <span className="text-xs text-muted-foreground">Рассчитать с НДС</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">НДС, %</span>
@@ -188,10 +196,7 @@ export default function AiToolsQuotaClient() {
                               [row.monthKey]: {
                                 ...prev[row.monthKey],
                                 quota: quotaValue,
-                                quotaWithVat:
-                                  autoCalculateVat && quotaValue && nextVatRate
-                                    ? String(calculateAmountWithVat(Number(quotaValue), Number(nextVatRate)))
-                                    : quotaWithVatValue,
+                                quotaWithVat: quotaWithVatValue,
                                 vatRate: nextVatRate,
                                 auto: autoCalculateVat,
                               },
@@ -205,13 +210,13 @@ export default function AiToolsQuotaClient() {
                       size="icon"
                       variant="outline"
                       disabled={savingKey === row.monthKey}
-                      onClick={async () => {
-                        const resolved = resolveVatAmounts({
-                          amountWithoutVat: quotaValue ? Number(quotaValue) : undefined,
-                          amountWithVat: quotaWithVatValue ? Number(quotaWithVatValue) : undefined,
-                          vatRate: vatRateValue ? Number(vatRateValue) : undefined,
-                          autoCalculateAmountWithVat: autoCalculateVat,
-                        });
+                    onClick={async () => {
+                      const resolved = resolveVatAmounts({
+                        amountWithoutVat: parseMoneyInput(quotaValue),
+                        amountWithVat: parseMoneyInput(quotaWithVatValue),
+                        vatRate: parseVatRateInput(vatRateValue),
+                        autoCalculateAmountWithVat: autoCalculateVat,
+                      });
                         if (
                           resolved.amountWithoutVat === undefined ||
                           resolved.amountWithVat === undefined

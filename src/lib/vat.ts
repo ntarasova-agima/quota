@@ -15,6 +15,30 @@ export function isFiniteMoney(value?: number): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+export function parseMoneyInput(value?: string | null) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/\s+/g, "");
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function parseVatRateInput(value?: string | null) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/\s+/g, "");
+  if (!normalized) {
+    return 0;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export function calculateAmountWithVat(amountWithoutVat: number, vatRate?: number) {
   return roundMoney(amountWithoutVat * (1 + normalizeVatRate(vatRate) / 100));
 }
@@ -51,6 +75,29 @@ export function getAmountWithoutVat(
   return undefined;
 }
 
+export function fillMissingVatAmounts(params: {
+  amountWithoutVat?: number;
+  amountWithVat?: number;
+  vatRate?: number;
+}) {
+  if (isFiniteMoney(params.amountWithoutVat) && !isFiniteMoney(params.amountWithVat)) {
+    return {
+      amountWithoutVat: params.amountWithoutVat,
+      amountWithVat: calculateAmountWithVat(params.amountWithoutVat, params.vatRate),
+    };
+  }
+  if (!isFiniteMoney(params.amountWithoutVat) && isFiniteMoney(params.amountWithVat)) {
+    return {
+      amountWithoutVat: calculateAmountWithoutVat(params.amountWithVat, params.vatRate),
+      amountWithVat: params.amountWithVat,
+    };
+  }
+  return {
+    amountWithoutVat: params.amountWithoutVat,
+    amountWithVat: params.amountWithVat,
+  };
+}
+
 export function resolveVatAmounts(params: {
   amountWithoutVat?: number;
   amountWithVat?: number;
@@ -58,15 +105,26 @@ export function resolveVatAmounts(params: {
   autoCalculateAmountWithVat?: boolean;
 }) {
   const vatRate = normalizeVatRate(params.vatRate);
+  const filledAmounts = params.autoCalculateAmountWithVat
+    ? fillMissingVatAmounts({
+        amountWithoutVat: params.amountWithoutVat,
+        amountWithVat: params.amountWithVat,
+        vatRate,
+      })
+    : {
+        amountWithoutVat: params.amountWithoutVat,
+        amountWithVat: params.amountWithVat,
+      };
   const amountWithoutVat = getAmountWithoutVat(
-    params.amountWithoutVat,
-    params.amountWithVat,
+    filledAmounts.amountWithoutVat,
+    filledAmounts.amountWithVat,
     vatRate,
   );
-  const amountWithVat =
-    params.autoCalculateAmountWithVat && isFiniteMoney(amountWithoutVat)
-      ? calculateAmountWithVat(amountWithoutVat, vatRate)
-      : getAmountWithVat(amountWithoutVat, params.amountWithVat, vatRate);
+  const amountWithVat = getAmountWithVat(
+    amountWithoutVat,
+    filledAmounts.amountWithVat,
+    vatRate,
+  );
 
   return {
     amountWithoutVat,

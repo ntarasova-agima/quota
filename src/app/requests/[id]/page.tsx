@@ -29,8 +29,10 @@ import {
 import {
   DEFAULT_VAT_RATE,
   calculateAmountWithVat,
+  fillMissingVatAmounts,
   formatAmountPair,
   matchesCalculatedAmountWithVat,
+  parseMoneyInput,
 } from "@/lib/vat";
 import { Paperclip, Upload } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
@@ -377,21 +379,6 @@ export default function RequestDetailPage() {
     data?.request?.vatRate,
   ]);
   useEffect(() => {
-    if (!autoCalculatePaymentAmountWithVat) {
-      return;
-    }
-    if (!actualPaidAmount) {
-      setActualPaidAmountWithVat("");
-      return;
-    }
-    const normalizedAmount = Number(actualPaidAmount.replace(/\s+/g, ""));
-    if (!Number.isFinite(normalizedAmount)) {
-      setActualPaidAmountWithVat("");
-      return;
-    }
-    setActualPaidAmountWithVat(String(calculateAmountWithVat(normalizedAmount, paymentVatRate)));
-  }, [actualPaidAmount, autoCalculatePaymentAmountWithVat, paymentVatRate]);
-  useEffect(() => {
     const next: Record<string, SpecialistView> = {};
     for (const item of (data?.request?.specialists ?? []) as SpecialistView[]) {
       next[item.id] = { ...item };
@@ -566,6 +553,25 @@ export default function RequestDetailPage() {
       setEditingBody("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось изменить комментарий");
+    }
+  }
+
+  function handlePaymentVatCalculationToggle(checked: boolean) {
+    const nextChecked = Boolean(checked);
+    setAutoCalculatePaymentAmountWithVat(nextChecked);
+    if (!nextChecked) {
+      return;
+    }
+    const resolved = fillMissingVatAmounts({
+      amountWithoutVat: parseMoneyInput(actualPaidAmount),
+      amountWithVat: parseMoneyInput(actualPaidAmountWithVat),
+      vatRate: paymentVatRate,
+    });
+    if (!actualPaidAmount && resolved.amountWithoutVat !== undefined) {
+      setActualPaidAmount(String(resolved.amountWithoutVat));
+    }
+    if (!actualPaidAmountWithVat && resolved.amountWithVat !== undefined) {
+      setActualPaidAmountWithVat(String(resolved.amountWithVat));
     }
   }
 
@@ -1124,16 +1130,13 @@ export default function RequestDetailPage() {
                             placeholder={`Например, ${
                               request.amountWithVat ?? calculateAmountWithVat(request.amount, paymentVatRate)
                             }`}
-                            disabled={autoCalculatePaymentAmountWithVat}
                           />
                           <label className="flex items-center gap-2 text-sm text-muted-foreground">
                             <Checkbox
                               checked={autoCalculatePaymentAmountWithVat}
-                              onCheckedChange={(checked) =>
-                                setAutoCalculatePaymentAmountWithVat(Boolean(checked))
-                              }
+                              onCheckedChange={(checked) => handlePaymentVatCalculationToggle(Boolean(checked))}
                             />
-                            Рассчитать автоматически по ставке НДС заявки
+                            Рассчитать с НДС
                           </label>
                           <p className="text-xs text-muted-foreground">
                             Используем ставку {paymentVatRate}% из заявки.
@@ -1183,9 +1186,7 @@ export default function RequestDetailPage() {
                                     : undefined,
                                   finplanCostIdsRaw,
                                   actualPaidAmount: actualPaidAmount ? Number(actualPaidAmount) : undefined,
-                                  actualPaidAmountWithVat: actualPaidAmountWithVat
-                                    ? Number(actualPaidAmountWithVat)
-                                    : undefined,
+                                  actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
                                   paymentCurrencyRate: paymentCurrencyRate
                                     ? Number(paymentCurrencyRate)
                                     : undefined,
@@ -1240,9 +1241,7 @@ export default function RequestDetailPage() {
                                   paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
                                   finplanCostIdsRaw,
                                   actualPaidAmount: Number(actualPaidAmount),
-                                  actualPaidAmountWithVat: actualPaidAmountWithVat
-                                    ? Number(actualPaidAmountWithVat)
-                                    : undefined,
+                                  actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
                                   paymentResidualAmount: Number(paymentResidualAmount),
                                   paymentCurrencyRate: paymentCurrencyRate
                                     ? Number(paymentCurrencyRate)

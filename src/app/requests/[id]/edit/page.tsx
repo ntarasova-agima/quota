@@ -36,8 +36,10 @@ import {
 } from "@/lib/requestRules";
 import {
   DEFAULT_VAT_RATE,
-  calculateAmountWithVat,
+  fillMissingVatAmounts,
   matchesCalculatedAmountWithVat,
+  parseMoneyInput,
+  parseVatRateInput,
   resolveVatAmounts,
 } from "@/lib/vat";
 
@@ -315,23 +317,30 @@ export default function NewRequestPage() {
     }
   }, [fundingSource, category]);
 
-  useEffect(() => {
-    if (!autoCalculateAmountWithVat) {
-      return;
-    }
-    if (effectiveAmountWithoutVatInput === undefined || !Number.isFinite(effectiveAmountWithoutVatInput)) {
-      setAmountWithVat("");
-      return;
-    }
-    const normalizedVatRate = Number(vatRate.replace(/\s+/g, ""));
-    setAmountWithVat(String(calculateAmountWithVat(effectiveAmountWithoutVatInput, normalizedVatRate)));
-  }, [autoCalculateAmountWithVat, effectiveAmountWithoutVatInput, vatRate]);
-
   function handleCategoryChange(nextCategory: string) {
     setCategory(nextCategory);
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
+    }
+  }
+
+  function handleVatCalculationToggle(checked: boolean) {
+    const nextChecked = Boolean(checked);
+    setAutoCalculateAmountWithVat(nextChecked);
+    if (!nextChecked) {
+      return;
+    }
+    const resolved = fillMissingVatAmounts({
+      amountWithoutVat: effectiveAmountWithoutVatInput,
+      amountWithVat: parseMoneyInput(amountWithVat),
+      vatRate: parseVatRateInput(vatRate),
+    });
+    if (!contestHasSpecialists && !amount && resolved.amountWithoutVat !== undefined) {
+      setAmount(String(resolved.amountWithoutVat));
+    }
+    if (!amountWithVat && resolved.amountWithVat !== undefined) {
+      setAmountWithVat(String(resolved.amountWithVat));
     }
   }
 
@@ -399,8 +408,8 @@ export default function NewRequestPage() {
       }
       const resolvedAmounts = resolveVatAmounts({
         amountWithoutVat: effectiveAmountWithoutVatInput,
-        amountWithVat: amountWithVat ? Number(amountWithVat.replace(/\s+/g, "")) : undefined,
-        vatRate: vatRate ? Number(vatRate.replace(/\s+/g, "")) : undefined,
+        amountWithVat: parseMoneyInput(amountWithVat),
+        vatRate: parseVatRateInput(vatRate),
         autoCalculateAmountWithVat,
       });
       if (resolvedAmounts.amountWithoutVat === undefined || resolvedAmounts.amountWithoutVat <= 0) {
@@ -591,14 +600,13 @@ export default function NewRequestPage() {
                     inputMode="decimal"
                     value={amountWithVat}
                     onChange={(event) => setAmountWithVat(event.target.value.replace(/\s+/g, ""))}
-                    disabled={autoCalculateAmountWithVat}
                   />
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Checkbox
                       checked={autoCalculateAmountWithVat}
-                      onCheckedChange={(checked) => setAutoCalculateAmountWithVat(Boolean(checked))}
+                      onCheckedChange={(checked) => handleVatCalculationToggle(Boolean(checked))}
                     />
-                    Рассчитать автоматически
+                    Рассчитать с НДС
                   </label>
                 </div>
                 <div className="space-y-2">
@@ -611,7 +619,7 @@ export default function NewRequestPage() {
                     onChange={(event) => setVatRate(event.target.value.replace(/\s+/g, ""))}
                   />
                   <p className="text-xs text-muted-foreground">
-                    По умолчанию {DEFAULT_VAT_RATE}%. Можно изменить.
+                    По умолчанию {DEFAULT_VAT_RATE}%. Если поле пустое, считаем 0%.
                   </p>
                 </div>
               </div>

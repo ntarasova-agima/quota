@@ -9,9 +9,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import {
   DEFAULT_VAT_RATE,
-  calculateAmountWithVat,
+  fillMissingVatAmounts,
   formatAmount,
   matchesCalculatedAmountWithVat,
+  parseMoneyInput,
+  parseVatRateInput,
   resolveVatAmounts,
 } from "@/lib/vat";
 
@@ -111,25 +113,21 @@ export default function PresalesQuotaClient() {
                 <div className="grid gap-2 sm:grid-cols-[1fr_1fr]">
                   <div className="space-y-1">
                     <div className="text-xs text-muted-foreground">Без НДС</div>
-                    <Input
-                      value={quotaValue}
-                      onChange={(event) =>
-                        setValues((prev) => {
-                          const nextQuota = event.target.value.replace(/\s+/g, "");
-                          const nextVatRate = Number(vatRateValue);
-                          return {
-                            ...prev,
-                            [row.monthKey]: {
-                              ...prev[row.monthKey],
-                              quota: nextQuota,
-                              quotaWithVat:
-                                autoCalculateVat && nextQuota
-                                  ? String(calculateAmountWithVat(Number(nextQuota), nextVatRate))
-                                  : prev[row.monthKey]?.quotaWithVat ?? quotaWithVatValue,
-                              vatRate: vatRateValue,
-                              auto: autoCalculateVat,
-                            },
-                          };
+                      <Input
+                        value={quotaValue}
+                        onChange={(event) =>
+                          setValues((prev) => {
+                            const nextQuota = event.target.value.replace(/\s+/g, "");
+                            return {
+                              ...prev,
+                              [row.monthKey]: {
+                                ...prev[row.monthKey],
+                                quota: nextQuota,
+                                quotaWithVat: prev[row.monthKey]?.quotaWithVat ?? quotaWithVatValue,
+                                vatRate: vatRateValue,
+                                auto: autoCalculateVat,
+                              },
+                            };
                         })
                       }
                       inputMode="decimal"
@@ -137,68 +135,75 @@ export default function PresalesQuotaClient() {
                   </div>
                   <div className="space-y-1">
                     <div className="text-xs text-muted-foreground">С НДС</div>
-                    <Input
-                      value={quotaWithVatValue}
-                      onChange={(event) =>
-                        setValues((prev) => ({
-                          ...prev,
+                      <Input
+                        value={quotaWithVatValue}
+                        onChange={(event) =>
+                          setValues((prev) => ({
+                            ...prev,
                           [row.monthKey]: {
-                            ...prev[row.monthKey],
-                            quota: quotaValue,
-                            quotaWithVat: event.target.value.replace(/\s+/g, ""),
-                            vatRate: vatRateValue,
-                            auto: false,
-                          },
-                        }))
-                      }
-                      inputMode="decimal"
-                      disabled={autoCalculateVat}
-                    />
+                              ...prev[row.monthKey],
+                              quota: quotaValue,
+                              quotaWithVat: event.target.value.replace(/\s+/g, ""),
+                              vatRate: vatRateValue,
+                              auto: autoCalculateVat,
+                            },
+                          }))
+                        }
+                        inputMode="decimal"
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      checked={autoCalculateVat}
-                      onCheckedChange={(checked) =>
-                        setValues((prev) => ({
-                          ...prev,
-                          [row.monthKey]: {
-                            ...prev[row.monthKey],
-                            quota: quotaValue,
-                            quotaWithVat:
-                              checked && quotaValue
-                                ? String(calculateAmountWithVat(Number(quotaValue), Number(vatRateValue)))
-                                : quotaWithVatValue,
-                            vatRate: vatRateValue,
-                            auto: Boolean(checked),
-                          },
-                        }))
-                      }
-                    />
-                    <span className="text-xs text-muted-foreground">Авто НДС</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">НДС, %</span>
-                    <Input
-                      className="h-8 w-20"
-                      value={vatRateValue}
-                      onChange={(event) =>
-                        setValues((prev) => {
-                          const nextVatRate = event.target.value.replace(/\s+/g, "");
-                          return {
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={autoCalculateVat}
+                        onCheckedChange={(checked) => {
+                          const nextChecked = Boolean(checked);
+                          const resolved = fillMissingVatAmounts({
+                            amountWithoutVat: parseMoneyInput(quotaValue),
+                            amountWithVat: parseMoneyInput(quotaWithVatValue),
+                            vatRate: parseVatRateInput(vatRateValue),
+                          });
+                          setValues((prev) => ({
                             ...prev,
                             [row.monthKey]: {
                               ...prev[row.monthKey],
-                              quota: quotaValue,
+                              quota:
+                                quotaValue ||
+                                (resolved.amountWithoutVat !== undefined
+                                  ? String(resolved.amountWithoutVat)
+                                  : quotaValue),
                               quotaWithVat:
-                                autoCalculateVat && quotaValue && nextVatRate
-                                  ? String(calculateAmountWithVat(Number(quotaValue), Number(nextVatRate)))
-                                  : quotaWithVatValue,
-                              vatRate: nextVatRate,
-                              auto: autoCalculateVat,
+                                quotaWithVatValue ||
+                                (resolved.amountWithVat !== undefined
+                                  ? String(resolved.amountWithVat)
+                                  : quotaWithVatValue),
+                              vatRate: vatRateValue,
+                              auto: nextChecked,
                             },
-                          };
+                          }));
+                        }}
+                      />
+                      <span className="text-xs text-muted-foreground">Рассчитать с НДС</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">НДС, %</span>
+                      <Input
+                        className="h-8 w-20"
+                        value={vatRateValue}
+                        onChange={(event) =>
+                          setValues((prev) => {
+                            const nextVatRate = event.target.value.replace(/\s+/g, "");
+                            return {
+                              ...prev,
+                              [row.monthKey]: {
+                                ...prev[row.monthKey],
+                                quota: quotaValue,
+                                quotaWithVat: quotaWithVatValue,
+                                vatRate: nextVatRate,
+                                auto: autoCalculateVat,
+                              },
+                            };
                         })
                       }
                       inputMode="decimal"
@@ -210,9 +215,9 @@ export default function PresalesQuotaClient() {
                     disabled={savingKey === row.monthKey}
                     onClick={async () => {
                       const resolved = resolveVatAmounts({
-                        amountWithoutVat: quotaValue ? Number(quotaValue) : undefined,
-                        amountWithVat: quotaWithVatValue ? Number(quotaWithVatValue) : undefined,
-                        vatRate: vatRateValue ? Number(vatRateValue) : undefined,
+                        amountWithoutVat: parseMoneyInput(quotaValue),
+                        amountWithVat: parseMoneyInput(quotaWithVatValue),
+                        vatRate: parseVatRateInput(vatRateValue),
                         autoCalculateAmountWithVat: autoCalculateVat,
                       });
                       if (

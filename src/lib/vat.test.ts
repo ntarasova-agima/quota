@@ -3,8 +3,11 @@ import {
   DEFAULT_VAT_RATE,
   calculateAmountWithVat,
   calculateAmountWithoutVat,
+  fillMissingVatAmounts,
   formatAmountPair,
   matchesCalculatedAmountWithVat,
+  parseMoneyInput,
+  parseVatRateInput,
   resolveVatAmounts,
 } from "./vat";
 
@@ -40,9 +43,52 @@ describe("vat", () => {
     });
   });
 
+  it("fills only the missing amount when auto calculation is requested", () => {
+    expect(
+      resolveVatAmounts({
+        amountWithoutVat: 100,
+        amountWithVat: 140,
+        vatRate: DEFAULT_VAT_RATE,
+        autoCalculateAmountWithVat: true,
+      }),
+    ).toEqual({
+      amountWithoutVat: 100,
+      amountWithVat: 140,
+      vatRate: DEFAULT_VAT_RATE,
+    });
+  });
+
+  it("fills the blank side of the pair in either direction", () => {
+    expect(
+      fillMissingVatAmounts({
+        amountWithoutVat: 100,
+        vatRate: 20,
+      }),
+    ).toEqual({
+      amountWithoutVat: 100,
+      amountWithVat: 120,
+    });
+    expect(
+      fillMissingVatAmounts({
+        amountWithVat: 120,
+        vatRate: 20,
+      }),
+    ).toEqual({
+      amountWithoutVat: 100,
+      amountWithVat: 120,
+    });
+  });
+
   it("detects auto-calculated gross amounts", () => {
     expect(matchesCalculatedAmountWithVat(100, 122, 22)).toBe(true);
     expect(matchesCalculatedAmountWithVat(100, 121, 22)).toBe(false);
+  });
+
+  it("parses empty vat rate as zero and money strings as numbers", () => {
+    expect(parseVatRateInput("")).toBe(0);
+    expect(parseVatRateInput(" 18 ")).toBe(18);
+    expect(parseMoneyInput(" 12 345.67 ")).toBe(12345.67);
+    expect(parseMoneyInput("")).toBeUndefined();
   });
 
   it("formats amount pairs for display", () => {

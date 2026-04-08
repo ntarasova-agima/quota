@@ -9,9 +9,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   DEFAULT_VAT_RATE,
-  calculateAmountWithVat,
+  fillMissingVatAmounts,
   formatAmount,
   matchesCalculatedAmountWithVat,
+  parseMoneyInput,
+  parseVatRateInput,
   resolveVatAmounts,
 } from "@/lib/vat";
 
@@ -140,10 +142,7 @@ export default function CfdQuotaClient() {
                               [row.monthKey]: {
                                 ...prev[row.monthKey],
                                 quota: nextQuota,
-                                quotaWithVat:
-                                  quotaAuto && nextQuota
-                                    ? String(calculateAmountWithVat(Number(nextQuota), Number(vatRateValue)))
-                                    : prev[row.monthKey]?.quotaWithVat ?? quotaWithVatValue,
+                                quotaWithVat: prev[row.monthKey]?.quotaWithVat ?? quotaWithVatValue,
                                 vatRate: vatRateValue,
                                 quotaAuto,
                                 adjustedAuto,
@@ -166,13 +165,12 @@ export default function CfdQuotaClient() {
                               quota: quotaValue,
                               quotaWithVat: event.target.value.replace(/\s+/g, ""),
                               vatRate: vatRateValue,
-                              quotaAuto: false,
+                              quotaAuto,
                               adjustedAuto,
                             },
                           }))
                         }
                         inputMode="decimal"
-                        disabled={quotaAuto}
                       />
                     </div>
                   </div>
@@ -180,24 +178,35 @@ export default function CfdQuotaClient() {
                     <div className="flex items-center gap-2">
                       <Checkbox
                         checked={quotaAuto}
-                        onCheckedChange={(checked) =>
+                        onCheckedChange={(checked) => {
+                          const nextChecked = Boolean(checked);
+                          const resolved = fillMissingVatAmounts({
+                            amountWithoutVat: parseMoneyInput(quotaValue),
+                            amountWithVat: parseMoneyInput(quotaWithVatValue),
+                            vatRate: parseVatRateInput(vatRateValue),
+                          });
                           setValues((prev) => ({
                             ...prev,
                             [row.monthKey]: {
                               ...prev[row.monthKey],
-                              quota: quotaValue,
+                              quota:
+                                quotaValue ||
+                                (resolved.amountWithoutVat !== undefined
+                                  ? String(resolved.amountWithoutVat)
+                                  : quotaValue),
                               quotaWithVat:
-                                checked && quotaValue
-                                  ? String(calculateAmountWithVat(Number(quotaValue), Number(vatRateValue)))
-                                  : quotaWithVatValue,
+                                quotaWithVatValue ||
+                                (resolved.amountWithVat !== undefined
+                                  ? String(resolved.amountWithVat)
+                                  : quotaWithVatValue),
                               vatRate: vatRateValue,
-                              quotaAuto: Boolean(checked),
+                              quotaAuto: nextChecked,
                               adjustedAuto,
                             },
-                          }))
-                        }
+                          }));
+                        }}
                       />
-                      <span className="text-xs text-muted-foreground">Авто НДС</span>
+                      <span className="text-xs text-muted-foreground">Рассчитать с НДС</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">НДС, %</span>
@@ -212,15 +221,9 @@ export default function CfdQuotaClient() {
                               [row.monthKey]: {
                                 ...prev[row.monthKey],
                                 quota: quotaValue,
-                                quotaWithVat:
-                                  quotaAuto && quotaValue && nextVatRate
-                                    ? String(calculateAmountWithVat(Number(quotaValue), Number(nextVatRate)))
-                                    : quotaWithVatValue,
+                                quotaWithVat: quotaWithVatValue,
                                 adjusted: adjustedValue,
-                                adjustedWithVat:
-                                  adjustedAuto && adjustedValue && nextVatRate
-                                    ? String(calculateAmountWithVat(Number(adjustedValue), Number(nextVatRate)))
-                                    : adjustedWithVatValue,
+                                adjustedWithVat: adjustedWithVatValue,
                                 vatRate: nextVatRate,
                                 quotaAuto,
                                 adjustedAuto,
@@ -247,10 +250,7 @@ export default function CfdQuotaClient() {
                               [row.monthKey]: {
                                 ...prev[row.monthKey],
                                 adjusted: nextAdjusted,
-                                adjustedWithVat:
-                                  adjustedAuto && nextAdjusted
-                                    ? String(calculateAmountWithVat(Number(nextAdjusted), Number(vatRateValue)))
-                                    : prev[row.monthKey]?.adjustedWithVat ?? adjustedWithVatValue,
+                                adjustedWithVat: prev[row.monthKey]?.adjustedWithVat ?? adjustedWithVatValue,
                                 vatRate: vatRateValue,
                                 quotaAuto,
                                 adjustedAuto,
@@ -274,12 +274,11 @@ export default function CfdQuotaClient() {
                               adjustedWithVat: event.target.value.replace(/\s+/g, ""),
                               vatRate: vatRateValue,
                               quotaAuto,
-                              adjustedAuto: false,
+                              adjustedAuto,
                             },
                           }))
                         }
                         inputMode="decimal"
-                        disabled={adjustedAuto}
                       />
                     </div>
                   </div>
@@ -287,24 +286,35 @@ export default function CfdQuotaClient() {
                     <div className="flex items-center gap-2">
                       <Checkbox
                         checked={adjustedAuto}
-                        onCheckedChange={(checked) =>
+                        onCheckedChange={(checked) => {
+                          const nextChecked = Boolean(checked);
+                          const resolved = fillMissingVatAmounts({
+                            amountWithoutVat: parseMoneyInput(adjustedValue),
+                            amountWithVat: parseMoneyInput(adjustedWithVatValue),
+                            vatRate: parseVatRateInput(vatRateValue),
+                          });
                           setValues((prev) => ({
                             ...prev,
                             [row.monthKey]: {
                               ...prev[row.monthKey],
-                              adjusted: adjustedValue,
+                              adjusted:
+                                adjustedValue ||
+                                (resolved.amountWithoutVat !== undefined
+                                  ? String(resolved.amountWithoutVat)
+                                  : adjustedValue),
                               adjustedWithVat:
-                                checked && adjustedValue
-                                  ? String(calculateAmountWithVat(Number(adjustedValue), Number(vatRateValue)))
-                                  : adjustedWithVatValue,
+                                adjustedWithVatValue ||
+                                (resolved.amountWithVat !== undefined
+                                  ? String(resolved.amountWithVat)
+                                  : adjustedWithVatValue),
                               vatRate: vatRateValue,
                               quotaAuto,
-                              adjustedAuto: Boolean(checked),
+                              adjustedAuto: nextChecked,
                             },
-                          }))
-                        }
+                          }));
+                        }}
                       />
-                      <span className="text-xs text-muted-foreground">Авто НДС</span>
+                      <span className="text-xs text-muted-foreground">Рассчитать с НДС</span>
                     </div>
                     <Button
                       size="icon"
@@ -312,15 +322,15 @@ export default function CfdQuotaClient() {
                       disabled={savingKey === row.monthKey}
                       onClick={async () => {
                         const resolvedQuota = resolveVatAmounts({
-                          amountWithoutVat: quotaValue ? Number(quotaValue) : undefined,
-                          amountWithVat: quotaWithVatValue ? Number(quotaWithVatValue) : undefined,
-                          vatRate: vatRateValue ? Number(vatRateValue) : undefined,
+                          amountWithoutVat: parseMoneyInput(quotaValue),
+                          amountWithVat: parseMoneyInput(quotaWithVatValue),
+                          vatRate: parseVatRateInput(vatRateValue),
                           autoCalculateAmountWithVat: quotaAuto,
                         });
                         const resolvedAdjusted = resolveVatAmounts({
-                          amountWithoutVat: adjustedValue ? Number(adjustedValue) : undefined,
-                          amountWithVat: adjustedWithVatValue ? Number(adjustedWithVatValue) : undefined,
-                          vatRate: vatRateValue ? Number(vatRateValue) : undefined,
+                          amountWithoutVat: parseMoneyInput(adjustedValue),
+                          amountWithVat: parseMoneyInput(adjustedWithVatValue),
+                          vatRate: parseVatRateInput(vatRateValue),
                           autoCalculateAmountWithVat: adjustedAuto,
                         });
                         if (
