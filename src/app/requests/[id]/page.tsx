@@ -37,6 +37,7 @@ import {
   calculateAmountWithVat,
   formatAmountPair,
   parseMoneyInput,
+  resolveVatAmounts,
   sanitizeNumericInput,
   syncVatInputPair,
 } from "@/lib/vat";
@@ -127,6 +128,116 @@ function formatMonthLabel(monthKey: string) {
   });
 }
 
+function sumPaymentSplitAmounts(paymentSplits: Array<{ amountWithoutVat?: number }>) {
+  return paymentSplits.reduce((sum, split) => sum + (split.amountWithoutVat ?? 0), 0);
+}
+
+function sumPaymentSplitAmountsWithVat(
+  paymentSplits: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>,
+  vatRate?: number,
+) {
+  return paymentSplits.reduce((sum, split) => {
+    const resolved = resolveVatAmounts({
+      amountWithoutVat: split.amountWithoutVat,
+      amountWithVat: split.amountWithVat,
+      vatRate: split.vatRate ?? vatRate,
+      autoCalculateAmountWithVat: split.amountWithoutVat !== undefined && split.amountWithVat === undefined,
+    });
+    return sum + (resolved.amountWithVat ?? 0);
+  }, 0);
+}
+
+function resolvePaymentPair(params: {
+  amountWithoutVat?: number;
+  amountWithVat?: number;
+  vatRate?: number;
+}) {
+  return resolveVatAmounts({
+    amountWithoutVat: params.amountWithoutVat,
+    amountWithVat: params.amountWithVat,
+    vatRate: params.vatRate,
+    autoCalculateAmountWithVat:
+      params.amountWithoutVat !== undefined && params.amountWithVat === undefined,
+  });
+}
+
+function getPaymentTargetAmounts(request: {
+  amount: number;
+  amountWithVat?: number;
+  actualPaidAmount?: number;
+  actualPaidAmountWithVat?: number;
+  plannedPaymentAmount?: number;
+  plannedPaymentAmountWithVat?: number;
+  paymentResidualAmount?: number;
+  paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
+  vatRate?: number;
+}) {
+  const splits = request.paymentSplits ?? [];
+  const splitTotal = sumPaymentSplitAmounts(splits);
+  const splitTotalWithVat = sumPaymentSplitAmountsWithVat(splits, request.vatRate);
+  if (splits.length > 0) {
+    const residual = resolvePaymentPair({
+      amountWithoutVat: request.paymentResidualAmount,
+      amountWithVat: request.plannedPaymentAmountWithVat,
+      vatRate: request.vatRate,
+    });
+    if (residual.amountWithoutVat !== undefined || residual.amountWithVat !== undefined) {
+      return {
+        amountWithoutVat: splitTotal + (residual.amountWithoutVat ?? 0),
+        amountWithVat: splitTotalWithVat + (residual.amountWithVat ?? 0),
+      };
+    }
+  }
+  return resolvePaymentPair({
+    amountWithoutVat:
+      request.plannedPaymentAmount ??
+      request.actualPaidAmount ??
+      request.amount,
+    amountWithVat:
+      request.plannedPaymentAmountWithVat ??
+      request.actualPaidAmountWithVat ??
+      request.amountWithVat,
+    vatRate: request.vatRate,
+  });
+}
+
+function getPaymentRemainingAmounts(request: {
+  amount: number;
+  amountWithVat?: number;
+  actualPaidAmount?: number;
+  actualPaidAmountWithVat?: number;
+  plannedPaymentAmount?: number;
+  plannedPaymentAmountWithVat?: number;
+  paymentResidualAmount?: number;
+  paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
+  vatRate?: number;
+  status: string;
+}) {
+  if (request.status === "paid" || request.status === "closed") {
+    return {
+      amountWithoutVat: 0,
+      amountWithVat: 0,
+    };
+  }
+  const target = getPaymentTargetAmounts(request);
+  const splits = request.paymentSplits ?? [];
+  if (splits.length === 0) {
+    return target;
+  }
+  const splitTotal = sumPaymentSplitAmounts(splits);
+  const splitTotalWithVat = sumPaymentSplitAmountsWithVat(splits, request.vatRate);
+  return {
+    amountWithoutVat:
+      target.amountWithoutVat !== undefined
+        ? Math.max(target.amountWithoutVat - splitTotal, 0)
+        : undefined,
+    amountWithVat:
+      target.amountWithVat !== undefined
+        ? Math.max(target.amountWithVat - splitTotalWithVat, 0)
+        : undefined,
+  };
+}
+
 function getPendingStatusPresentation(isActionableForViewer: boolean) {
   return isActionableForViewer
     ? {
@@ -189,9 +300,11 @@ export default function RequestDetailPage() {
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
   const [finplanCostIdsRaw, setFinplanCostIdsRaw] = useState("");
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
-  const [actualPaidAmount, setActualPaidAmount] = useState("");
-  const [actualPaidAmountWithVat, setActualPaidAmountWithVat] = useState("");
-  const [paymentResidualAmount, setPaymentResidualAmount] = useState("");
+  const [paymentTargetAmount, setPaymentTargetAmount] = useState("");
+  const [paymentTargetAmountWithVat, setPaymentTargetAmountWithVat] = useState("");
+  const [paymentExecutedAmount, setPaymentExecutedAmount] = useState("");
+  const [paymentExecutedAmountWithVat, setPaymentExecutedAmountWithVat] = useState("");
+  const [paymentExecutedDate, setPaymentExecutedDate] = useState("");
   const [paymentCurrencyRate, setPaymentCurrencyRate] = useState("");
   const [confirmLatePaymentPlan, setConfirmLatePaymentPlan] = useState(false);
   const [specialistDrafts, setSpecialistDrafts] = useState<Record<string, SpecialistView>>({});
@@ -337,18 +450,8 @@ export default function RequestDetailPage() {
 
   useEffect(() => {
     if (data?.request) {
-      const paymentAmountWithoutVat =
-        data.request.status === "partially_paid"
-          ? undefined
-          : data.request.status === "payment_planned" || data.request.status === "awaiting_payment"
-            ? data.request.plannedPaymentAmount
-            : data.request.actualPaidAmount;
-      const paymentAmountWithVat =
-        data.request.status === "partially_paid"
-          ? undefined
-          : data.request.status === "payment_planned" || data.request.status === "awaiting_payment"
-            ? data.request.plannedPaymentAmountWithVat
-            : data.request.actualPaidAmountWithVat;
+      const targetAmounts = getPaymentTargetAmounts(data.request);
+      const remainingAmounts = getPaymentRemainingAmounts(data.request);
       setSelectedTag(data.request.cfdTag ?? "");
       setCustomTagName("");
       setFinplanCostIdsRaw((data.request.finplanCostIds ?? []).join(", "));
@@ -357,12 +460,22 @@ export default function RequestDetailPage() {
           ? new Date(data.request.paymentPlannedAt).toISOString().slice(0, 10)
           : "",
       );
-      setActualPaidAmount(paymentAmountWithoutVat !== undefined ? String(paymentAmountWithoutVat) : "");
-      setActualPaidAmountWithVat(paymentAmountWithVat !== undefined ? String(paymentAmountWithVat) : "");
-      setPaymentResidualAmount(
-        data.request.paymentResidualAmount !== undefined
-          ? String(data.request.paymentResidualAmount)
-          : "",
+      setPaymentTargetAmount(
+        targetAmounts.amountWithoutVat !== undefined ? String(targetAmounts.amountWithoutVat) : "",
+      );
+      setPaymentTargetAmountWithVat(
+        targetAmounts.amountWithVat !== undefined ? String(targetAmounts.amountWithVat) : "",
+      );
+      setPaymentExecutedAmount(
+        remainingAmounts.amountWithoutVat !== undefined ? String(remainingAmounts.amountWithoutVat) : "",
+      );
+      setPaymentExecutedAmountWithVat(
+        remainingAmounts.amountWithVat !== undefined ? String(remainingAmounts.amountWithVat) : "",
+      );
+      setPaymentExecutedDate(
+        data.request.paidAt
+          ? formatDateInputFromTimestamp(data.request.paidAt)
+          : todayDate,
       );
       setPaymentCurrencyRate(
         data.request.paymentCurrencyRate !== undefined
@@ -381,8 +494,13 @@ export default function RequestDetailPage() {
     data?.request?.actualPaidAmount,
     data?.request?.actualPaidAmountWithVat,
     data?.request?.paymentResidualAmount,
+    data?.request?.paymentSplits,
+    data?.request?.amount,
+    data?.request?.amountWithVat,
+    data?.request?.paidAt,
     data?.request?.paymentCurrencyRate,
     data?.request?.vatRate,
+    todayDate,
   ]);
   useEffect(() => {
     const next: Record<string, SpecialistView> = {};
@@ -418,6 +536,14 @@ export default function RequestDetailPage() {
 
   const { request, approvals } = data;
   const isServiceCategory = isServiceRecipientCategory(request.category);
+  const remainingPaymentAmounts = getPaymentRemainingAmounts(request);
+  const hasRemainingPayment =
+    remainingPaymentAmounts.amountWithoutVat !== undefined &&
+    remainingPaymentAmounts.amountWithoutVat > 0;
+  const nextPaymentButtonLabel =
+    (request.paymentSplits?.length ?? 0) > 0 || request.status === "partially_paid"
+      ? "Запланировать следующий платеж"
+      : "Запланировать оплату";
   const isCreator = data.isCreator;
   const canCancel = isCreator;
   const hasPendingHodValidation = Boolean(
@@ -883,40 +1009,6 @@ export default function RequestDetailPage() {
                         Передать в оплату
                       </Button>
                     )}
-                    {canSetPaid && (
-                      <Button
-                        type="button"
-                        className="h-9 border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
-                        disabled={
-                          updatingStatus ||
-                          !["awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status)
-                        }
-                        onClick={async () => {
-                          setError(null);
-                          setPaymentActionError(null);
-                          setUpdatingStatus(true);
-                          try {
-                            await updatePaymentStatus({
-                              id: request._id,
-                              status: "paid",
-                              finplanCostIdsRaw,
-                              actualPaidAmount: parseMoneyInput(actualPaidAmount),
-                              actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
-                              paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
-                            });
-                            router.refresh();
-                          } catch (err) {
-                            setPaymentActionError(
-                              err instanceof Error ? err.message : "Не удалось обновить статус",
-                            );
-                          } finally {
-                            setUpdatingStatus(false);
-                          }
-                        }}
-                      >
-                        Оплачено
-                      </Button>
-                    )}
                     {canSetPaid && request.status === "paid" ? (
                       <Button
                         type="button"
@@ -1064,7 +1156,7 @@ export default function RequestDetailPage() {
                           </Button>
                         </div>
                       ) : null}
-                      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                      <div className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1fr)_minmax(0,1fr)]">
                         <div className="space-y-2">
                           <Label htmlFor="finplanIds">ID затрат в Финплане</Label>
                           <Input
@@ -1100,167 +1192,250 @@ export default function RequestDetailPage() {
                             placeholder={request.currency === "RUB" ? "Не обязателен для RUB" : "Например, 92.4"}
                           />
                         </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="actualPaidAmount">Сумма оплаты без НДС</Label>
-                          <Input
-                            id="actualPaidAmount"
-                            inputMode="decimal"
-                            value={actualPaidAmount}
-                            onChange={(event) => {
-                              const nextAmount = sanitizeNumericInput(event.target.value);
-                              setActualPaidAmount(nextAmount);
-                              const synced = syncVatInputPair({
-                                amountWithoutVatInput: nextAmount,
-                                amountWithVatInput: actualPaidAmountWithVat,
-                                vatRateInput: String(paymentVatRate),
-                                source: "without",
-                              });
-                              setActualPaidAmountWithVat(synced.amountWithVatInput);
-                            }}
-                            placeholder={`Например, ${request.amount}`}
-                          />
+                      </div>
+
+                      <div className="space-y-2 rounded-lg border border-border/70 p-3">
+                        <div className="text-sm font-medium">Сумма оплаты</div>
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                          <div className="space-y-2">
+                            <Label htmlFor="paymentTargetAmount">Без НДС</Label>
+                            <Input
+                              id="paymentTargetAmount"
+                              inputMode="decimal"
+                              value={paymentTargetAmount}
+                              onChange={(event) => {
+                                const nextAmount = sanitizeNumericInput(event.target.value);
+                                setPaymentTargetAmount(nextAmount);
+                                const synced = syncVatInputPair({
+                                  amountWithoutVatInput: nextAmount,
+                                  amountWithVatInput: paymentTargetAmountWithVat,
+                                  vatRateInput: String(paymentVatRate),
+                                  source: "without",
+                                });
+                                setPaymentTargetAmountWithVat(synced.amountWithVatInput);
+                              }}
+                              placeholder={`Например, ${request.amount}`}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="paymentTargetAmountWithVat">С НДС</Label>
+                            <Input
+                              id="paymentTargetAmountWithVat"
+                              inputMode="decimal"
+                              value={paymentTargetAmountWithVat}
+                              onChange={(event) => {
+                                const nextAmountWithVat = sanitizeNumericInput(event.target.value);
+                                setPaymentTargetAmountWithVat(nextAmountWithVat);
+                                const synced = syncVatInputPair({
+                                  amountWithoutVatInput: paymentTargetAmount,
+                                  amountWithVatInput: nextAmountWithVat,
+                                  vatRateInput: String(paymentVatRate),
+                                  source: "with",
+                                });
+                                setPaymentTargetAmount(synced.amountWithoutVatInput);
+                              }}
+                              placeholder={`Например, ${
+                                request.amountWithVat ?? calculateAmountWithVat(request.amount, paymentVatRate)
+                              }`}
+                            />
+                          </div>
+                          <div className="flex items-end">
+                            {canSetPaymentPlanned ? (
+                              <Button
+                                type="button"
+                                className="h-9 border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                disabled={
+                                  updatingStatus ||
+                                  !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                }
+                                onClick={async () => {
+                                  setPaymentActionError(null);
+                                  if (!paymentPlannedDate) {
+                                    setPaymentActionError("Укажите дату оплаты");
+                                    return;
+                                  }
+                                  if (isLatePaymentPlan && !confirmLatePaymentPlan) {
+                                    setPaymentActionError(
+                                      "Дата позже нужной. Подтвердите, что сохраняете ее",
+                                    );
+                                    return;
+                                  }
+                                  setUpdatingStatus(true);
+                                  try {
+                                    await updatePaymentStatus({
+                                      id: request._id,
+                                      status: "payment_planned",
+                                      paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
+                                      finplanCostIdsRaw,
+                                      actualPaidAmount: parseMoneyInput(paymentTargetAmount),
+                                      actualPaidAmountWithVat: parseMoneyInput(paymentTargetAmountWithVat),
+                                      paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+                                      allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
+                                    });
+                                    router.refresh();
+                                  } catch (err) {
+                                    setPaymentActionError(
+                                      err instanceof Error ? err.message : "Не удалось запланировать оплату",
+                                    );
+                                  } finally {
+                                    setUpdatingStatus(false);
+                                  }
+                                }}
+                              >
+                                {nextPaymentButtonLabel}
+                              </Button>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="actualPaidAmountWithVat">Сумма оплаты с НДС</Label>
-                          <Input
-                            id="actualPaidAmountWithVat"
-                            inputMode="decimal"
-                            value={actualPaidAmountWithVat}
-                            onChange={(event) => {
-                              const nextAmountWithVat = sanitizeNumericInput(event.target.value);
-                              setActualPaidAmountWithVat(nextAmountWithVat);
-                              const synced = syncVatInputPair({
-                                amountWithoutVatInput: actualPaidAmount,
-                                amountWithVatInput: nextAmountWithVat,
-                                vatRateInput: String(paymentVatRate),
-                                source: "with",
-                              });
-                              setActualPaidAmount(synced.amountWithoutVatInput);
-                            }}
-                            placeholder={`Например, ${
-                              request.amountWithVat ?? calculateAmountWithVat(request.amount, paymentVatRate)
-                            }`}
-                          />
+                        <p className="text-xs text-muted-foreground">
+                          По умолчанию здесь сумма из заявки. Если BUH меняет ее, автор получит письмо.
+                        </p>
+                      </div>
+
+                      {canSetPaid && hasRemainingPayment ? (
+                        <div className="space-y-2 rounded-lg border border-border/70 p-3">
+                          <div className="text-sm font-medium">Фиксация оплаты</div>
+                          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] xl:items-end">
+                            <div className="space-y-2">
+                              <Label htmlFor="paymentExecutedAmount">Сумма частичной оплаты без НДС</Label>
+                              <Input
+                                id="paymentExecutedAmount"
+                                inputMode="decimal"
+                                value={paymentExecutedAmount}
+                                onChange={(event) => {
+                                  const nextAmount = sanitizeNumericInput(event.target.value);
+                                  setPaymentExecutedAmount(nextAmount);
+                                  const synced = syncVatInputPair({
+                                    amountWithoutVatInput: nextAmount,
+                                    amountWithVatInput: paymentExecutedAmountWithVat,
+                                    vatRateInput: String(paymentVatRate),
+                                    source: "without",
+                                  });
+                                  setPaymentExecutedAmountWithVat(synced.amountWithVatInput);
+                                }}
+                                placeholder={`Например, ${remainingPaymentAmounts.amountWithoutVat ?? request.amount}`}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="paymentExecutedAmountWithVat">Сумма частичной оплаты с НДС</Label>
+                              <Input
+                                id="paymentExecutedAmountWithVat"
+                                inputMode="decimal"
+                                value={paymentExecutedAmountWithVat}
+                                onChange={(event) => {
+                                  const nextAmountWithVat = sanitizeNumericInput(event.target.value);
+                                  setPaymentExecutedAmountWithVat(nextAmountWithVat);
+                                  const synced = syncVatInputPair({
+                                    amountWithoutVatInput: paymentExecutedAmount,
+                                    amountWithVatInput: nextAmountWithVat,
+                                    vatRateInput: String(paymentVatRate),
+                                    source: "with",
+                                  });
+                                  setPaymentExecutedAmount(synced.amountWithoutVatInput);
+                                }}
+                                placeholder={`Например, ${
+                                  remainingPaymentAmounts.amountWithVat ??
+                                  request.amountWithVat ??
+                                  calculateAmountWithVat(request.amount, paymentVatRate)
+                                }`}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="paymentExecutedDate">Дата оплаты</Label>
+                              <Input
+                                id="paymentExecutedDate"
+                                type="date"
+                                value={paymentExecutedDate}
+                                onChange={(event) => setPaymentExecutedDate(event.target.value)}
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              className="h-9 border-cyan-600 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
+                              disabled={
+                                updatingStatus ||
+                                !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                              }
+                              onClick={async () => {
+                                setPaymentActionError(null);
+                                if (!paymentExecutedDate) {
+                                  setPaymentActionError("Укажите дату оплаты");
+                                  return;
+                                }
+                                if (!paymentExecutedAmount) {
+                                  setPaymentActionError("Укажите сумму текущего платежа");
+                                  return;
+                                }
+                                setUpdatingStatus(true);
+                                try {
+                                  await updatePaymentStatus({
+                                    id: request._id,
+                                    status: "partially_paid",
+                                    finplanCostIdsRaw,
+                                    actualPaidAmount: parseMoneyInput(paymentExecutedAmount),
+                                    actualPaidAmountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
+                                    actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
+                                    paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+                                  });
+                                  router.refresh();
+                                } catch (err) {
+                                  setPaymentActionError(
+                                    err instanceof Error ? err.message : "Не удалось сохранить транш",
+                                  );
+                                } finally {
+                                  setUpdatingStatus(false);
+                                }
+                              }}
+                            >
+                              Частично оплачено
+                            </Button>
+                            <Button
+                              type="button"
+                              className="h-9 border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
+                              disabled={
+                                updatingStatus ||
+                                !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                              }
+                              onClick={async () => {
+                                setPaymentActionError(null);
+                                if (!paymentExecutedDate) {
+                                  setPaymentActionError("Укажите дату оплаты");
+                                  return;
+                                }
+                                setUpdatingStatus(true);
+                                try {
+                                  await updatePaymentStatus({
+                                    id: request._id,
+                                    status: "paid",
+                                    finplanCostIdsRaw,
+                                    actualPaidAmount: parseMoneyInput(paymentExecutedAmount),
+                                    actualPaidAmountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
+                                    actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
+                                    paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+                                  });
+                                  router.refresh();
+                                } catch (err) {
+                                  setPaymentActionError(
+                                    err instanceof Error ? err.message : "Не удалось обновить статус",
+                                  );
+                                } finally {
+                                  setUpdatingStatus(false);
+                                }
+                              }}
+                            >
+                              Оплачено
+                            </Button>
+                          </div>
                           <p className="text-xs text-muted-foreground">
-                            Введите ту сумму, которую знаете. НДС рассчитается автоматически в соответствии со ставкой {paymentVatRate}% из заявки.
+                            Остаток к оплате: {formatAmountPair({
+                              amountWithoutVat: remainingPaymentAmounts.amountWithoutVat,
+                              amountWithVat: remainingPaymentAmounts.amountWithVat,
+                              currency: request.currency,
+                              vatRate: request.vatRate,
+                            })}
                           </p>
                         </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="paymentResidualAmount">Остаток к оплате без НДС</Label>
-                          <Input
-                            id="paymentResidualAmount"
-                            inputMode="decimal"
-                            value={paymentResidualAmount}
-                            onChange={(event) =>
-                              setPaymentResidualAmount(sanitizeNumericInput(event.target.value))
-                            }
-                            placeholder="Например, 50000"
-                          />
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {canSetPaymentPlanned && (
-                          <Button
-                            type="button"
-                            className="h-9 border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                            disabled={
-                              updatingStatus ||
-                              !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
-                            }
-                            onClick={async () => {
-                              setPaymentActionError(null);
-                              if (!paymentPlannedDate) {
-                                setPaymentActionError("Укажите дату оплаты");
-                                return;
-                              }
-                              if (isLatePaymentPlan && !confirmLatePaymentPlan) {
-                                setPaymentActionError(
-                                  "Дата позже нужной. Подтвердите, что сохраняете ее",
-                                );
-                                return;
-                              }
-                              setUpdatingStatus(true);
-                              try {
-                                await updatePaymentStatus({
-                                  id: request._id,
-                                  status: "payment_planned",
-                                  paymentPlannedAt: paymentPlannedDate
-                                    ? new Date(`${paymentPlannedDate}T00:00:00`).getTime()
-                                    : undefined,
-                                  finplanCostIdsRaw,
-                                  actualPaidAmount: parseMoneyInput(actualPaidAmount),
-                                  actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
-                                  paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
-                                  allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
-                                });
-                                router.refresh();
-                              } catch (err) {
-                                setPaymentActionError(
-                                  err instanceof Error ? err.message : "Не удалось запланировать оплату",
-                                );
-                              } finally {
-                                setUpdatingStatus(false);
-                              }
-                            }}
-                          >
-                            Запланировать
-                          </Button>
-                        )}
-                        {canSetPaid && (
-                          <Button
-                            type="button"
-                            className="h-9 border-cyan-600 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
-                            disabled={
-                              updatingStatus ||
-                              !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
-                            }
-                            onClick={async () => {
-                              setPaymentActionError(null);
-                              if (!paymentPlannedDate) {
-                                setPaymentActionError("Укажите дату следующей оплаты");
-                                return;
-                              }
-                              if (!actualPaidAmount) {
-                                setPaymentActionError("Укажите сумму текущего платежа");
-                                return;
-                              }
-                              if (!paymentResidualAmount) {
-                                setPaymentActionError("Укажите остаток к оплате");
-                                return;
-                              }
-                              if (isLatePaymentPlan && !confirmLatePaymentPlan) {
-                                setPaymentActionError(
-                                  "Дата позже нужной. Подтвердите, что сохраняете ее",
-                                );
-                                return;
-                              }
-                              setUpdatingStatus(true);
-                              try {
-                                await updatePaymentStatus({
-                                  id: request._id,
-                                  status: "partially_paid",
-                                  paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
-                                  finplanCostIdsRaw,
-                                  actualPaidAmount: parseMoneyInput(actualPaidAmount),
-                                  actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
-                                  paymentResidualAmount: parseMoneyInput(paymentResidualAmount),
-                                  paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
-                                  allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
-                                });
-                                router.refresh();
-                              } catch (err) {
-                                setPaymentActionError(
-                                  err instanceof Error ? err.message : "Не удалось сохранить транш",
-                                );
-                              } finally {
-                                setUpdatingStatus(false);
-                              }
-                            }}
-                          >
-                            Частично оплачено
-                          </Button>
-                        )}
-                      </div>
+                      ) : null}
                       {isLatePaymentPlan ? (
                         <label className="flex items-center gap-2 text-sm text-amber-700">
                           <input

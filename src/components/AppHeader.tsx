@@ -11,11 +11,9 @@ import { formatRoleList } from "@/lib/roleLabels";
 export default function AppHeader({
   title,
   showAdmin,
-  showCreateRequest,
 }: {
   title: string;
   showAdmin?: boolean;
-  showCreateRequest?: boolean;
 }) {
   const profile = useQuery(api.roles.myProfile);
   const hasHistoricalApprovalAccess = useQuery(api.approvals.hasReviewedAny);
@@ -54,11 +52,9 @@ export default function AppHeader({
             {name}{name ? " · " : ""}{roles}
           </div>
           <div className="flex flex-wrap gap-2">
-            {showCreateRequest ? (
-              <Button asChild>
-                <Link href="/requests/new">Новая заявка</Link>
-              </Button>
-            ) : null}
+            <Button asChild>
+              <Link href="/requests/new">Создать заявку</Link>
+            </Button>
             <Button asChild variant="outline">
               <Link href="/profile">Профиль</Link>
             </Button>
@@ -83,12 +79,12 @@ export default function AppHeader({
         )}
         {isNbd && (
           <Button asChild variant={pathname === "/presales-quota" ? "default" : "outline"}>
-            <Link href="/presales-quota">Квота пресейлов</Link>
+            <Link href="/presales-quota">Квоты</Link>
           </Button>
         )}
         {isAiBoss && (
           <Button asChild variant={pathname === "/ai-tools-quota" ? "default" : "outline"}>
-            <Link href="/ai-tools-quota">Квоты на AI-инструменты</Link>
+            <Link href="/ai-tools-quota">Квоты</Link>
           </Button>
         )}
         {isCfd && (
@@ -97,13 +93,13 @@ export default function AppHeader({
               <Link href="/cfd-tags">Теги CFD</Link>
             </Button>
             <Button asChild variant={pathname === "/cfd-quota" ? "default" : "outline"}>
-              <Link href="/cfd-quota">Квоты CFD</Link>
+              <Link href="/cfd-quota">Квоты</Link>
             </Button>
           </>
         )}
         {isCoo && (
           <Button asChild variant={pathname === "/coo-quota" ? "default" : "outline"}>
-            <Link href="/coo-quota">Квоты COO</Link>
+            <Link href="/coo-quota">Квоты</Link>
           </Button>
         )}
         {showAdmin && (

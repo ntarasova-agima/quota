@@ -1039,10 +1039,11 @@ export default function NewRequestPage() {
 
               {showTransitFields ? (
                 <div className="space-y-4">
+                  <p className="text-xs text-muted-foreground">Сколько платят нам</p>
                   <div className="grid gap-x-4 gap-y-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.38fr)]">
                     <div className="space-y-2">
                       <FieldLabel htmlFor="incomingAmount">
-                        Сколько платят нам (сумма отгрузки) без НДС
+                        Сумма отгрузки без НДС
                       </FieldLabel>
                       <Input
                         id="incomingAmount"
@@ -1065,7 +1066,7 @@ export default function NewRequestPage() {
                     </div>
                     <div className="space-y-2">
                       <FieldLabel htmlFor="incomingAmountWithVat">
-                        Сколько платят нам (сумма отгрузки) с НДС
+                        Сумма отгрузки с НДС
                       </FieldLabel>
                       <Input
                         id="incomingAmountWithVat"
@@ -1125,7 +1126,7 @@ export default function NewRequestPage() {
                 </div>
               ) : null}
 
-              <div className="space-y-3">
+              <div className="space-y-2">
                 <FieldLabel htmlFor="requestFiles">Прикрепить файлы</FieldLabel>
                 <p className="text-xs text-muted-foreground">
                   Например, счет в PDF, акт и другие важные документы
