@@ -1673,7 +1673,7 @@ export default function RequestDetailPage() {
                             checked={confirmLatePaymentPlan}
                             onChange={(event) => setConfirmLatePaymentPlan(event.target.checked)}
                           />
-                          Дата позже срока “когда нужно оплатить”. Подтверждаю, что ставлю ее сознательно.
+                          Дата позже срока “когда нужно оплатить”. Ставьте галочку, если это решение согласовано с автором заявки.
                         </label>
                       ) : null}
                       {paymentActionError ? (
