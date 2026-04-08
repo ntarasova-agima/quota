@@ -25,14 +25,14 @@ import {
   isAiToolsFundingSource as isAiToolsFundingSourceValue,
   isServiceRecipientCategory,
   normalizeFundingSource,
+  normalizeRequestCategory,
 } from "@/lib/requestRules";
 import {
   DEFAULT_VAT_RATE,
   calculateAmountWithVat,
-  fillMissingVatAmounts,
   formatAmountPair,
-  matchesCalculatedAmountWithVat,
   parseMoneyInput,
+  syncVatInputPair,
 } from "@/lib/vat";
 import { Paperclip, Upload } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
@@ -180,7 +180,6 @@ export default function RequestDetailPage() {
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
   const [actualPaidAmount, setActualPaidAmount] = useState("");
   const [actualPaidAmountWithVat, setActualPaidAmountWithVat] = useState("");
-  const [autoCalculatePaymentAmountWithVat, setAutoCalculatePaymentAmountWithVat] = useState(true);
   const [paymentResidualAmount, setPaymentResidualAmount] = useState("");
   const [paymentCurrencyRate, setPaymentCurrencyRate] = useState("");
   const [confirmLatePaymentPlan, setConfirmLatePaymentPlan] = useState(false);
@@ -238,6 +237,10 @@ export default function RequestDetailPage() {
     () => (data?.request?.fundingSource ? isAiToolsFundingSourceValue(data.request.fundingSource) : false),
     [data?.request?.fundingSource],
   );
+  const normalizedRequestCategory = useMemo(
+    () => (data?.request?.category ? normalizeRequestCategory(data.request.category) : undefined),
+    [data?.request?.category],
+  );
   const paymentVatRate = useMemo(
     () => data?.request?.vatRate ?? DEFAULT_VAT_RATE,
     [data?.request?.vatRate],
@@ -253,7 +256,7 @@ export default function RequestDetailPage() {
       isAiBoss &&
       isAiToolsFundingSource &&
       [AI_TOOLS_REQUEST_CATEGORY, SERVICE_PURCHASE_CATEGORY].includes(
-        data?.request?.category as typeof AI_TOOLS_REQUEST_CATEGORY | typeof SERVICE_PURCHASE_CATEGORY,
+        normalizedRequestCategory as typeof AI_TOOLS_REQUEST_CATEGORY | typeof SERVICE_PURCHASE_CATEGORY,
       ),
   );
   const showCooQuotaSummary = Boolean(
@@ -345,14 +348,6 @@ export default function RequestDetailPage() {
       );
       setActualPaidAmount(paymentAmountWithoutVat !== undefined ? String(paymentAmountWithoutVat) : "");
       setActualPaidAmountWithVat(paymentAmountWithVat !== undefined ? String(paymentAmountWithVat) : "");
-      setAutoCalculatePaymentAmountWithVat(
-        paymentAmountWithVat === undefined ||
-          matchesCalculatedAmountWithVat(
-            paymentAmountWithoutVat,
-            paymentAmountWithVat,
-            data.request.vatRate,
-          ),
-      );
       setPaymentResidualAmount(
         data.request.paymentResidualAmount !== undefined
           ? String(data.request.paymentResidualAmount)
@@ -553,25 +548,6 @@ export default function RequestDetailPage() {
       setEditingBody("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось изменить комментарий");
-    }
-  }
-
-  function handlePaymentVatCalculationToggle(checked: boolean) {
-    const nextChecked = Boolean(checked);
-    setAutoCalculatePaymentAmountWithVat(nextChecked);
-    if (!nextChecked) {
-      return;
-    }
-    const resolved = fillMissingVatAmounts({
-      amountWithoutVat: parseMoneyInput(actualPaidAmount),
-      amountWithVat: parseMoneyInput(actualPaidAmountWithVat),
-      vatRate: paymentVatRate,
-    });
-    if (!actualPaidAmount && resolved.amountWithoutVat !== undefined) {
-      setActualPaidAmount(String(resolved.amountWithoutVat));
-    }
-    if (!actualPaidAmountWithVat && resolved.amountWithVat !== undefined) {
-      setActualPaidAmountWithVat(String(resolved.amountWithVat));
     }
   }
 
@@ -905,9 +881,7 @@ export default function RequestDetailPage() {
                               status: "paid",
                               finplanCostIdsRaw,
                               actualPaidAmount: actualPaidAmount ? Number(actualPaidAmount) : undefined,
-                              actualPaidAmountWithVat: actualPaidAmountWithVat
-                                ? Number(actualPaidAmountWithVat)
-                                : undefined,
+                              actualPaidAmountWithVat: parseMoneyInput(actualPaidAmountWithVat),
                               paymentCurrencyRate: paymentCurrencyRate
                                 ? Number(paymentCurrencyRate)
                                 : undefined,
@@ -1114,7 +1088,17 @@ export default function RequestDetailPage() {
                             id="actualPaidAmount"
                             inputMode="decimal"
                             value={actualPaidAmount}
-                            onChange={(event) => setActualPaidAmount(event.target.value.replace(/\s+/g, ""))}
+                            onChange={(event) => {
+                              const nextAmount = event.target.value.replace(/\s+/g, "");
+                              setActualPaidAmount(nextAmount);
+                              const synced = syncVatInputPair({
+                                amountWithoutVatInput: nextAmount,
+                                amountWithVatInput: actualPaidAmountWithVat,
+                                vatRateInput: String(paymentVatRate),
+                                source: "without",
+                              });
+                              setActualPaidAmountWithVat(synced.amountWithVatInput);
+                            }}
                             placeholder={`Например, ${request.amount}`}
                           />
                         </div>
@@ -1124,22 +1108,23 @@ export default function RequestDetailPage() {
                             id="actualPaidAmountWithVat"
                             inputMode="decimal"
                             value={actualPaidAmountWithVat}
-                            onChange={(event) =>
-                              setActualPaidAmountWithVat(event.target.value.replace(/\s+/g, ""))
-                            }
+                            onChange={(event) => {
+                              const nextAmountWithVat = event.target.value.replace(/\s+/g, "");
+                              setActualPaidAmountWithVat(nextAmountWithVat);
+                              const synced = syncVatInputPair({
+                                amountWithoutVatInput: actualPaidAmount,
+                                amountWithVatInput: nextAmountWithVat,
+                                vatRateInput: String(paymentVatRate),
+                                source: "with",
+                              });
+                              setActualPaidAmount(synced.amountWithoutVatInput);
+                            }}
                             placeholder={`Например, ${
                               request.amountWithVat ?? calculateAmountWithVat(request.amount, paymentVatRate)
                             }`}
                           />
-                          <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Checkbox
-                              checked={autoCalculatePaymentAmountWithVat}
-                              onCheckedChange={(checked) => handlePaymentVatCalculationToggle(Boolean(checked))}
-                            />
-                            Рассчитать с НДС
-                          </label>
                           <p className="text-xs text-muted-foreground">
-                            Используем ставку {paymentVatRate}% из заявки.
+                            Введите ту сумму, которую знаете. НДС рассчитается автоматически в соответствии со ставкой {paymentVatRate}% из заявки.
                           </p>
                         </div>
                         <div className="space-y-2">
@@ -1531,6 +1516,12 @@ export default function RequestDetailPage() {
                 <div className="text-muted-foreground">Обоснование</div>
                 <p className="mt-1 whitespace-pre-wrap">{request.justification}</p>
               </div>
+              {request.details ? (
+                <div>
+                  <div className="text-muted-foreground">Детали заявки</div>
+                  <p className="mt-1 whitespace-pre-wrap">{request.details}</p>
+                </div>
+              ) : null}
               {request.investmentReturn ? (
                 <div>
                   <div className="text-muted-foreground">Как будем возвращать инвестиции</div>

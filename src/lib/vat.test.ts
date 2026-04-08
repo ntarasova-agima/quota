@@ -9,6 +9,7 @@ import {
   parseMoneyInput,
   parseVatRateInput,
   resolveVatAmounts,
+  syncVatInputPair,
 } from "./vat";
 
 describe("vat", () => {
@@ -89,6 +90,42 @@ describe("vat", () => {
     expect(parseVatRateInput(" 18 ")).toBe(18);
     expect(parseMoneyInput(" 12 345.67 ")).toBe(12345.67);
     expect(parseMoneyInput("")).toBeUndefined();
+  });
+
+  it("syncs amount inputs from the edited side", () => {
+    expect(
+      syncVatInputPair({
+        amountWithoutVatInput: "100",
+        amountWithVatInput: "",
+        vatRateInput: "20",
+        source: "without",
+      }),
+    ).toEqual({
+      amountWithoutVatInput: "100",
+      amountWithVatInput: "120",
+    });
+    expect(
+      syncVatInputPair({
+        amountWithoutVatInput: "",
+        amountWithVatInput: "120",
+        vatRateInput: "20",
+        source: "with",
+      }),
+    ).toEqual({
+      amountWithoutVatInput: "100",
+      amountWithVatInput: "120",
+    });
+    expect(
+      syncVatInputPair({
+        amountWithoutVatInput: "100",
+        amountWithVatInput: "122",
+        vatRateInput: "",
+        source: "without",
+      }),
+    ).toEqual({
+      amountWithoutVatInput: "100",
+      amountWithVatInput: "100",
+    });
   });
 
   it("formats amount pairs for display", () => {

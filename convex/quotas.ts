@@ -7,6 +7,7 @@ import {
   AI_TOOLS_REQUEST_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
   isAiToolsFundingSource,
+  normalizeRequestCategory,
 } from "../src/lib/requestRules";
 import { DEFAULT_VAT_RATE, getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
 
@@ -22,10 +23,11 @@ function monthInfoFromKey(key: string) {
 }
 
 function isAiToolsQuotaRequest(request: { fundingSource: string; category: string }) {
+  const normalizedCategory = normalizeRequestCategory(request.category);
   return (
     isAiToolsFundingSource(request.fundingSource) &&
     [AI_TOOLS_REQUEST_CATEGORY, SERVICE_PURCHASE_CATEGORY].includes(
-      request.category as typeof AI_TOOLS_REQUEST_CATEGORY | typeof SERVICE_PURCHASE_CATEGORY,
+      normalizedCategory as typeof AI_TOOLS_REQUEST_CATEGORY | typeof SERVICE_PURCHASE_CATEGORY,
     )
   );
 }

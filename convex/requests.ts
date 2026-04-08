@@ -6,6 +6,7 @@ import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
   COMPANY_PROFIT_FUNDING_SOURCE,
   INTERNAL_COSTS_FUNDING_SOURCE,
   PRESALES_FUNDING_SOURCE,
@@ -49,6 +50,7 @@ const requestCategoryCodes: Record<string, string> = {
   "Подарки": "GI",
   "Конкурсное задание": "CT",
   [SERVICE_PURCHASE_CATEGORY]: "SV",
+  [CLIENT_SERVICES_TRANSIT_CATEGORY]: "TR",
   [AI_TOOLS_REQUEST_CATEGORY]: "AI",
   "Неформальное мероприятие": "EV",
   "Совместный мерч": "MR",
@@ -482,6 +484,7 @@ const requestPayloadValidator = {
   fundingSource: v.string(),
   counterparty: v.string(),
   justification: v.string(),
+  details: v.optional(v.string()),
   investmentReturn: v.optional(v.string()),
   clientName: v.string(),
   contacts: v.array(v.string()),
@@ -506,6 +509,7 @@ const requestFieldLabels: Record<string, string> = {
   fundingSource: "Источник финансирования",
   counterparty: "Контрагент",
   justification: "Обоснование",
+  details: "Детали заявки",
   investmentReturn: "Как будем возвращать инвестиции",
   clientName: "Клиент / получатель сервиса",
   contacts: "Контакты клиента",
@@ -603,6 +607,7 @@ function diffRequestFields(previous: any, next: any) {
     "fundingSource",
     "counterparty",
     "justification",
+    "details",
     "investmentReturn",
     "clientName",
     "contacts",
@@ -795,12 +800,6 @@ function validateRequestPayload(args: any) {
   }
   if (!args.neededBy) {
     throw new Error("Укажите дату, когда нужны деньги");
-  }
-  if (
-    args.fundingSource === "Отгрузки проекта" &&
-    ["Welcome-бонус", "Конкурсное задание"].includes(args.category)
-  ) {
-    throw new Error("Так не бывает");
   }
   if (!isFundingSourceAllowedForCategory(args.category, args.fundingSource)) {
     throw new Error("Так не бывает");
@@ -1287,6 +1286,7 @@ export const previewEditImpact = query({
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
       justification: args.justification,
+      details: args.details?.trim() || undefined,
       investmentReturn: args.investmentReturn?.trim() || undefined,
       clientName: args.clientName,
       contacts: args.contacts,
@@ -1364,6 +1364,7 @@ export const editRequest = mutation({
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
       justification: args.justification,
+      details: args.details?.trim() || undefined,
       investmentReturn: args.investmentReturn?.trim() || undefined,
       clientName: args.clientName,
       contacts: args.contacts,
@@ -1759,6 +1760,7 @@ export const createRequest = mutation({
       counterparty: args.counterparty,
       cfdTag: undefined,
       justification: args.justification,
+      details: args.details?.trim() || undefined,
       investmentReturn: args.investmentReturn?.trim() || undefined,
       clientName: args.clientName,
       contacts: args.contacts,

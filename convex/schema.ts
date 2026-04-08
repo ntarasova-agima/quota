@@ -63,6 +63,7 @@ const schema = defineSchema({
     counterparty: v.optional(v.string()),
     cfdTag: v.optional(v.string()),
     justification: v.string(),
+    details: v.optional(v.string()),
     investmentReturn: v.optional(v.string()),
     clientName: v.string(),
     contacts: v.array(v.string()),

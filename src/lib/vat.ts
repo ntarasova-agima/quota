@@ -1,4 +1,5 @@
 export const DEFAULT_VAT_RATE = 22;
+export type VatAmountSource = "without" | "with";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -37,6 +38,10 @@ export function parseVatRateInput(value?: string | null) {
   }
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizeMoneyInput(value?: string | null) {
+  return typeof value === "string" ? value.replace(/\s+/g, "") : "";
 }
 
 export function calculateAmountWithVat(amountWithoutVat: number, vatRate?: number) {
@@ -95,6 +100,33 @@ export function fillMissingVatAmounts(params: {
   return {
     amountWithoutVat: params.amountWithoutVat,
     amountWithVat: params.amountWithVat,
+  };
+}
+
+export function syncVatInputPair(params: {
+  amountWithoutVatInput?: string | null;
+  amountWithVatInput?: string | null;
+  vatRateInput?: string | null;
+  source: VatAmountSource;
+}) {
+  const amountWithoutVatInput = normalizeMoneyInput(params.amountWithoutVatInput);
+  const amountWithVatInput = normalizeMoneyInput(params.amountWithVatInput);
+  const vatRate = parseVatRateInput(params.vatRateInput);
+
+  if (params.source === "with") {
+    const amountWithVat = parseMoneyInput(amountWithVatInput);
+    return {
+      amountWithoutVatInput:
+        amountWithVat !== undefined ? String(calculateAmountWithoutVat(amountWithVat, vatRate)) : "",
+      amountWithVatInput,
+    };
+  }
+
+  const amountWithoutVat = parseMoneyInput(amountWithoutVatInput);
+  return {
+    amountWithoutVatInput,
+    amountWithVatInput:
+      amountWithoutVat !== undefined ? String(calculateAmountWithVat(amountWithoutVat, vatRate)) : "",
   };
 }
 

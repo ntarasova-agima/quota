@@ -4,17 +4,16 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/lib/convex";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   DEFAULT_VAT_RATE,
-  fillMissingVatAmounts,
   formatAmount,
-  matchesCalculatedAmountWithVat,
   parseMoneyInput,
   parseVatRateInput,
   resolveVatAmounts,
+  syncVatInputPair,
+  type VatAmountSource,
 } from "@/lib/vat";
 
 const monthNames = [
@@ -57,8 +56,8 @@ export default function CooQuotaClient() {
         adjusted?: string;
         adjustedWithVat?: string;
         vatRate?: string;
-        quotaAuto?: boolean;
-        adjustedAuto?: boolean;
+        quotaSource?: VatAmountSource;
+        adjustedSource?: VatAmountSource;
       }
     >
   >({});
@@ -95,16 +94,8 @@ export default function CooQuotaClient() {
           </div>
           {rows.map((row) => {
             const vatRateValue = values[row.monthKey]?.vatRate ?? String(row.vatRate ?? DEFAULT_VAT_RATE);
-            const quotaAuto =
-              values[row.monthKey]?.quotaAuto ??
-              matchesCalculatedAmountWithVat(row.quota, row.quotaWithVat, row.vatRate);
-            const adjustedAuto =
-              values[row.monthKey]?.adjustedAuto ??
-              matchesCalculatedAmountWithVat(
-                row.adjustedQuota,
-                row.adjustedQuotaWithVat,
-                row.vatRate,
-              );
+            const quotaSource = values[row.monthKey]?.quotaSource ?? "without";
+            const adjustedSource = values[row.monthKey]?.adjustedSource ?? "without";
             const quotaValue = values[row.monthKey]?.quota ?? String(row.quota);
             const quotaWithVatValue =
               values[row.monthKey]?.quotaWithVat ?? String(row.quotaWithVat ?? row.quota);
@@ -135,15 +126,21 @@ export default function CooQuotaClient() {
                         onChange={(event) =>
                           setValues((prev) => {
                             const nextQuota = event.target.value.replace(/\s+/g, "");
+                            const synced = syncVatInputPair({
+                              amountWithoutVatInput: nextQuota,
+                              amountWithVatInput: quotaWithVatValue,
+                              vatRateInput: vatRateValue,
+                              source: "without",
+                            });
                             return {
                               ...prev,
                               [row.monthKey]: {
                                 ...prev[row.monthKey],
-                                quota: nextQuota,
-                                quotaWithVat: prev[row.monthKey]?.quotaWithVat ?? quotaWithVatValue,
+                                quota: synced.amountWithoutVatInput,
+                                quotaWithVat: synced.amountWithVatInput,
                                 vatRate: vatRateValue,
-                                quotaAuto,
-                                adjustedAuto,
+                                quotaSource: "without",
+                                adjustedSource,
                               },
                             };
                           })
@@ -156,55 +153,31 @@ export default function CooQuotaClient() {
                         value={quotaWithVatValue}
                         inputMode="decimal"
                         onChange={(event) =>
-                          setValues((prev) => ({
-                            ...prev,
-                            [row.monthKey]: {
-                              ...prev[row.monthKey],
-                              quota: quotaValue,
-                              quotaWithVat: event.target.value.replace(/\s+/g, ""),
-                              vatRate: vatRateValue,
-                              quotaAuto,
-                              adjustedAuto,
-                            },
-                          }))
+                          setValues((prev) => {
+                            const nextQuotaWithVat = event.target.value.replace(/\s+/g, "");
+                            const synced = syncVatInputPair({
+                              amountWithoutVatInput: quotaValue,
+                              amountWithVatInput: nextQuotaWithVat,
+                              vatRateInput: vatRateValue,
+                              source: "with",
+                            });
+                            return {
+                              ...prev,
+                              [row.monthKey]: {
+                                ...prev[row.monthKey],
+                                quota: synced.amountWithoutVatInput,
+                                quotaWithVat: synced.amountWithVatInput,
+                                vatRate: vatRateValue,
+                                quotaSource: "with",
+                                adjustedSource,
+                              },
+                            };
+                          })
                         }
                       />
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        checked={quotaAuto}
-                        onCheckedChange={(checked) => {
-                          const nextChecked = Boolean(checked);
-                          const resolved = fillMissingVatAmounts({
-                            amountWithoutVat: parseMoneyInput(quotaValue),
-                            amountWithVat: parseMoneyInput(quotaWithVatValue),
-                            vatRate: parseVatRateInput(vatRateValue),
-                          });
-                          setValues((prev) => ({
-                            ...prev,
-                            [row.monthKey]: {
-                              ...prev[row.monthKey],
-                              quota:
-                                quotaValue ||
-                                (resolved.amountWithoutVat !== undefined
-                                  ? String(resolved.amountWithoutVat)
-                                  : quotaValue),
-                              quotaWithVat:
-                                quotaWithVatValue ||
-                                (resolved.amountWithVat !== undefined
-                                  ? String(resolved.amountWithVat)
-                                  : quotaWithVatValue),
-                              vatRate: vatRateValue,
-                              quotaAuto: nextChecked,
-                              adjustedAuto,
-                            },
-                          }));
-                        }}
-                      />
-                      <span className="text-xs text-muted-foreground">Рассчитать с НДС</span>
-                    </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">НДС, %</span>
                       <Input
@@ -214,17 +187,29 @@ export default function CooQuotaClient() {
                         onChange={(event) =>
                           setValues((prev) => {
                             const nextVatRate = event.target.value.replace(/\s+/g, "");
+                            const syncedQuota = syncVatInputPair({
+                              amountWithoutVatInput: quotaValue,
+                              amountWithVatInput: quotaWithVatValue,
+                              vatRateInput: nextVatRate,
+                              source: quotaSource,
+                            });
+                            const syncedAdjusted = syncVatInputPair({
+                              amountWithoutVatInput: adjustedValue,
+                              amountWithVatInput: adjustedWithVatValue,
+                              vatRateInput: nextVatRate,
+                              source: adjustedSource,
+                            });
                             return {
                               ...prev,
                               [row.monthKey]: {
                                 ...prev[row.monthKey],
-                                quota: quotaValue,
-                                quotaWithVat: quotaWithVatValue,
-                                adjusted: adjustedValue,
-                                adjustedWithVat: adjustedWithVatValue,
+                                quota: syncedQuota.amountWithoutVatInput,
+                                quotaWithVat: syncedQuota.amountWithVatInput,
+                                adjusted: syncedAdjusted.amountWithoutVatInput,
+                                adjustedWithVat: syncedAdjusted.amountWithVatInput,
                                 vatRate: nextVatRate,
-                                quotaAuto,
-                                adjustedAuto,
+                                quotaSource,
+                                adjustedSource,
                               },
                             };
                           })
@@ -243,15 +228,21 @@ export default function CooQuotaClient() {
                         onChange={(event) =>
                           setValues((prev) => {
                             const nextAdjusted = event.target.value.replace(/\s+/g, "");
+                            const synced = syncVatInputPair({
+                              amountWithoutVatInput: nextAdjusted,
+                              amountWithVatInput: adjustedWithVatValue,
+                              vatRateInput: vatRateValue,
+                              source: "without",
+                            });
                             return {
                               ...prev,
                               [row.monthKey]: {
                                 ...prev[row.monthKey],
-                                adjusted: nextAdjusted,
-                                adjustedWithVat: prev[row.monthKey]?.adjustedWithVat ?? adjustedWithVatValue,
+                                adjusted: synced.amountWithoutVatInput,
+                                adjustedWithVat: synced.amountWithVatInput,
                                 vatRate: vatRateValue,
-                                quotaAuto,
-                                adjustedAuto,
+                                quotaSource,
+                                adjustedSource: "without",
                               },
                             };
                           })
@@ -264,55 +255,31 @@ export default function CooQuotaClient() {
                         value={adjustedWithVatValue}
                         inputMode="decimal"
                         onChange={(event) =>
-                          setValues((prev) => ({
-                            ...prev,
-                            [row.monthKey]: {
-                              ...prev[row.monthKey],
-                              adjusted: adjustedValue,
-                              adjustedWithVat: event.target.value.replace(/\s+/g, ""),
-                              vatRate: vatRateValue,
-                              quotaAuto,
-                              adjustedAuto,
-                            },
-                          }))
+                          setValues((prev) => {
+                            const nextAdjustedWithVat = event.target.value.replace(/\s+/g, "");
+                            const synced = syncVatInputPair({
+                              amountWithoutVatInput: adjustedValue,
+                              amountWithVatInput: nextAdjustedWithVat,
+                              vatRateInput: vatRateValue,
+                              source: "with",
+                            });
+                            return {
+                              ...prev,
+                              [row.monthKey]: {
+                                ...prev[row.monthKey],
+                                adjusted: synced.amountWithoutVatInput,
+                                adjustedWithVat: synced.amountWithVatInput,
+                                vatRate: vatRateValue,
+                                quotaSource,
+                                adjustedSource: "with",
+                              },
+                            };
+                          })
                         }
                       />
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        checked={adjustedAuto}
-                        onCheckedChange={(checked) => {
-                          const nextChecked = Boolean(checked);
-                          const resolved = fillMissingVatAmounts({
-                            amountWithoutVat: parseMoneyInput(adjustedValue),
-                            amountWithVat: parseMoneyInput(adjustedWithVatValue),
-                            vatRate: parseVatRateInput(vatRateValue),
-                          });
-                          setValues((prev) => ({
-                            ...prev,
-                            [row.monthKey]: {
-                              ...prev[row.monthKey],
-                              adjusted:
-                                adjustedValue ||
-                                (resolved.amountWithoutVat !== undefined
-                                  ? String(resolved.amountWithoutVat)
-                                  : adjustedValue),
-                              adjustedWithVat:
-                                adjustedWithVatValue ||
-                                (resolved.amountWithVat !== undefined
-                                  ? String(resolved.amountWithVat)
-                                  : adjustedWithVatValue),
-                              vatRate: vatRateValue,
-                              quotaAuto,
-                              adjustedAuto: nextChecked,
-                            },
-                          }));
-                        }}
-                      />
-                      <span className="text-xs text-muted-foreground">Рассчитать с НДС</span>
-                    </div>
                     <Button
                       size="icon"
                       variant="outline"
@@ -322,13 +289,13 @@ export default function CooQuotaClient() {
                           amountWithoutVat: parseMoneyInput(quotaValue),
                           amountWithVat: parseMoneyInput(quotaWithVatValue),
                           vatRate: parseVatRateInput(vatRateValue),
-                          autoCalculateAmountWithVat: quotaAuto,
+                          autoCalculateAmountWithVat: true,
                         });
                         const resolvedAdjusted = resolveVatAmounts({
                           amountWithoutVat: parseMoneyInput(adjustedValue),
                           amountWithVat: parseMoneyInput(adjustedWithVatValue),
                           vatRate: parseVatRateInput(vatRateValue),
-                          autoCalculateAmountWithVat: adjustedAuto,
+                          autoCalculateAmountWithVat: true,
                         });
                         if (
                           resolvedQuota.amountWithoutVat === undefined ||

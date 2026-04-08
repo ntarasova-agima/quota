@@ -33,14 +33,15 @@ import {
   isFundingSourceAllowedForCategory,
   isServiceRecipientCategory,
   normalizeFundingSource,
+  normalizeRequestCategory,
 } from "@/lib/requestRules";
 import {
   DEFAULT_VAT_RATE,
-  fillMissingVatAmounts,
-  matchesCalculatedAmountWithVat,
   parseMoneyInput,
   parseVatRateInput,
   resolveVatAmounts,
+  syncVatInputPair,
+  type VatAmountSource,
 } from "@/lib/vat";
 
 type SpecialistDraft = {
@@ -88,10 +89,11 @@ export default function NewRequestPage() {
   const [amount, setAmount] = useState("");
   const [amountWithVat, setAmountWithVat] = useState("");
   const [vatRate, setVatRate] = useState(String(DEFAULT_VAT_RATE));
-  const [autoCalculateAmountWithVat, setAutoCalculateAmountWithVat] = useState(true);
+  const [vatInputSource, setVatInputSource] = useState<VatAmountSource>("without");
   const [currency, setCurrency] = useState("RUB");
   const [fundingSource, setFundingSource] = useState("Квота на пресейлы");
   const [justification, setJustification] = useState("");
+  const [details, setDetails] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
   const [counterparty, setCounterparty] = useState("");
@@ -161,22 +163,21 @@ export default function NewRequestPage() {
     }
     const request = data.request;
     const normalizedFundingSource = normalizeFundingSource(request.fundingSource);
+    const normalizedStoredCategory = normalizeRequestCategory(request.category);
     const normalizedCategory =
-      request.category === SERVICE_PURCHASE_CATEGORY && isAiToolsFundingSource(request.fundingSource)
+      normalizedStoredCategory === SERVICE_PURCHASE_CATEGORY && isAiToolsFundingSource(request.fundingSource)
         ? AI_TOOLS_REQUEST_CATEGORY
-        : request.category;
+        : normalizedStoredCategory;
     setCategory(normalizedCategory);
     setTitle(request.title ?? "");
     setAmount(String(request.amount ?? ""));
     setAmountWithVat(request.amountWithVat !== undefined ? String(request.amountWithVat) : "");
     setVatRate(String(request.vatRate ?? DEFAULT_VAT_RATE));
-    setAutoCalculateAmountWithVat(
-      request.amountWithVat === undefined ||
-        matchesCalculatedAmountWithVat(request.amount, request.amountWithVat, request.vatRate),
-    );
+    setVatInputSource("without");
     setCurrency(request.currency);
     setFundingSource(normalizedFundingSource);
     setJustification(request.justification ?? "");
+    setDetails(request.details ?? "");
     setInvestmentReturn(request.investmentReturn ?? "");
     setClientName(request.clientName ?? "");
     setCounterparty(request.counterparty ?? "");
@@ -317,30 +318,30 @@ export default function NewRequestPage() {
     }
   }, [fundingSource, category]);
 
+  useEffect(() => {
+    if (!contestHasSpecialists) {
+      return;
+    }
+    const synced = syncVatInputPair({
+      amountWithoutVatInput:
+        effectiveAmountWithoutVatInput !== undefined ? String(effectiveAmountWithoutVatInput) : "",
+      amountWithVatInput: amountWithVat,
+      vatRateInput: vatRate,
+      source: "without",
+    });
+    if (synced.amountWithVatInput !== amountWithVat) {
+      setAmountWithVat(synced.amountWithVatInput);
+    }
+    if (vatInputSource !== "without") {
+      setVatInputSource("without");
+    }
+  }, [amountWithVat, contestHasSpecialists, effectiveAmountWithoutVatInput, vatInputSource, vatRate]);
+
   function handleCategoryChange(nextCategory: string) {
     setCategory(nextCategory);
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
-    }
-  }
-
-  function handleVatCalculationToggle(checked: boolean) {
-    const nextChecked = Boolean(checked);
-    setAutoCalculateAmountWithVat(nextChecked);
-    if (!nextChecked) {
-      return;
-    }
-    const resolved = fillMissingVatAmounts({
-      amountWithoutVat: effectiveAmountWithoutVatInput,
-      amountWithVat: parseMoneyInput(amountWithVat),
-      vatRate: parseVatRateInput(vatRate),
-    });
-    if (!contestHasSpecialists && !amount && resolved.amountWithoutVat !== undefined) {
-      setAmount(String(resolved.amountWithoutVat));
-    }
-    if (!amountWithVat && resolved.amountWithVat !== undefined) {
-      setAmountWithVat(String(resolved.amountWithVat));
     }
   }
 
@@ -410,7 +411,7 @@ export default function NewRequestPage() {
         amountWithoutVat: effectiveAmountWithoutVatInput,
         amountWithVat: parseMoneyInput(amountWithVat),
         vatRate: parseVatRateInput(vatRate),
-        autoCalculateAmountWithVat,
+        autoCalculateAmountWithVat: true,
       });
       if (resolvedAmounts.amountWithoutVat === undefined || resolvedAmounts.amountWithoutVat <= 0) {
         throw new Error("Укажите сумму без НДС или сумму с НДС");
@@ -428,6 +429,7 @@ export default function NewRequestPage() {
         currency,
         fundingSource,
         justification,
+        details: details.trim() || undefined,
         investmentReturn: investmentReturn.trim() || undefined,
         clientName,
         counterparty:
@@ -583,7 +585,18 @@ export default function NewRequestPage() {
                     type="text"
                     inputMode="decimal"
                     value={contestHasSpecialists ? String(contestAmount) : amount}
-                    onChange={(event) => setAmount(event.target.value.replace(/\s+/g, ""))}
+                    onChange={(event) => {
+                      const nextAmount = event.target.value.replace(/\s+/g, "");
+                      setVatInputSource("without");
+                      setAmount(nextAmount);
+                      const synced = syncVatInputPair({
+                        amountWithoutVatInput: nextAmount,
+                        amountWithVatInput: amountWithVat,
+                        vatRateInput: vatRate,
+                        source: "without",
+                      });
+                      setAmountWithVat(synced.amountWithVatInput);
+                    }}
                     disabled={contestHasSpecialists}
                   />
                   {contestHasSpecialists ? (
@@ -599,15 +612,24 @@ export default function NewRequestPage() {
                     type="text"
                     inputMode="decimal"
                     value={amountWithVat}
-                    onChange={(event) => setAmountWithVat(event.target.value.replace(/\s+/g, ""))}
+                    onChange={(event) => {
+                      const nextAmountWithVat = event.target.value.replace(/\s+/g, "");
+                      if (contestHasSpecialists) {
+                        setAmountWithVat(nextAmountWithVat);
+                        return;
+                      }
+                      setVatInputSource("with");
+                      setAmountWithVat(nextAmountWithVat);
+                      const synced = syncVatInputPair({
+                        amountWithoutVatInput: amount,
+                        amountWithVatInput: nextAmountWithVat,
+                        vatRateInput: vatRate,
+                        source: "with",
+                      });
+                      setAmount(synced.amountWithoutVatInput);
+                    }}
+                    disabled={contestHasSpecialists}
                   />
-                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Checkbox
-                      checked={autoCalculateAmountWithVat}
-                      onCheckedChange={(checked) => handleVatCalculationToggle(Boolean(checked))}
-                    />
-                    Рассчитать с НДС
-                  </label>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="vatRate">Ставка НДС, %</Label>
@@ -616,12 +638,34 @@ export default function NewRequestPage() {
                     type="text"
                     inputMode="decimal"
                     value={vatRate}
-                    onChange={(event) => setVatRate(event.target.value.replace(/\s+/g, ""))}
+                    onChange={(event) => {
+                      const nextVatRate = event.target.value.replace(/\s+/g, "");
+                      setVatRate(nextVatRate);
+                      const source = contestHasSpecialists ? "without" : vatInputSource;
+                      const synced = syncVatInputPair({
+                        amountWithoutVatInput:
+                          contestHasSpecialists
+                            ? effectiveAmountWithoutVatInput !== undefined
+                              ? String(effectiveAmountWithoutVatInput)
+                              : ""
+                            : amount,
+                        amountWithVatInput: amountWithVat,
+                        vatRateInput: nextVatRate,
+                        source,
+                      });
+                      if (!contestHasSpecialists) {
+                        setAmount(synced.amountWithoutVatInput);
+                      }
+                      setAmountWithVat(synced.amountWithVatInput);
+                    }}
                   />
                   <p className="text-xs text-muted-foreground">
                     По умолчанию {DEFAULT_VAT_RATE}%. Если поле пустое, считаем 0%.
                   </p>
                 </div>
+                <p className="text-xs text-muted-foreground sm:col-span-3">
+                  Введите ту сумму, которую знаете. НДС рассчитается автоматически в соответствии с указанным процентом.
+                </p>
               </div>
 
               {isContestCategory && (
@@ -818,6 +862,19 @@ export default function NewRequestPage() {
                   onChange={(event) => setJustification(event.target.value)}
                   rows={4}
                   required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="details">Детали заявки</Label>
+                <p className="text-xs text-muted-foreground">
+                  Важные ссылки, описание предмета закупки
+                </p>
+                <Textarea
+                  id="details"
+                  value={details}
+                  onChange={(event) => setDetails(event.target.value)}
+                  rows={4}
                 />
               </div>
 
