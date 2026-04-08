@@ -11,7 +11,7 @@ export default async function PresalesQuotaPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-12">
-        <AppHeader title="Квота на пресейлы" />
+        <AppHeader title="Квоты" />
         <PresalesQuotaClient />
       </main>
     </div>

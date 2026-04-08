@@ -47,7 +47,7 @@ export default function AppHeader({
           >
             Aurum
           </Link>
-          <p className="mt-2 text-sm text-muted-foreground">{title}</p>
+          <span className="sr-only">{title}</span>
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="text-xs text-muted-foreground text-right">
@@ -66,10 +66,7 @@ export default function AppHeader({
           </div>
         </div>
       </div>
-      <div className="flex flex-col gap-2">
-        <div className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-          Разделы
-        </div>
+      <div className="flex flex-col gap-2" aria-label={`Раздел ${title}`}>
         <div className="flex flex-wrap gap-2">
         {canApprove && (
           <Button asChild variant={pathname === "/approvals" ? "default" : "outline"}>

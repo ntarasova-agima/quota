@@ -66,28 +66,51 @@ export function isContestSpecialistValidated(item: {
 
 export function calculateIncomingRatio(params: {
   incomingAmount?: number;
+  incomingAmountWithVat?: number;
   amountWithoutVat?: number;
   amountWithVat?: number;
 }) {
-  if (
-    params.incomingAmount === undefined ||
-    !Number.isFinite(params.incomingAmount) ||
-    params.incomingAmount <= 0
-  ) {
-    return undefined;
-  }
-  const outgoingAmount =
-    typeof params.amountWithVat === "number" && Number.isFinite(params.amountWithVat) && params.amountWithVat > 0
+  const incomingWithoutVat =
+    typeof params.incomingAmount === "number" &&
+    Number.isFinite(params.incomingAmount) &&
+    params.incomingAmount > 0
+      ? params.incomingAmount
+      : undefined;
+  const incomingWithVat =
+    typeof params.incomingAmountWithVat === "number" &&
+    Number.isFinite(params.incomingAmountWithVat) &&
+    params.incomingAmountWithVat > 0
+      ? params.incomingAmountWithVat
+      : undefined;
+  const outgoingWithoutVat =
+    typeof params.amountWithoutVat === "number" &&
+    Number.isFinite(params.amountWithoutVat) &&
+    params.amountWithoutVat > 0
+      ? params.amountWithoutVat
+      : undefined;
+  const outgoingWithVat =
+    typeof params.amountWithVat === "number" &&
+    Number.isFinite(params.amountWithVat) &&
+    params.amountWithVat > 0
       ? params.amountWithVat
-      : typeof params.amountWithoutVat === "number" &&
-          Number.isFinite(params.amountWithoutVat) &&
-          params.amountWithoutVat > 0
-        ? params.amountWithoutVat
-        : undefined;
-  if (!outgoingAmount) {
+      : undefined;
+
+  const comparablePair =
+    incomingWithoutVat !== undefined && outgoingWithoutVat !== undefined
+      ? { incoming: incomingWithoutVat, outgoing: outgoingWithoutVat }
+      : incomingWithVat !== undefined && outgoingWithVat !== undefined
+        ? { incoming: incomingWithVat, outgoing: outgoingWithVat }
+        : incomingWithoutVat !== undefined && outgoingWithVat !== undefined
+          ? { incoming: incomingWithoutVat, outgoing: outgoingWithVat }
+          : incomingWithVat !== undefined && outgoingWithoutVat !== undefined
+            ? { incoming: incomingWithVat, outgoing: outgoingWithoutVat }
+            : undefined;
+
+  if (!comparablePair) {
     return undefined;
   }
-  return Number((params.incomingAmount / outgoingAmount).toFixed(4));
+
+  return Number((comparablePair.incoming / comparablePair.outgoing).toFixed(4));
 }
 
 export function formatIncomingRatio(value?: number, digits = 2) {
@@ -133,6 +156,17 @@ export function monthKeyToDateInput(monthKey?: string) {
     return "";
   }
   return `${match[1]}-${match[2]}-01`;
+}
+
+export function timestampToDateInput(timestamp?: number) {
+  if (timestamp === undefined) {
+    return "";
+  }
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 export function buildShipmentYearOptions(currentYear: number, selectedYear?: string) {

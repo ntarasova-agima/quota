@@ -74,7 +74,9 @@ const schema = defineSchema({
     lastAttachmentName: v.optional(v.string()),
     financePlanLinks: v.optional(v.array(v.string())),
     incomingAmount: v.optional(v.number()),
+    incomingAmountWithVat: v.optional(v.number()),
     incomingRatio: v.optional(v.number()),
+    shipmentDate: v.optional(v.number()),
     shipmentMonth: v.optional(v.string()),
     specialists: v.optional(
       v.array(

@@ -14,6 +14,9 @@ export const ACCEPTED_REQUEST_ATTACHMENT_EXTENSIONS = [
   ".png",
   ".gif",
   ".webp",
+  ".zip",
+  ".7z",
+  ".rar",
 ];
 
 export function isAllowedRequestAttachment(file: File) {

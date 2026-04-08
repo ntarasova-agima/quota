@@ -70,6 +70,9 @@ const ACCEPTED_ATTACHMENT_EXTENSIONS = [
   ".png",
   ".gif",
   ".webp",
+  ".zip",
+  ".7z",
+  ".rar",
 ];
 
 function isAllowedAttachment(file: File) {
@@ -1345,7 +1348,7 @@ export default function RequestDetailPage() {
                               : "Нажмите или перетащите файлы сюда"}
                           </span>
                           <span className="block text-sm text-muted-foreground">
-                            PDF, Office, изображения · до 40 МБ на файл · до 20 файлов
+                            PDF, Office, изображения, архивы · до 40 МБ на файл · до 20 файлов
                           </span>
                         </span>
                       </span>
@@ -1578,26 +1581,37 @@ export default function RequestDetailPage() {
               ) : null}
               {request.paidBy ? (
                 <div>
-                  <div className="text-muted-foreground">Когда заплатят нам</div>
+                  <div className="text-muted-foreground">Когда платят нам</div>
                   <p className="mt-1">{new Date(request.paidBy).toLocaleDateString("ru-RU")}</p>
                 </div>
               ) : null}
-              {request.incomingAmount !== undefined ? (
+              {request.incomingAmount !== undefined || request.incomingAmountWithVat !== undefined ? (
                 <div>
-                  <div className="text-muted-foreground">Сколько платят нам</div>
-                  <p className="mt-1">{request.incomingAmount.toLocaleString("ru-RU")} {request.currency}</p>
+                  <div className="text-muted-foreground">Сколько платят нам (сумма отгрузки)</div>
+                  <p className="mt-1">
+                    {formatAmountPair({
+                      amountWithoutVat: request.incomingAmount,
+                      amountWithVat: request.incomingAmountWithVat,
+                      currency: request.currency,
+                      vatRate: request.vatRate,
+                    })}
+                  </p>
                 </div>
               ) : null}
               {request.incomingRatio !== undefined ? (
                 <div>
-                  <div className="text-muted-foreground">Какой Х</div>
+                  <div className="text-muted-foreground">Коэффициент транзита</div>
                   <p className="mt-1">{formatIncomingRatio(request.incomingRatio)}</p>
                 </div>
               ) : null}
-              {request.shipmentMonth ? (
+              {request.shipmentDate || request.shipmentMonth ? (
                 <div>
-                  <div className="text-muted-foreground">Месяц отгрузки</div>
-                  <p className="mt-1">{formatMonthKeyLabel(request.shipmentMonth)}</p>
+                  <div className="text-muted-foreground">Дата отгрузки</div>
+                  <p className="mt-1">
+                    {request.shipmentDate
+                      ? new Date(request.shipmentDate).toLocaleDateString("ru-RU")
+                      : formatMonthKeyLabel(request.shipmentMonth)}
+                  </p>
                 </div>
               ) : null}
               {request.fundingSource === "Отгрузки проекта" && !request.financePlanLinks?.length ? (

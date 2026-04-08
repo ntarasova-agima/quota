@@ -22,7 +22,7 @@ export default function PresalesQuotaClient() {
 
   return (
     <EditableQuotaTable
-      title="Квоты на пресейлы"
+      title="Квоты"
       rows={rows}
       onLoadMore={() => setMonthsCount((prev) => prev + 12)}
       onSave={async (params) => {
