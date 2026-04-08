@@ -48,6 +48,67 @@ function toRubVatAmounts(params: {
   };
 }
 
+function sumPaymentSplitAmounts(paymentSplits: any[]) {
+  return paymentSplits.reduce((sum: number, split: any) => sum + (split.amountWithoutVat ?? 0), 0);
+}
+
+function sumPaymentSplitAmountsWithVat(paymentSplits: any[], vatRate?: number) {
+  return paymentSplits.reduce((sum: number, split: any) => {
+    const amountWithVat =
+      getAmountWithVat(split.amountWithoutVat ?? 0, split.amountWithVat, split.vatRate ?? vatRate) ??
+      (split.amountWithoutVat ?? 0);
+    return sum + amountWithVat;
+  }, 0);
+}
+
+function getRequestPaymentTargetAmounts(request: any) {
+  const paymentSplits = request.paymentSplits ?? [];
+  const splitTotalWithoutVat = sumPaymentSplitAmounts(paymentSplits);
+  const splitTotalWithVat = sumPaymentSplitAmountsWithVat(paymentSplits, request.vatRate);
+  if (request.paymentResidualAmount !== undefined || request.paymentResidualAmountWithVat !== undefined) {
+    const residualAmountWithoutVat = request.paymentResidualAmount ?? 0;
+    const residualAmountWithVat =
+      getAmountWithVat(
+        residualAmountWithoutVat,
+        request.paymentResidualAmountWithVat,
+        request.vatRate,
+      ) ?? residualAmountWithoutVat;
+    return {
+      amountWithoutVat: splitTotalWithoutVat + residualAmountWithoutVat,
+      amountWithVat: splitTotalWithVat + residualAmountWithVat,
+    };
+  }
+
+  const amountWithoutVat = request.actualPaidAmount ?? request.amount ?? 0;
+  const amountWithVat =
+    getAmountWithVat(
+      amountWithoutVat,
+      request.actualPaidAmountWithVat ?? request.amountWithVat,
+      request.vatRate,
+    ) ?? amountWithoutVat;
+  return {
+    amountWithoutVat,
+    amountWithVat,
+  };
+}
+
+function getRequestPaymentResidualAmounts(request: any) {
+  if (request.paymentResidualAmount !== undefined || request.paymentResidualAmountWithVat !== undefined) {
+    const amountWithoutVat = request.paymentResidualAmount ?? 0;
+    const amountWithVat =
+      getAmountWithVat(
+        amountWithoutVat,
+        request.paymentResidualAmountWithVat,
+        request.vatRate,
+      ) ?? amountWithoutVat;
+    return {
+      amountWithoutVat,
+      amountWithVat,
+    };
+  }
+  return getRequestPaymentTargetAmounts(request);
+}
+
 export function getEffectiveQuotaAllocations(request: any) {
   if (
     request.isCanceled ||
@@ -63,6 +124,8 @@ export function getEffectiveQuotaAllocations(request: any) {
   const paidMonthKey = monthKeyFromTimestamp(request.paidAt);
   const latestRate = request.paymentCurrencyRate;
   const paymentSplits = request.paymentSplits ?? [];
+  const paymentTargetAmounts = getRequestPaymentTargetAmounts(request);
+  const paymentResidualAmounts = getRequestPaymentResidualAmounts(request);
 
   const splitAllocations = paymentSplits
     .map((split: any) => {
@@ -88,26 +151,6 @@ export function getEffectiveQuotaAllocations(request: any) {
   const requestAmountWithVat =
     getAmountWithVat(requestAmountWithoutVat, request.amountWithVat, request.vatRate) ??
     requestAmountWithoutVat;
-  const plannedAmountWithoutVat =
-    request.plannedPaymentAmount ?? request.actualPaidAmount ?? requestAmountWithoutVat;
-  const plannedAmountWithVat =
-    getAmountWithVat(
-      plannedAmountWithoutVat,
-      request.plannedPaymentAmountWithVat ?? request.actualPaidAmountWithVat,
-      request.vatRate,
-    ) ?? plannedAmountWithoutVat;
-  const residualAmountWithoutVat =
-    request.paymentResidualAmount ??
-    Math.max(
-      plannedAmountWithoutVat -
-        paymentSplits.reduce((sum: number, split: any) => sum + (split.amountWithoutVat ?? 0), 0),
-      0,
-    );
-  const residualAmountWithVat = getAmountWithVat(
-    residualAmountWithoutVat,
-    undefined,
-    request.vatRate,
-  ) ?? residualAmountWithoutVat;
 
   if (request.status === "approved") {
     if (!approvalMonthKey) return [];
@@ -130,8 +173,8 @@ export function getEffectiveQuotaAllocations(request: any) {
     const monthKey = plannedMonthKey ?? approvalMonthKey;
     if (!monthKey) return [];
     const amounts = toRubVatAmounts({
-      amountWithoutVat: plannedAmountWithoutVat,
-      amountWithVat: plannedAmountWithVat,
+      amountWithoutVat: paymentTargetAmounts.amountWithoutVat,
+      amountWithVat: paymentTargetAmounts.amountWithVat,
       currency: request.currency,
       currencyRate: latestRate,
       vatRate: request.vatRate,
@@ -147,10 +190,10 @@ export function getEffectiveQuotaAllocations(request: any) {
   if (request.status === "partially_paid") {
     const allocations = [...splitAllocations];
     const monthKey = plannedMonthKey ?? approvalMonthKey;
-    if (monthKey && residualAmountWithoutVat > 0) {
+    if (monthKey && paymentResidualAmounts.amountWithoutVat > 0) {
       const amounts = toRubVatAmounts({
-        amountWithoutVat: residualAmountWithoutVat,
-        amountWithVat: residualAmountWithVat,
+        amountWithoutVat: paymentResidualAmounts.amountWithoutVat,
+        amountWithVat: paymentResidualAmounts.amountWithVat,
         currency: request.currency,
         currencyRate: latestRate,
         vatRate: request.vatRate,
@@ -166,11 +209,11 @@ export function getEffectiveQuotaAllocations(request: any) {
   if (request.status === "paid" || request.status === "closed") {
     if (paymentSplits.length > 0) {
       const allocations = [...splitAllocations];
-      const totalAmountWithoutVat = request.actualPaidAmount ?? plannedAmountWithoutVat;
+      const totalAmountWithoutVat = request.actualPaidAmount ?? paymentTargetAmounts.amountWithoutVat;
       const totalAmountWithVat =
         getAmountWithVat(
           totalAmountWithoutVat,
-          request.actualPaidAmountWithVat ?? request.plannedPaymentAmountWithVat,
+          request.actualPaidAmountWithVat ?? paymentTargetAmounts.amountWithVat,
           request.vatRate,
         ) ?? totalAmountWithoutVat;
       const splitTotalWithoutVat = paymentSplits.reduce(
@@ -217,8 +260,8 @@ export function getEffectiveQuotaAllocations(request: any) {
     const monthKey = paidMonthKey ?? plannedMonthKey ?? approvalMonthKey;
     if (!monthKey) return [];
     const amounts = toRubVatAmounts({
-      amountWithoutVat: request.actualPaidAmount ?? plannedAmountWithoutVat,
-      amountWithVat: request.actualPaidAmountWithVat ?? plannedAmountWithVat,
+      amountWithoutVat: request.actualPaidAmount ?? paymentTargetAmounts.amountWithoutVat,
+      amountWithVat: request.actualPaidAmountWithVat ?? paymentTargetAmounts.amountWithVat,
       currency: request.currency,
       currencyRate: latestRate,
       vatRate: request.vatRate,

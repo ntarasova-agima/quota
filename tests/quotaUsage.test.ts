@@ -17,14 +17,16 @@ describe("quotaUsage", () => {
     ]);
   });
 
-  it("uses planned payment month and currency rate for planned payments", () => {
+  it("uses full payment target for planned partial payments", () => {
     const allocations = getEffectiveQuotaAllocations({
       status: "payment_planned",
       amount: 100,
       amountWithVat: 120,
       vatRate: 20,
-      plannedPaymentAmount: 120,
-      plannedPaymentAmountWithVat: 144,
+      paymentResidualAmount: 120,
+      paymentResidualAmountWithVat: 144,
+      plannedPaymentAmount: 50,
+      plannedPaymentAmountWithVat: 60,
       currency: "USD",
       paymentCurrencyRate: 90,
       approvalDeadline: new Date("2026-04-10").getTime(),
@@ -42,8 +44,10 @@ describe("quotaUsage", () => {
       amount: 1000,
       amountWithVat: 1220,
       vatRate: 22,
-      plannedPaymentAmount: 1000,
       paymentResidualAmount: 400,
+      paymentResidualAmountWithVat: 488,
+      plannedPaymentAmount: 250,
+      plannedPaymentAmountWithVat: 305,
       currency: "RUB",
       approvalDeadline: new Date("2026-04-10").getTime(),
       paymentPlannedAt: new Date("2026-06-01").getTime(),
