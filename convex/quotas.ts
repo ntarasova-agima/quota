@@ -43,7 +43,10 @@ function getSpentPair(
   return spentByMonth.get(key) ?? { amountWithoutVat: 0, amountWithVat: 0 };
 }
 
-async function ensureRole(ctx: any, role: "NBD" | "AI-BOSS" | "CFD" | "COO") {
+async function ensureAnyRole(
+  ctx: any,
+  roles: Array<"NBD" | "AI-BOSS" | "CFD" | "COO">,
+) {
   const userId = await getAuthUserId(ctx);
   if (!userId) {
     if (process.env.ALLOW_DEV_QUOTA_DELETE === "true") {
@@ -59,7 +62,7 @@ async function ensureRole(ctx: any, role: "NBD" | "AI-BOSS" | "CFD" | "COO") {
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const hasRole = record?.roles?.includes(role);
+  const hasRole = roles.some((role) => record?.roles?.includes(role));
   if (!hasRole) {
     throw new Error("Not authorized");
   }
@@ -67,19 +70,19 @@ async function ensureRole(ctx: any, role: "NBD" | "AI-BOSS" | "CFD" | "COO") {
 }
 
 async function ensureNbd(ctx: any) {
-  return await ensureRole(ctx, "NBD");
+  return await ensureAnyRole(ctx, ["NBD"]);
 }
 
 async function ensureAiBoss(ctx: any) {
-  return await ensureRole(ctx, "AI-BOSS");
+  return await ensureAnyRole(ctx, ["AI-BOSS"]);
 }
 
 async function ensureCfd(ctx: any) {
-  return await ensureRole(ctx, "CFD");
+  return await ensureAnyRole(ctx, ["CFD"]);
 }
 
 async function ensureCoo(ctx: any) {
-  return await ensureRole(ctx, "COO");
+  return await ensureAnyRole(ctx, ["COO"]);
 }
 
 export const listByMonthKeys = query({
@@ -87,7 +90,7 @@ export const listByMonthKeys = query({
     monthKeys: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    await ensureNbd(ctx);
+    await ensureAnyRole(ctx, ["NBD", "CFD", "COO"]);
     const items = await ctx.db.query("presalesQuotas").collect();
     const map = new Map(items.map((item) => [item.monthKey, item]));
     const requests = await ctx.db.query("requests").collect();
@@ -178,7 +181,7 @@ export const listAiToolByMonthKeys = query({
     monthKeys: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    await ensureAiBoss(ctx);
+    await ensureAnyRole(ctx, ["AI-BOSS", "CFD", "COO"]);
     const items = await ctx.db.query("aiToolQuotas").collect();
     const map = new Map(items.map((item) => [item.monthKey, item]));
     const requests = await ctx.db.query("requests").collect();
@@ -272,7 +275,7 @@ export const listCfdByMonthKeys = query({
     monthKeys: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    await ensureCfd(ctx);
+    await ensureAnyRole(ctx, ["CFD", "COO"]);
     const items = await ctx.db.query("cfdQuotas").collect();
     const map = new Map(items.map((item) => [item.monthKey, item]));
     const requests = await ctx.db.query("requests").collect();
@@ -377,7 +380,7 @@ export const listCooByMonthKeys = query({
     monthKeys: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    await ensureCoo(ctx);
+    await ensureAnyRole(ctx, ["COO", "CFD"]);
     const items = await ctx.db.query("cooQuotas").collect();
     const map = new Map(items.map((item) => [item.monthKey, item]));
     const requests = await ctx.db.query("requests").collect();

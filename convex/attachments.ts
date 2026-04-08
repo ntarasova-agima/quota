@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
+import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
 
 const MAX_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_SIZE = 40 * 1024 * 1024;
@@ -61,7 +62,10 @@ function hasHodAccessToRequest(roleRecord: any, request: any) {
     return false;
   }
   const specialists = request.specialists ?? [];
-  return specialists.some((item: any) => item.department && departments.includes(item.department));
+  return specialists.some(
+    (item: any) =>
+      requiresContestSpecialistValidation(item) && departments.includes(item.department),
+  );
 }
 
 async function hasHistoricalApprovalAccess(ctx: any, requestId: any, email: string) {

@@ -70,6 +70,7 @@ function toEndOfDay(value: string) {
 export default function RequestsPage() {
   const searchParams = useSearchParams();
   const [statusFilter, setStatusFilter] = useState("all");
+  const [paymentDueFilter, setPaymentDueFilter] = useState<"all" | "today" | "overdue">("all");
   const [myStatusFilter, setMyStatusFilter] = useState("all");
   const [authorFilter, setAuthorFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState("all");
@@ -139,6 +140,7 @@ export default function RequestsPage() {
                 : tagFilter,
           category: categoryFilter === "all" ? undefined : categoryFilter,
           fundingSource: fundingFilter === "all" ? undefined : fundingFilter,
+          paymentDueFilter: paymentDueFilter === "all" ? undefined : paymentDueFilter,
           createdFrom: toStartOfDay(createdFrom),
           createdTo: toEndOfDay(createdTo),
           requestCodeQuery: allRequestCodeQuery.trim() || undefined,
@@ -173,7 +175,18 @@ export default function RequestsPage() {
 
   useEffect(() => {
     setAllPage(1);
-  }, [statusFilter, authorFilter, tagFilter, categoryFilter, fundingFilter, createdFrom, createdTo, allSort, allRequestCodeQuery]);
+  }, [
+    statusFilter,
+    authorFilter,
+    tagFilter,
+    categoryFilter,
+    fundingFilter,
+    paymentDueFilter,
+    createdFrom,
+    createdTo,
+    allSort,
+    allRequestCodeQuery,
+  ]);
 
   return (
     <RequireAuth>
@@ -497,6 +510,37 @@ export default function RequestsPage() {
                   <CardTitle>Все заявки</CardTitle>
                   <CardDescription>Полный список заявок.</CardDescription>
                 </div>
+                {isBuh ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant={paymentDueFilter === "all" ? "default" : "outline"}
+                      onClick={() => setPaymentDueFilter("all")}
+                    >
+                      Все даты
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={paymentDueFilter === "today" ? "default" : "outline"}
+                      onClick={() => {
+                        setStatusFilter("all");
+                        setPaymentDueFilter("today");
+                      }}
+                    >
+                      Сегодня
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={paymentDueFilter === "overdue" ? "default" : "outline"}
+                      onClick={() => {
+                        setStatusFilter("all");
+                        setPaymentDueFilter("overdue");
+                      }}
+                    >
+                      Просрочено
+                    </Button>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap gap-3">
                   <Select value={allSort} onValueChange={setAllSort}>
                     <SelectTrigger className="w-[220px]">
@@ -601,6 +645,11 @@ export default function RequestsPage() {
                 </div>
               </CardHeader>
               <CardContent>
+                {isBuh && paymentDueFilter !== "all" ? (
+                  <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    Показываем заявки с остатком к оплате, включая частично оплаченные.
+                  </div>
+                ) : null}
                 <div className="space-y-3">
                   {allRequestItems.length ? (
                     allRequestItems.map(({ request, approvals }) => {
