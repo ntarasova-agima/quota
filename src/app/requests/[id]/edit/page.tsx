@@ -420,6 +420,22 @@ export default function NewRequestPage() {
   const financeLinksInvalid = showValidationErrors && financeLinksRequired && financeLinksList.length === 0;
   const approvalDeadlineInvalid = showValidationErrors && !approvalDeadline;
   const neededByInvalid = showValidationErrors && !neededBy;
+  const hasBlockingValidationErrors =
+    !title.trim() ||
+    !clientName.trim() ||
+    !resolvedAmountsPreview.amountWithoutVat ||
+    !resolvedAmountsPreview.amountWithVat ||
+    resolvedAmountsPreview.amountWithoutVat <= 0 ||
+    resolvedAmountsPreview.amountWithVat <= 0 ||
+    (showCounterparty && !counterparty.trim()) ||
+    (isPaymentMethodRequired && !paymentMethod) ||
+    !justification.trim() ||
+    (category === "Welcome-бонус" && !investmentReturn.trim()) ||
+    (financeLinksRequired && financeLinksList.length === 0) ||
+    !approvalDeadline ||
+    !neededBy ||
+    Boolean(fundingError) ||
+    Boolean(paidByError);
 
   const enforcedRoles = useMemo(() => {
     return new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
@@ -579,6 +595,9 @@ export default function NewRequestPage() {
     if (!confirmWorkflowReset) {
       setPendingConfirmation(null);
     }
+    if (hasBlockingValidationErrors) {
+      return;
+    }
     setSubmitting(true);
     try {
       if (approvalDeadline) {
@@ -589,17 +608,11 @@ export default function NewRequestPage() {
           throw new Error("Дедлайн согласования должен быть не раньше завтрашнего дня");
         }
       }
-      if (fundingError) {
-        throw new Error("выбран неверный источник финансирования или категория заявки");
-      }
       if (approvalDeadline && neededBy && new Date(approvalDeadline) > new Date(neededBy)) {
         throw new Error("Дедлайн согласования должен быть не позже даты, когда нужно оплатить");
       }
       if (category === "Welcome-бонус" && !investmentReturn.trim()) {
         throw new Error("Укажите, как будем возвращать инвестиции");
-      }
-      if (paidByError) {
-        throw new Error(paidByError);
       }
       const resolvedAmounts = resolveVatAmounts({
         amountWithoutVat: effectiveAmountWithoutVatInput,
