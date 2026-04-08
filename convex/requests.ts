@@ -659,7 +659,6 @@ function buildEditImpact(previous: any, next: any, approvals: any[]) {
   const categoryChanged = previous.category !== next.category;
   const counterpartyChanged = (previous.counterparty ?? "") !== (next.counterparty ?? "");
   const neededByChanged = previous.neededBy !== next.neededBy;
-  const paidByChanged = previous.paidBy !== next.paidBy;
   const monthChanged = oldMonthKey !== newMonthKey;
   const hadApprovalProgress = approvals.some((item) => item.status !== "pending");
 
@@ -715,11 +714,6 @@ function buildEditImpact(previous: any, next: any, approvals: any[]) {
   if (neededByChanged && previous.neededBy && next.neededBy && next.neededBy < previous.neededBy) {
     approvedReviewerEmails.forEach((email) => notifyApprovedEmails.add(email));
     infoLines.push("Более ранняя дата получения денег уведомит уже согласовавших.");
-  }
-
-  if (paidByChanged && previous.paidBy && next.paidBy && next.paidBy > previous.paidBy) {
-    approvedReviewerEmails.forEach((email) => notifyApprovedEmails.add(email));
-    infoLines.push("Более поздняя дата оплаты от клиента уведомит уже согласовавших.");
   }
 
   if (counterpartyChanged) {
@@ -835,9 +829,6 @@ function validateRequestPayload(args: any) {
     (!args.financePlanLinks || args.financePlanLinks.length === 0)
   ) {
     throw new Error("Финплан обязателен для отгрузок проекта");
-  }
-  if (args.fundingSource === "Отгрузки проекта" && !args.paidBy) {
-    throw new Error("Укажите дату, когда заплатят нам");
   }
   if (args.fundingSource === PRESALES_FUNDING_SOURCE && !args.requiredRoles.includes("NBD")) {
     throw new Error("Для квот NBD обязателен NBD");
