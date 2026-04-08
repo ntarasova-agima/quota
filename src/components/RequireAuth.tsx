@@ -1,14 +1,17 @@
 "use client";
 
 import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth, useMutation } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/convex";
 
+const BOOTSTRAP_TIMEOUT_MS = 8000;
+
 export default function RequireAuth({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const { signOut } = useAuthActions();
+  const profile = useQuery(api.roles.myProfile, isAuthenticated ? {} : "skip");
   const ensureCurrentUserRole = useMutation(api.roles.ensureCurrentUserRole);
   const router = useRouter();
   const pathname = usePathname();
@@ -18,8 +21,8 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
   const [linkCode, setLinkCode] = useState<string | undefined>(undefined);
   const [linkEmail, setLinkEmail] = useState<string | undefined>(undefined);
   const [linkChecked, setLinkChecked] = useState(false);
-  const [bootstrapReady, setBootstrapReady] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
+  const [bootstrapRequested, setBootstrapRequested] = useState(false);
   const [redirectingToProfile, setRedirectingToProfile] = useState(false);
 
   const linkParams = useMemo(() => {
@@ -43,70 +46,81 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isAuthenticated) {
-      setBootstrapReady(false);
       setBootstrapping(false);
+      setBootstrapRequested(false);
       setRedirectingToProfile(false);
+      setAccessError(null);
       return;
     }
-    if (bootstrapReady || bootstrapping || redirectingToProfile) {
+    if (profile === undefined || bootstrapping || redirectingToProfile) {
       return;
     }
 
-    let cancelled = false;
-    setAccessError(null);
-    setBootstrapping(true);
-    ensureCurrentUserRole({})
-      .then((result) => {
-        if (cancelled) {
-          return;
-        }
-        if (result.needsOnboarding && pathname !== "/profile") {
-          setRedirectingToProfile(true);
-          const params = new URLSearchParams();
-          params.set("onboarding", "1");
-          if (typeof window !== "undefined") {
-            const nextPath = `${window.location.pathname}${window.location.search}`;
-            if (nextPath && nextPath !== "/profile") {
-              params.set("next", nextPath);
-            }
+    if (!profile?.hasRoleRecord) {
+      if (bootstrapRequested) {
+        return;
+      }
+      let cancelled = false;
+      setBootstrapping(true);
+      setBootstrapRequested(true);
+      setAccessError(null);
+
+      Promise.race([
+        ensureCurrentUserRole({}),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Не удалось быстро создать профиль. Обновите страницу.")), BOOTSTRAP_TIMEOUT_MS),
+        ),
+      ])
+        .catch(async (err) => {
+          if (cancelled) {
+            return;
           }
-          router.replace(`/profile?${params.toString()}`);
-          return;
-        }
-        setBootstrapReady(true);
-      })
-      .catch(async (err) => {
-        if (cancelled) {
-          return;
-        }
-        const message = err instanceof Error ? err.message : "Не удалось проверить доступ";
-        setAccessError(message);
-        if (typeof window !== "undefined") {
-          sessionStorage.removeItem("auth_code");
-          sessionStorage.removeItem("auth_email");
-        }
-        try {
-          await signOut();
-        } catch {
-          // Ignore sign-out failures and still send the user to the sign-in page.
-        }
-        router.replace(`/sign-in?error=${encodeURIComponent(message)}`);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setBootstrapping(false);
-        }
-      });
+          const message = err instanceof Error ? err.message : "Не удалось проверить доступ";
+          setAccessError(message);
+          setBootstrapRequested(false);
+          if (message.includes("@agima.ru") || message.includes("архивирован")) {
+            if (typeof window !== "undefined") {
+              sessionStorage.removeItem("auth_code");
+              sessionStorage.removeItem("auth_email");
+            }
+            try {
+              await signOut();
+            } catch {
+              // Ignore sign-out failures and still route the user back to sign-in.
+            }
+            router.replace(`/sign-in?error=${encodeURIComponent(message)}`);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setBootstrapping(false);
+          }
+        });
 
-    return () => {
-      cancelled = true;
-    };
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (profile.needsOnboarding && pathname !== "/profile") {
+      setRedirectingToProfile(true);
+      const params = new URLSearchParams();
+      params.set("onboarding", "1");
+      if (typeof window !== "undefined") {
+        const nextPath = `${window.location.pathname}${window.location.search}`;
+        if (nextPath && nextPath !== "/profile") {
+          params.set("next", nextPath);
+        }
+      }
+      router.replace(`/profile?${params.toString()}`);
+    }
   }, [
     bootstrapping,
-    bootstrapReady,
+    bootstrapRequested,
     ensureCurrentUserRole,
     isAuthenticated,
     pathname,
+    profile,
     redirectingToProfile,
     router,
     signOut,
@@ -129,24 +143,35 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
     router.replace("/sign-in");
   }, [isAuthenticated, isLoading, router, linkParams, linkChecked, autoAttempted]);
 
-  if (!isAuthenticated || (isAuthenticated && (!bootstrapReady || redirectingToProfile))) {
+  const shouldShowLoader =
+    !isAuthenticated ||
+    profile === undefined ||
+    bootstrapping ||
+    redirectingToProfile ||
+    (Boolean(profile?.needsOnboarding) && pathname !== "/profile");
+
+  if (shouldShowLoader) {
     return (
       <div className="min-h-screen bg-background text-foreground">
         <main className="mx-auto flex min-h-screen w-full max-w-3xl items-center px-6 py-12">
-          <p className="text-sm text-muted-foreground">
-            {!isAuthenticated
-              ? linkParams.codeParam
-                ? "Переходим к авторизации..."
-                : "Проверяем сессию..."
-              : redirectingToProfile
-                ? "Перенаправляем на заполнение профиля..."
-                : "Проверяем доступ..."}
-          </p>
-          {accessError && (
-            <p className="mt-2 text-sm text-destructive">
-              {accessError} — попробуйте войти через экран входа.
+          <div>
+            <p className="text-sm text-muted-foreground">
+              {!isAuthenticated
+                ? linkParams.codeParam
+                  ? "Переходим к авторизации..."
+                  : "Проверяем сессию..."
+                : redirectingToProfile || (profile?.needsOnboarding && pathname !== "/profile")
+                  ? "Перенаправляем на заполнение профиля..."
+                  : bootstrapping
+                    ? "Создаем профиль..."
+                    : "Проверяем доступ..."}
             </p>
-          )}
+            {accessError && (
+              <p className="mt-2 text-sm text-destructive">
+                {accessError}
+              </p>
+            )}
+          </div>
         </main>
       </div>
     );
