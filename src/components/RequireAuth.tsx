@@ -55,9 +55,12 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
     if (profile === undefined) {
       return;
     }
+    if (profile === null) {
+      return;
+    }
 
-    const hasRoleRecord = profile?.hasRoleRecord ?? false;
-    const needsOnboarding = profile?.needsOnboarding ?? false;
+    const hasRoleRecord = profile.hasRoleRecord;
+    const needsOnboarding = profile.needsOnboarding;
 
     if (!hasRoleRecord) {
       if (bootstrapStartedRef.current) {

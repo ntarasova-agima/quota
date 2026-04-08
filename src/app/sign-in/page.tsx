@@ -1,15 +1,14 @@
 "use client";
 
 import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Script from "next/script";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useQuery } from "convex/react";
 import { api } from "@/lib/convex";
 
 const captureParams = `
@@ -44,8 +43,10 @@ function isAllowedSignInEmail(value: string) {
 export default function SignInPage() {
   const { signIn } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
+  const ensureCurrentUserRole = useMutation(api.roles.ensureCurrentUserRole);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const bootstrapStartedRef = useRef(false);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"email" | "code">("email");
@@ -55,7 +56,8 @@ export default function SignInPage() {
   const [linkCode, setLinkCode] = useState<string | undefined>(undefined);
   const [linkEmail, setLinkEmail] = useState<string | undefined>(undefined);
   const [linkChecked, setLinkChecked] = useState(false);
-  const myRoles = useQuery(api.roles.myRoles, isAuthenticated ? {} : "skip");
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const profile = useQuery(api.roles.myProfile, isAuthenticated ? {} : "skip");
   const signInError = searchParams.get("error");
 
   const linkParams = useMemo(() => {
@@ -100,10 +102,39 @@ export default function SignInPage() {
   }, [searchParams]);
 
   useEffect(() => {
-    if (!isLoading && isAuthenticated && myRoles) {
-      router.replace(myRoles.includes("BUH") || myRoles.includes("HOD") ? "/approvals" : "/requests");
+    if (isLoading || !isAuthenticated || profile === undefined || profile === null) {
+      return;
     }
-  }, [isAuthenticated, isLoading, myRoles, router]);
+    if (!profile.hasRoleRecord) {
+      if (bootstrapStartedRef.current) {
+        return;
+      }
+      bootstrapStartedRef.current = true;
+      setAuthMessage("Создаем профиль...");
+      ensureCurrentUserRole({})
+        .then(() => {
+          setAuthMessage("Подготавливаем ваш профиль...");
+        })
+        .catch((err) => {
+          bootstrapStartedRef.current = false;
+          setAuthMessage(null);
+          setError(err instanceof Error ? err.message : "Не удалось создать профиль");
+        });
+      return;
+    }
+
+    bootstrapStartedRef.current = false;
+    if (profile.needsOnboarding) {
+      setAuthMessage("Перенаправляем на заполнение профиля...");
+      router.replace("/profile?onboarding=1");
+      return;
+    }
+
+    setAuthMessage("Входим в сервис...");
+    router.replace(
+      profile.roles.includes("BUH") || profile.roles.includes("HOD") ? "/approvals" : "/requests",
+    );
+  }, [ensureCurrentUserRole, isAuthenticated, isLoading, profile, router]);
 
   useEffect(() => {
     if (autoAttempted || !linkParams.codeParam || !linkChecked) {
@@ -204,6 +235,11 @@ export default function SignInPage() {
             <CardDescription>Код придет на почту.</CardDescription>
           </CardHeader>
           <CardContent>
+            {isAuthenticated && authMessage ? (
+              <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">
+                {authMessage}
+              </div>
+            ) : null}
             <form className="space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
                 <Label htmlFor="email">Почта</Label>
