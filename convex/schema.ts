@@ -203,14 +203,6 @@ const schema = defineSchema({
     month: v.number(),
     quota: v.number(),
     spent: v.number(),
-      updatedAt: v.number(),
-    }).index("by_monthKey", ["monthKey"]),
-  nbdServiceQuotas: defineTable({
-    monthKey: v.string(),
-    year: v.number(),
-    month: v.number(),
-    quota: v.number(),
-    spent: v.number(),
     updatedAt: v.number(),
   }).index("by_monthKey", ["monthKey"]),
   aiToolQuotas: defineTable({

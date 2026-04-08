@@ -101,10 +101,6 @@ export default function NewRequestPage() {
     api.quotas.listByMonthKeys,
     isNbd && fundingSource === "Квота на пресейлы" ? { monthKeys: presalesMonthKeys } : "skip",
   );
-  const aiServiceQuotas = useQuery(
-    api.quotas.listNbdServiceByMonthKeys,
-    isNbd && fundingSource === "Квота на AI-подписки" ? { monthKeys: presalesMonthKeys } : "skip",
-  );
   const aiToolQuotas = useQuery(
     api.quotas.listAiToolByMonthKeys,
     isAiBoss && fundingSource === "Квоты на AI-инструменты" ? { monthKeys: presalesMonthKeys } : "skip",
@@ -139,11 +135,15 @@ export default function NewRequestPage() {
       return;
     }
     const request = data.request;
+    const normalizedFundingSource =
+      request.fundingSource === "Квота на AI-подписки"
+        ? "Квоты на AI-инструменты"
+        : request.fundingSource;
     setCategory(request.category);
     setTitle(request.title ?? "");
     setAmount(String(request.amount ?? ""));
     setCurrency(request.currency);
-    setFundingSource(request.fundingSource);
+    setFundingSource(normalizedFundingSource);
     setJustification(request.justification ?? "");
     setInvestmentReturn(request.investmentReturn ?? "");
     setClientName(request.clientName ?? "");
@@ -248,7 +248,7 @@ export default function NewRequestPage() {
 
   const enforcedRoles = useMemo(() => {
     const enforced = new Set<RoleOption>();
-    if (fundingSource === "Квота на пресейлы" || fundingSource === "Квота на AI-подписки") {
+    if (fundingSource === "Квота на пресейлы") {
       enforced.add("NBD");
     }
     if (fundingSource === "Квоты на AI-инструменты") {
@@ -295,7 +295,7 @@ export default function NewRequestPage() {
   useEffect(() => {
     if (
       category === "Закупка сервисов" &&
-      !["Квота на внутренние затраты", "Квота на AI-подписки", "Квоты на AI-инструменты"].includes(fundingSource)
+      !["Квота на внутренние затраты", "Квоты на AI-инструменты"].includes(fundingSource)
     ) {
       setFundingSource("Квота на внутренние затраты");
     }
@@ -768,15 +768,12 @@ export default function NewRequestPage() {
                 </div>
               )}
               {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
-                (fundingSource === "Квота на AI-подписки" && category === "Закупка сервисов" && isNbd && aiServiceQuotas?.length) ||
                 (fundingSource === "Квоты на AI-инструменты" && category === "Закупка сервисов" && isAiBoss && aiToolQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
                   <div className="font-medium">Остаток квот</div>
                   <div className="mt-2 grid gap-2">
                     {(
-                      fundingSource === "Квота на AI-подписки"
-                        ? aiServiceQuotas
-                        : fundingSource === "Квоты на AI-инструменты"
+                      fundingSource === "Квоты на AI-инструменты"
                           ? aiToolQuotas
                           : presalesQuotas
                     )?.map((item) => (

@@ -42,14 +42,13 @@ const fundingSourceCodes: Record<string, string> = {
   "Отгрузки проекта": "RP",
   "Прибыль компании": "PC",
   "Квота на пресейлы": "QS",
-  "Квота на AI-подписки": "QA",
   "Квоты на AI-инструменты": "QT",
   "Квота на внутренние затраты": "QI",
   "Я не знаю": "UN",
 };
 
 function getFundingOwnerRoles(fundingSource: string) {
-  if (fundingSource === "Квота на пресейлы" || fundingSource === "Квота на AI-подписки") {
+  if (fundingSource === "Квота на пресейлы") {
     return ["NBD"] as const;
   }
   if (fundingSource === "Квоты на AI-инструменты") {
@@ -263,24 +262,42 @@ async function getActiveRoleEmails(ctx: { db: any }, roles: string[]): Promise<s
   ) as string[];
 }
 
+async function getActiveAdminEmails(ctx: { db: any }, excludedEmails: string[] = []) {
+  const excluded = new Set(excludedEmails.map((email) => email.trim().toLowerCase()));
+  return (await getActiveRoleEmails(ctx, ["ADMIN"])).filter(
+    (email) => !excluded.has(email.trim().toLowerCase()),
+  );
+}
+
 async function getRoleNotificationRecipients(
   ctx: { db: any },
   approvals: any[],
   roles: string[],
   mode: "approved" | "decided",
+  excludedEmails: string[] = [],
 ) {
   const recipients = new Set<string>();
+  const excluded = new Set(excludedEmails.map((email) => email.trim().toLowerCase()));
   for (const role of roles) {
     const emails =
       mode === "approved"
         ? getApprovedReviewerEmailsByRoles(approvals, [role])
         : getDecidedReviewerEmailsByRoles(approvals, [role]);
     if (emails.length > 0) {
-      emails.forEach((email: string) => recipients.add(email));
+      emails
+        .filter((email: string) => !excluded.has(email.trim().toLowerCase()))
+        .forEach((email: string) => recipients.add(email));
       continue;
     }
     const fallback = await getActiveRoleEmails(ctx, [role]);
-    fallback.forEach((email: string) => recipients.add(email));
+    if (fallback.length > 0) {
+      fallback
+        .filter((email) => !excluded.has(email.trim().toLowerCase()))
+        .forEach((email: string) => recipients.add(email));
+      continue;
+    }
+    const adminFallback = await getActiveAdminEmails(ctx, excludedEmails);
+    adminFallback.forEach((email: string) => recipients.add(email));
   }
   return Array.from(recipients);
 }
@@ -670,10 +687,10 @@ function validateRequestPayload(args: any) {
   }
   if (
     args.category === "Закупка сервисов" &&
-    !["Квота на внутренние затраты", "Квота на AI-подписки", "Квоты на AI-инструменты"].includes(args.fundingSource)
+    !["Квота на внутренние затраты", "Квоты на AI-инструменты"].includes(args.fundingSource)
   ) {
     throw new Error(
-      "Для закупки сервисов доступны только источники Квота на внутренние затраты, Квота на AI-подписки и Квоты на AI-инструменты",
+      "Для закупки сервисов доступны только источники Квота на внутренние затраты и Квоты на AI-инструменты",
     );
   }
   if (
@@ -710,10 +727,7 @@ function validateRequestPayload(args: any) {
   if (args.fundingSource === "Отгрузки проекта" && !args.paidBy) {
     throw new Error("Укажите дату, когда заплатят нам");
   }
-  if (
-    ["Квота на пресейлы", "Квота на AI-подписки"].includes(args.fundingSource) &&
-    !args.requiredRoles.includes("NBD")
-  ) {
+  if (args.fundingSource === "Квота на пресейлы" && !args.requiredRoles.includes("NBD")) {
     throw new Error("Для квот NBD обязателен NBD");
   }
   if (
@@ -1488,14 +1502,27 @@ export const editRequest = mutation({
         approvals,
         editImpact.removedRoles,
         "decided",
+        [request.createdByEmail],
       );
       const buhEmails = editImpact.counterpartyChanged
         ? await getActiveRoleEmails(ctx, ["BUH"])
         : [];
       const repeatApprovalRoleEmails = Array.from(
         new Set([
-          ...getDecidedReviewerEmailsByRoles(approvals, editImpact.rolesToReset),
-          ...(await getActiveRoleEmails(ctx, editImpact.addedRoles)),
+          ...(await getRoleNotificationRecipients(
+            ctx,
+            approvals,
+            editImpact.rolesToReset,
+            "decided",
+            [request.createdByEmail],
+          )),
+          ...(await getRoleNotificationRecipients(
+            ctx,
+            approvals,
+            editImpact.addedRoles,
+            "decided",
+            [request.createdByEmail],
+          )),
         ]),
       );
       const infoRecipients = Array.from(

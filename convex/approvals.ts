@@ -22,10 +22,10 @@ function getQuotaTableName(fundingSource: string) {
   if (fundingSource === "Квота на пресейлы") {
     return "presalesQuotas";
   }
-  if (fundingSource === "Квота на AI-подписки") {
-    return "nbdServiceQuotas";
-  }
-  if (fundingSource === "Квоты на AI-инструменты") {
+  if (
+    fundingSource === "Квоты на AI-инструменты" ||
+    fundingSource === "Квота на AI-подписки"
+  ) {
     return "aiToolQuotas";
   }
   return null;

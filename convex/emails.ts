@@ -61,6 +61,57 @@ function getBaseUrl() {
   return process.env.EMAIL_BASE_URL ?? "http://localhost:3000";
 }
 
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+function dedupeEmails(emails: string[], excludedEmails: string[] = []) {
+  const excluded = new Set(excludedEmails.map(normalizeEmail));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const email of emails) {
+    const normalized = normalizeEmail(email);
+    if (!normalized || excluded.has(normalized) || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(email);
+  }
+  return result;
+}
+
+function getActiveRoleEmails(roleDocs: Array<{ active: boolean; roles: string[]; email: string }>, roles: string[]) {
+  if (!roles.length) {
+    return [];
+  }
+  return dedupeEmails(
+    roleDocs
+      .filter((doc) => doc.active && doc.roles.some((role) => roles.includes(role)))
+      .map((doc) => doc.email),
+  );
+}
+
+function getApprovalRecipients(
+  roleDocs: Array<{ active: boolean; roles: string[]; email: string }>,
+  roles: string[],
+  excludedEmails: string[] = [],
+) {
+  if (!roles.length) {
+    return [];
+  }
+  const recipients = new Set<string>();
+  const adminFallback = dedupeEmails(getActiveRoleEmails(roleDocs, ["ADMIN"]), excludedEmails);
+  for (const role of roles) {
+    const assignedRecipients = dedupeEmails(getActiveRoleEmails(roleDocs, [role]), excludedEmails);
+    if (assignedRecipients.length > 0) {
+      assignedRecipients.forEach((email) => recipients.add(email));
+      continue;
+    }
+    adminFallback.forEach((email) => recipients.add(email));
+  }
+  return Array.from(recipients);
+}
+
 async function sendEmail(
   ctx: any,
   params: {
@@ -155,12 +206,8 @@ export const sendRequestSubmitted = internalAction({
     if (roles.length === 0) {
       return;
     }
-    const recipients = roleDocs
-      .filter((doc) => doc.active && doc.roles.some((r) => roles.includes(r)))
-      .map((doc) => doc.email);
-
-    const uniqueRecipients = Array.from(new Set([request.createdByEmail, ...recipients]));
-    if (uniqueRecipients.length === 0) {
+    const recipients = getApprovalRecipients(roleDocs, roles, [request.createdByEmail]);
+    if (recipients.length === 0) {
       return;
     }
 
@@ -179,7 +226,7 @@ export const sendRequestSubmitted = internalAction({
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "request_submitted",
-      to: uniqueRecipients,
+      to: recipients,
       subject: `Запрос на согласование: ${title}`,
       html: `
         <p>Новая заявка от ${creator}.</p>
@@ -341,16 +388,20 @@ export const sendApprovalCanceled = internalAction({
     const data = await ctx.runQuery(internal.emails.getRequestData, {
       requestId: args.requestId,
     });
-    if (!data || args.recipients.length === 0) {
+    if (!data) {
       return;
     }
     const { request } = data;
+    const recipients = dedupeEmails(args.recipients, [request.createdByEmail]);
+    if (recipients.length === 0) {
+      return;
+    }
     const link = `${getBaseUrl()}/requests/${request._id}`;
     const title = request.title ?? `${request.clientName} :: ${request.category}`;
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "approval_canceled",
-      to: Array.from(new Set(args.recipients)),
+      to: recipients,
       subject: `Согласование отменено: ${request.requestCode ?? "без номера"}`,
       html: `
         <p>По заявке <strong>${title}</strong> обновился маршрут согласования.</p>
@@ -378,10 +429,14 @@ export const sendApprovalRequestedToRecipients = internalAction({
     const data = await ctx.runQuery(internal.emails.getRequestData, {
       requestId: args.requestId,
     });
-    if (!data || args.recipients.length === 0) {
+    if (!data) {
       return;
     }
     const { request } = data;
+    const recipients = dedupeEmails(args.recipients, [request.createdByEmail]);
+    if (recipients.length === 0) {
+      return;
+    }
     const link = `${getBaseUrl()}/requests/${request._id}`;
     const title = request.title ?? `${request.clientName} :: ${request.category}`;
     const owner = getRequestOwnerLabel(request);
@@ -391,7 +446,7 @@ export const sendApprovalRequestedToRecipients = internalAction({
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "approval_requested_repeat",
-      to: Array.from(new Set(args.recipients)),
+      to: recipients,
       subject: args.repeatedApproval
         ? `Повторное согласование: ${request.requestCode ?? "без номера"}`
         : `Нужно согласование: ${request.requestCode ?? "без номера"}`,
@@ -577,13 +632,7 @@ export const sendApprovalDeadlineReminder = internalAction({
     const pendingRoles = approvals
       .filter((approval) => approval.status === "pending")
       .map((approval) => approval.role);
-    const recipients = Array.from(
-      new Set(
-        roles
-          .filter((role) => role.active && role.roles.some((r) => pendingRoles.includes(r)))
-          .map((role) => role.email),
-      ),
-    );
+    const recipients = getApprovalRecipients(roles, pendingRoles, [request.createdByEmail]);
     if (!recipients.length) {
       return;
     }

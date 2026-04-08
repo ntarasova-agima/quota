@@ -217,16 +217,22 @@ export default function RequestDetailPage() {
     () => getMonthKeyFromTimestamp(quotaReferenceTimestamp),
     [quotaReferenceTimestamp],
   );
+  const isAiToolsFundingSource = useMemo(
+    () =>
+      data?.request?.fundingSource === "Квоты на AI-инструменты" ||
+      data?.request?.fundingSource === "Квота на AI-подписки",
+    [data?.request?.fundingSource],
+  );
   const showNbdQuotaSummary = Boolean(
     isAuthenticated &&
       isNbd &&
-      ((data?.request?.fundingSource === "Квота на пресейлы" && data?.request?.category !== "Welcome-бонус") ||
-        (data?.request?.fundingSource === "Квота на AI-подписки" && data?.request?.category === "Закупка сервисов")),
+      data?.request?.fundingSource === "Квота на пресейлы" &&
+      data?.request?.category !== "Welcome-бонус",
   );
   const showAiBossQuotaSummary = Boolean(
     isAuthenticated &&
       isAiBoss &&
-      data?.request?.fundingSource === "Квоты на AI-инструменты" &&
+      isAiToolsFundingSource &&
       data?.request?.category === "Закупка сервисов",
   );
   const showCooQuotaSummary = Boolean(
@@ -235,10 +241,6 @@ export default function RequestDetailPage() {
   const nbdQuotaSummary = useQuery(
     api.quotas.listByMonthKeys,
     showNbdQuotaSummary && data?.request?.fundingSource === "Квота на пресейлы" ? { monthKeys: quotaMonthKeys } : "skip",
-  );
-  const nbdAiQuotaSummary = useQuery(
-    api.quotas.listNbdServiceByMonthKeys,
-    showNbdQuotaSummary && data?.request?.fundingSource === "Квота на AI-подписки" ? { monthKeys: quotaMonthKeys } : "skip",
   );
   const aiBossQuotaSummary = useQuery(
     api.quotas.listAiToolByMonthKeys,
@@ -630,7 +632,7 @@ export default function RequestDetailPage() {
                   {statusSummary.label}
                 </span>
                 <span className="rounded-full border border-border px-3 py-1 text-xs">
-                  Источник: {request.fundingSource}
+                  Источник: {request.fundingSource === "Квота на AI-подписки" ? "Квоты на AI-инструменты" : request.fundingSource}
                 </span>
                 {request.cfdTag ? (
                   <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
@@ -1680,9 +1682,7 @@ export default function RequestDetailPage() {
           (
             showAiBossQuotaSummary
               ? aiBossQuotaSummary?.length
-              : data?.request?.fundingSource === "Квота на AI-подписки"
-                ? nbdAiQuotaSummary?.length
-                : nbdQuotaSummary?.length
+              : nbdQuotaSummary?.length
           ) ? (
             <Card>
               <CardContent className="pt-6">
@@ -1694,9 +1694,7 @@ export default function RequestDetailPage() {
                     {(
                       showAiBossQuotaSummary
                         ? aiBossQuotaSummary
-                        : data?.request?.fundingSource === "Квота на AI-подписки"
-                          ? nbdAiQuotaSummary
-                          : nbdQuotaSummary
+                        : nbdQuotaSummary
                     )?.map((item) => {
                       const remaining = item.quota - item.spent;
                       const isHighlighted = item.monthKey === highlightedQuotaMonthKey;
