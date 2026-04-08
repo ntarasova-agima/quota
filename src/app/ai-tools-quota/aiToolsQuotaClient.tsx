@@ -22,7 +22,7 @@ export default function AiToolsQuotaClient() {
 
   return (
     <EditableQuotaTable
-      title="Квоты на AI-инструменты"
+      title="Квоты"
       rows={rows}
       onLoadMore={() => setMonthsCount((prev) => prev + 12)}
       onSave={async (params) => {

@@ -522,6 +522,8 @@ const requestPayloadValidator = {
   links: v.array(v.string()),
   financePlanLinks: v.optional(v.array(v.string())),
   incomingAmount: v.optional(v.number()),
+  incomingAmountWithVat: v.optional(v.number()),
+  shipmentDate: v.optional(v.number()),
   shipmentMonth: v.optional(v.string()),
   specialists: v.optional(v.array(specialistValidator)),
   approvalDeadline: v.optional(v.number()),
@@ -532,11 +534,11 @@ const requestPayloadValidator = {
 };
 
 const requestFieldLabels: Record<string, string> = {
-  title: "Название заявки",
+  title: "На что нужен бюджет",
   category: "Категория",
   amount: "Сумма без НДС",
   amountWithVat: "Сумма с НДС",
-  vatRate: "Ставка НДС",
+  vatRate: "НДС",
   currency: "Валюта",
   fundingSource: "Источник финансирования",
   counterparty: "Кому платим мы",
@@ -549,13 +551,15 @@ const requestFieldLabels: Record<string, string> = {
   relatedRequests: "Связанные заявки",
   links: "Ссылки на материалы",
   financePlanLinks: "ID и название отгрузки в финплане",
-  incomingAmount: "Сколько платят нам",
-  incomingRatio: "Какой Х",
-  shipmentMonth: "Месяц отгрузки",
+  incomingAmount: "Сколько платят нам (сумма отгрузки) без НДС",
+  incomingAmountWithVat: "Сколько платят нам (сумма отгрузки) с НДС",
+  incomingRatio: "Коэффициент транзита",
+  shipmentDate: "Дата отгрузки",
+  shipmentMonth: "Дата отгрузки",
   specialists: "Участники конкурсного задания",
   approvalDeadline: "Дедлайн согласования",
   neededBy: "Когда нужно оплатить",
-  paidBy: "Когда заплатят нам",
+  paidBy: "Когда платят нам",
   requiredRoles: "Обязательные согласующие",
   status: "Статус заявки",
 };
@@ -565,7 +569,12 @@ function formatValueForHistory(field: string, value: unknown) {
     return undefined;
   }
   if (typeof value === "number") {
-    if (field === "approvalDeadline" || field === "neededBy" || field === "paidBy") {
+    if (
+      field === "approvalDeadline" ||
+      field === "neededBy" ||
+      field === "paidBy" ||
+      field === "shipmentDate"
+    ) {
       return new Date(value).toLocaleDateString("ru-RU");
     }
     return String(value);
@@ -657,7 +666,9 @@ function diffRequestFields(previous: any, next: any) {
     "links",
     "financePlanLinks",
     "incomingAmount",
+    "incomingAmountWithVat",
     "incomingRatio",
+    "shipmentDate",
     "shipmentMonth",
     "specialists",
     "approvalDeadline",
@@ -807,7 +818,17 @@ function validateRequestPayload(args: any) {
   validateOptionalVatRate(args.vatRate);
   validateOptionalMoney(args.amount, "Сумма без НДС");
   validateOptionalMoney(args.amountWithVat, "Сумма с НДС");
-  validateOptionalMoney(args.incomingAmount, "Сколько платят нам");
+  validateOptionalMoney(args.incomingAmount, "Сколько платят нам (сумма отгрузки) без НДС");
+  validateOptionalMoney(
+    args.incomingAmountWithVat,
+    "Сколько платят нам (сумма отгрузки) с НДС",
+  );
+  const incomingAmounts = resolveVatAmounts({
+    amountWithoutVat: args.incomingAmount,
+    amountWithVat: args.incomingAmountWithVat,
+    vatRate: args.vatRate,
+    autoCalculateAmountWithVat: true,
+  });
   const effectiveAmounts = resolveRequestAmounts(
     {
       category: args.category,
@@ -829,6 +850,25 @@ function validateRequestPayload(args: any) {
     effectiveAmounts.amountWithVat < effectiveAmount
   ) {
     throw new Error("Сумма с НДС не может быть меньше суммы без НДС");
+  }
+  if (
+    incomingAmounts.amountWithoutVat !== undefined &&
+    incomingAmounts.amountWithoutVat <= 0
+  ) {
+    throw new Error("Сумма отгрузки должна быть больше 0");
+  }
+  if (
+    incomingAmounts.amountWithVat !== undefined &&
+    incomingAmounts.amountWithVat <= 0
+  ) {
+    throw new Error("Сумма отгрузки должна быть больше 0");
+  }
+  if (
+    incomingAmounts.amountWithoutVat !== undefined &&
+    incomingAmounts.amountWithVat !== undefined &&
+    incomingAmounts.amountWithVat < incomingAmounts.amountWithoutVat
+  ) {
+    throw new Error("Сумма отгрузки с НДС не может быть меньше суммы без НДС");
   }
   if (!args.title.trim()) {
     throw new Error("Название заявки обязательно");
@@ -885,10 +925,16 @@ function validateRequestPayload(args: any) {
     throw new Error("AGIMA тогда еще не было");
   }
   if (
+    args.shipmentDate !== undefined &&
+    (!Number.isFinite(args.shipmentDate) || args.shipmentDate <= 0)
+  ) {
+    throw new Error("Укажите дату отгрузки");
+  }
+  if (
     args.shipmentMonth !== undefined &&
     !/^\d{4}-(0[1-9]|1[0-2])$/.test(args.shipmentMonth)
   ) {
-    throw new Error("Укажите месяц отгрузки");
+    throw new Error("Укажите дату отгрузки");
   }
   if (
     args.category !== "Конкурсное задание" &&
@@ -1374,6 +1420,12 @@ export const previewEditImpact = query({
       },
       normalizedSpecialists,
     );
+    const incomingAmounts = resolveVatAmounts({
+      amountWithoutVat: args.incomingAmount,
+      amountWithVat: args.incomingAmountWithVat,
+      vatRate: args.vatRate,
+      autoCalculateAmountWithVat: true,
+    });
     const nextBase = {
       ...request,
       title: args.title.trim(),
@@ -1393,12 +1445,15 @@ export const previewEditImpact = query({
       relatedRequests: args.relatedRequests,
       links: args.links,
       financePlanLinks: args.financePlanLinks,
-      incomingAmount: args.incomingAmount,
+      incomingAmount: incomingAmounts.amountWithoutVat,
+      incomingAmountWithVat: incomingAmounts.amountWithVat,
       incomingRatio: calculateIncomingRatio({
-        incomingAmount: args.incomingAmount,
+        incomingAmount: incomingAmounts.amountWithoutVat,
+        incomingAmountWithVat: incomingAmounts.amountWithVat,
         amountWithoutVat: effectiveAmounts.amount,
         amountWithVat: effectiveAmounts.amountWithVat,
       }),
+      shipmentDate: args.shipmentDate,
       shipmentMonth: args.shipmentMonth,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       approvalDeadline: args.approvalDeadline,
@@ -1455,6 +1510,12 @@ export const editRequest = mutation({
       },
       normalizedSpecialists,
     );
+    const incomingAmounts = resolveVatAmounts({
+      amountWithoutVat: args.incomingAmount,
+      amountWithVat: args.incomingAmountWithVat,
+      vatRate: args.vatRate,
+      autoCalculateAmountWithVat: true,
+    });
     const contestNeedsHodValidation =
       args.category === "Конкурсное задание" &&
       hasContestDepartments(normalizedSpecialists) &&
@@ -1479,12 +1540,15 @@ export const editRequest = mutation({
       relatedRequests: args.relatedRequests,
       links: args.links,
       financePlanLinks: args.financePlanLinks,
-      incomingAmount: args.incomingAmount,
+      incomingAmount: incomingAmounts.amountWithoutVat,
+      incomingAmountWithVat: incomingAmounts.amountWithVat,
       incomingRatio: calculateIncomingRatio({
-        incomingAmount: args.incomingAmount,
+        incomingAmount: incomingAmounts.amountWithoutVat,
+        incomingAmountWithVat: incomingAmounts.amountWithVat,
         amountWithoutVat: effectiveAmounts.amount,
         amountWithVat: effectiveAmounts.amountWithVat,
       }),
+      shipmentDate: args.shipmentDate,
       shipmentMonth: args.shipmentMonth,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       approvalDeadline: args.approvalDeadline,
@@ -1859,6 +1923,12 @@ export const createRequest = mutation({
       },
       normalizedSpecialists,
     );
+    const incomingAmounts = resolveVatAmounts({
+      amountWithoutVat: args.incomingAmount,
+      amountWithVat: args.incomingAmountWithVat,
+      vatRate: args.vatRate,
+      autoCalculateAmountWithVat: true,
+    });
 
     const requestId = await ctx.db.insert("requests", {
       requestCode,
@@ -1885,12 +1955,15 @@ export const createRequest = mutation({
       attachmentCount: 0,
       lastAttachmentName: undefined,
       financePlanLinks: args.financePlanLinks,
-      incomingAmount: args.incomingAmount,
+      incomingAmount: incomingAmounts.amountWithoutVat,
+      incomingAmountWithVat: incomingAmounts.amountWithVat,
       incomingRatio: calculateIncomingRatio({
-        incomingAmount: args.incomingAmount,
+        incomingAmount: incomingAmounts.amountWithoutVat,
+        incomingAmountWithVat: incomingAmounts.amountWithVat,
         amountWithoutVat: effectiveAmounts.amount,
         amountWithVat: effectiveAmounts.amountWithVat,
       }),
+      shipmentDate: args.shipmentDate,
       shipmentMonth: args.shipmentMonth,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       requiredRoles: args.requiredRoles,

@@ -47,7 +47,7 @@ export default function CooQuotaClient() {
 
       {activeTab === "internal" ? (
         <EditableQuotaTable
-          title="Квоты COO"
+          title="Квоты"
           rows={internalRows}
           onLoadMore={() => setMonthsCount((prev) => prev + 12)}
           onSave={async (params) => {
@@ -57,14 +57,14 @@ export default function CooQuotaClient() {
       ) : null}
       {activeTab === "presales" ? (
         <QuotaRemainingTable
-          title="Квота на пресейлы"
+          title="Квоты"
           rows={presalesRows}
           onLoadMore={() => setMonthsCount((prev) => prev + 12)}
         />
       ) : null}
       {activeTab === "ai" ? (
         <QuotaRemainingTable
-          title="Квоты на AI-инструменты"
+          title="Квоты"
           rows={aiRows}
           onLoadMore={() => setMonthsCount((prev) => prev + 12)}
         />

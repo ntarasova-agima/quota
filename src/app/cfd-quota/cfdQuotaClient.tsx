@@ -41,7 +41,7 @@ export default function CfdQuotaClient() {
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant={activeTab === "cfd" ? "default" : "outline"} onClick={() => setActiveTab("cfd")}>
-          Квоты CFD
+          CFD
         </Button>
         <Button type="button" variant={activeTab === "presales" ? "default" : "outline"} onClick={() => setActiveTab("presales")}>
           Пресейлы
@@ -56,7 +56,7 @@ export default function CfdQuotaClient() {
 
       {activeTab === "cfd" ? (
         <EditableQuotaTable
-          title="Квоты CFD"
+          title="Квоты"
           rows={cfdRows}
           onLoadMore={() => setMonthsCount((prev) => prev + 12)}
           onSave={async (params) => {
@@ -66,21 +66,21 @@ export default function CfdQuotaClient() {
       ) : null}
       {activeTab === "presales" ? (
         <QuotaRemainingTable
-          title="Квота на пресейлы"
+          title="Квоты"
           rows={presalesRows}
           onLoadMore={() => setMonthsCount((prev) => prev + 12)}
         />
       ) : null}
       {activeTab === "internal" ? (
         <QuotaRemainingTable
-          title="Квота на внутренние затраты"
+          title="Квоты"
           rows={internalRows}
           onLoadMore={() => setMonthsCount((prev) => prev + 12)}
         />
       ) : null}
       {activeTab === "ai" ? (
         <QuotaRemainingTable
-          title="Квоты на AI-инструменты"
+          title="Квоты"
           rows={aiRows}
           onLoadMore={() => setMonthsCount((prev) => prev + 12)}
         />

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Paperclip, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import FieldLabel from "@/components/field-label";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,7 +35,6 @@ import {
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
-  CLIENT_SERVICES_TRANSIT_CATEGORY,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   isAiToolsRequestCategory,
@@ -108,6 +107,8 @@ export default function NewRequestPage() {
   ]);
   const [financeLinks, setFinanceLinks] = useState("");
   const [incomingAmount, setIncomingAmount] = useState("");
+  const [incomingAmountWithVat, setIncomingAmountWithVat] = useState("");
+  const [incomingVatInputSource, setIncomingVatInputSource] = useState<VatAmountSource>("without");
   const [shipmentDate, setShipmentDate] = useState("");
   const [approvalDeadline, setApprovalDeadline] = useState(defaultDeadline);
   const [neededBy, setNeededBy] = useState(defaultDeadline);
@@ -167,10 +168,7 @@ export default function NewRequestPage() {
     [],
   );
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
-  const isClientTransitCategory = useMemo(
-    () => category === CLIENT_SERVICES_TRANSIT_CATEGORY,
-    [category],
-  );
+  const showTransitFields = fundingSource === "Отгрузки проекта";
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
   const paidByError = useMemo(
     () => (paidBy && !isPaidByDateAllowed(paidBy) ? "AGIMA тогда еще не было" : null),
@@ -261,18 +259,15 @@ export default function NewRequestPage() {
   const enforcedRoles = useMemo(() => {
     return new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
   }, [fundingSource]);
-  const incomingRatioValue = useMemo(
+  const resolvedIncomingAmountsPreview = useMemo(
     () =>
-      formatIncomingRatio(
-        calculateIncomingRatio({
-          incomingAmount: parseMoneyInput(incomingAmount),
-          amountWithoutVat: parseMoneyInput(
-            contestHasSpecialists ? String(contestAmount) : amount,
-          ),
-          amountWithVat: parseMoneyInput(amountWithVat),
-        }),
-      ),
-    [amount, amountWithVat, contestAmount, contestHasSpecialists, incomingAmount],
+      resolveVatAmounts({
+        amountWithoutVat: parseMoneyInput(incomingAmount),
+        amountWithVat: parseMoneyInput(incomingAmountWithVat),
+        vatRate: parseVatRateInput(vatRate),
+        autoCalculateAmountWithVat: true,
+      }),
+    [incomingAmount, incomingAmountWithVat, vatRate],
   );
   const resolvedAmountsPreview = useMemo(
     () =>
@@ -283,6 +278,23 @@ export default function NewRequestPage() {
         autoCalculateAmountWithVat: true,
       }),
     [amountWithVat, effectiveAmountWithoutVatInput, vatRate],
+  );
+  const incomingRatioValue = useMemo(
+    () =>
+      formatIncomingRatio(
+        calculateIncomingRatio({
+          incomingAmount: resolvedIncomingAmountsPreview.amountWithoutVat,
+          incomingAmountWithVat: resolvedIncomingAmountsPreview.amountWithVat,
+          amountWithoutVat: resolvedAmountsPreview.amountWithoutVat,
+          amountWithVat: resolvedAmountsPreview.amountWithVat,
+        }),
+      ),
+    [
+      resolvedIncomingAmountsPreview.amountWithoutVat,
+      resolvedIncomingAmountsPreview.amountWithVat,
+      resolvedAmountsPreview.amountWithoutVat,
+      resolvedAmountsPreview.amountWithVat,
+    ],
   );
   const titleInvalid = showValidationErrors && !title.trim();
   const clientNameInvalid = showValidationErrors && !clientName.trim();
@@ -509,17 +521,25 @@ export default function NewRequestPage() {
               ? financeLinksList
               : undefined,
         incomingAmount:
-          isClientTransitCategory && incomingAmount
-            ? parseMoneyInput(incomingAmount)
+          showTransitFields && resolvedIncomingAmountsPreview.amountWithoutVat !== undefined
+            ? resolvedIncomingAmountsPreview.amountWithoutVat
+            : undefined,
+        incomingAmountWithVat:
+          showTransitFields && resolvedIncomingAmountsPreview.amountWithVat !== undefined
+            ? resolvedIncomingAmountsPreview.amountWithVat
+            : undefined,
+        shipmentDate:
+          showTransitFields && shipmentDate
+            ? new Date(`${shipmentDate}T00:00:00`).getTime()
             : undefined,
         shipmentMonth:
-          isClientTransitCategory && shipmentDate
+          showTransitFields && shipmentDate
             ? shipmentDate.slice(0, 7)
             : undefined,
         approvalDeadline: approvalDeadline ? new Date(approvalDeadline).getTime() : undefined,
         neededBy: neededBy ? new Date(neededBy).getTime() : undefined,
         paidBy:
-          isClientTransitCategory && paidBy
+          showTransitFields && paidBy
             ? new Date(paidBy).getTime()
             : undefined,
         requiredRoles,
@@ -552,10 +572,9 @@ export default function NewRequestPage() {
           <Card className="w-full border-amber-400 ring-2 ring-amber-300/70 shadow-[0_10px_30px_rgba(217,119,6,0.08)]">
             <CardHeader>
               <CardTitle>Новая заявка</CardTitle>
-              <CardDescription>Запрос на представительские расходы.</CardDescription>
             </CardHeader>
             <CardContent>
-              <form className="space-y-6" onSubmit={handleSubmit}>
+              <form className="space-y-6" onSubmit={handleSubmit} noValidate>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <FieldLabel required>Категория</FieldLabel>
@@ -602,7 +621,6 @@ export default function NewRequestPage() {
                     value={title}
                     onChange={(event) => setTitle(event.target.value)}
                     aria-invalid={titleInvalid ? true : undefined}
-                    required
                   />
                 </div>
                 <div className="space-y-2 sm:col-span-3">
@@ -619,7 +637,6 @@ export default function NewRequestPage() {
                     value={clientName}
                     onChange={(event) => setClientName(event.target.value)}
                     aria-invalid={clientNameInvalid ? true : undefined}
-                    required
                   />
                 </div>
               </div>
@@ -647,7 +664,7 @@ export default function NewRequestPage() {
                 </div>
               ) : null}
 
-              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.24fr)_minmax(0,0.34fr)]">
+              <div className="grid gap-x-4 gap-y-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.24fr)_minmax(0,0.34fr)]">
                 <div className="space-y-2">
                   <FieldLabel htmlFor="amount" required>
                     Сумма без НДС
@@ -734,6 +751,14 @@ export default function NewRequestPage() {
                         setAmount(synced.amountWithoutVatInput);
                       }
                       setAmountWithVat(synced.amountWithVatInput);
+                      const syncedIncoming = syncVatInputPair({
+                        amountWithoutVatInput: incomingAmount,
+                        amountWithVatInput: incomingAmountWithVat,
+                        vatRateInput: nextVatRate,
+                        source: incomingVatInputSource,
+                      });
+                      setIncomingAmount(syncedIncoming.amountWithoutVatInput);
+                      setIncomingAmountWithVat(syncedIncoming.amountWithVatInput);
                     }}
                   />
                 </div>
@@ -754,10 +779,10 @@ export default function NewRequestPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <p className="text-xs text-muted-foreground sm:col-span-2">
+                <p className="-mt-1 text-xs text-muted-foreground sm:col-span-2">
                   Введите ту сумму, которую знаете. НДС рассчитается автоматически в соответствии с указанным процентом.
                 </p>
-                <p className="text-xs text-muted-foreground sm:col-span-2 sm:text-right">
+                <p className="-mt-1 text-xs text-muted-foreground sm:col-span-2 sm:text-right">
                   По умолчанию {DEFAULT_VAT_RATE}%. Если поле пустое, считаем 0%.
                 </p>
               </div>
@@ -772,7 +797,6 @@ export default function NewRequestPage() {
                     value={counterparty}
                     onChange={(event) => setCounterparty(event.target.value)}
                     aria-invalid={counterpartyInvalid ? true : undefined}
-                    required
                   />
                 </div>
               )}
@@ -820,7 +844,6 @@ export default function NewRequestPage() {
                   onChange={(event) => setJustification(event.target.value)}
                   aria-invalid={justificationInvalid ? true : undefined}
                   rows={4}
-                  required
                 />
               </div>
 
@@ -848,7 +871,6 @@ export default function NewRequestPage() {
                     onChange={(event) => setInvestmentReturn(event.target.value)}
                     aria-invalid={investmentReturnInvalid ? true : undefined}
                     rows={3}
-                    required
                   />
                 </div>
               )}
@@ -868,50 +890,90 @@ export default function NewRequestPage() {
                 </div>
               ) : null}
 
-              {isClientTransitCategory ? (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <FieldLabel htmlFor="incomingAmount">Сколько платят нам</FieldLabel>
-                    <Input
-                      id="incomingAmount"
-                      type="text"
-                      inputMode="decimal"
-                      value={incomingAmount}
-                      onChange={(event) => setIncomingAmount(sanitizeNumericInput(event.target.value))}
-                    />
+              {showTransitFields ? (
+                <div className="space-y-4">
+                  <div className="grid gap-x-4 gap-y-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.38fr)]">
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="incomingAmount">
+                        Сколько платят нам (сумма отгрузки) без НДС
+                      </FieldLabel>
+                      <Input
+                        id="incomingAmount"
+                        type="text"
+                        inputMode="decimal"
+                        value={incomingAmount}
+                        onChange={(event) => {
+                          const nextIncomingAmount = sanitizeNumericInput(event.target.value);
+                          setIncomingVatInputSource("without");
+                          setIncomingAmount(nextIncomingAmount);
+                          const synced = syncVatInputPair({
+                            amountWithoutVatInput: nextIncomingAmount,
+                            amountWithVatInput: incomingAmountWithVat,
+                            vatRateInput: vatRate,
+                            source: "without",
+                          });
+                          setIncomingAmountWithVat(synced.amountWithVatInput);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="incomingAmountWithVat">
+                        Сколько платят нам (сумма отгрузки) с НДС
+                      </FieldLabel>
+                      <Input
+                        id="incomingAmountWithVat"
+                        type="text"
+                        inputMode="decimal"
+                        value={incomingAmountWithVat}
+                        onChange={(event) => {
+                          const nextIncomingAmountWithVat = sanitizeNumericInput(event.target.value);
+                          setIncomingVatInputSource("with");
+                          setIncomingAmountWithVat(nextIncomingAmountWithVat);
+                          const synced = syncVatInputPair({
+                            amountWithoutVatInput: incomingAmount,
+                            amountWithVatInput: nextIncomingAmountWithVat,
+                            vatRateInput: vatRate,
+                            source: "with",
+                          });
+                          setIncomingAmount(synced.amountWithoutVatInput);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="incomingRatio">Коэффициент транзита</FieldLabel>
+                      <Input
+                        id="incomingRatio"
+                        value={incomingRatioValue}
+                        readOnly
+                        disabled
+                        tabIndex={-1}
+                        className="pointer-events-none max-w-32 bg-muted/40 text-center font-medium text-foreground disabled:opacity-100"
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <FieldLabel htmlFor="incomingRatio">Какой Х</FieldLabel>
-                    <Input
-                      id="incomingRatio"
-                      value={incomingRatioValue}
-                      readOnly
-                      disabled
-                      tabIndex={-1}
-                      className="pointer-events-none max-w-28 bg-muted/40 text-center font-medium text-foreground disabled:opacity-100"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <FieldLabel htmlFor="shipmentDate">Месяц отгрузки</FieldLabel>
-                    <Input
-                      id="shipmentDate"
-                      type="date"
-                      value={shipmentDate}
-                      onChange={(event) => setShipmentDate(event.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <FieldLabel htmlFor="paidBy">Когда заплатят нам</FieldLabel>
-                    <Input
-                      id="paidBy"
-                      type="date"
-                      value={paidBy}
-                      onChange={(event) => setPaidBy(event.target.value)}
-                      aria-invalid={paidByError ? true : undefined}
-                    />
-                    {paidByError ? (
-                      <p className="text-xs text-destructive">{paidByError}</p>
-                    ) : null}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="shipmentDate">Дата отгрузки</FieldLabel>
+                      <Input
+                        id="shipmentDate"
+                        type="date"
+                        value={shipmentDate}
+                        onChange={(event) => setShipmentDate(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="paidBy">Когда платят нам</FieldLabel>
+                      <Input
+                        id="paidBy"
+                        type="date"
+                        value={paidBy}
+                        onChange={(event) => setPaidBy(event.target.value)}
+                        aria-invalid={paidByError ? true : undefined}
+                      />
+                      {paidByError ? (
+                        <p className="text-xs text-destructive">{paidByError}</p>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -965,7 +1027,7 @@ export default function NewRequestPage() {
                             : "Нажмите или перетащите файлы сюда"}
                       </span>
                       <span className="block text-sm text-muted-foreground">
-                        PDF, Office, изображения · до 40 МБ на файл · до 20 файлов
+                        PDF, Office, изображения, архивы · до 40 МБ на файл · до 20 файлов
                       </span>
                     </span>
                   </span>
@@ -1054,7 +1116,6 @@ export default function NewRequestPage() {
                     onChange={(event) => setApprovalDeadline(event.target.value)}
                     aria-invalid={approvalDeadlineInvalid ? true : undefined}
                     min={minDateValue}
-                    required
                   />
                 </div>
                 <div className="space-y-2">
@@ -1068,7 +1129,6 @@ export default function NewRequestPage() {
                     onChange={(event) => setNeededBy(event.target.value)}
                     aria-invalid={neededByInvalid ? true : undefined}
                     min={minDateValue}
-                    required
                   />
                 </div>
               </div>
