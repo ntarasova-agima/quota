@@ -507,8 +507,12 @@ export default function RequestsPage() {
             <Card className="border-zinc-200 bg-[linear-gradient(180deg,rgba(250,250,250,0.98)_0%,rgba(244,244,245,0.97)_100%)]">
               <CardHeader className="flex flex-col gap-3">
                 <div>
-                  <CardTitle>Все заявки</CardTitle>
-                  <CardDescription>Полный список заявок.</CardDescription>
+                  <CardTitle>
+                    {isBuh ? "Согласования и заявки, ожидающие оплаты" : "Все заявки"}
+                  </CardTitle>
+                  <CardDescription>
+                    {isBuh ? "Список задач для оплаты и контроля сроков." : "Полный список заявок."}
+                  </CardDescription>
                 </div>
                 {isBuh ? (
                   <div className="flex flex-wrap gap-2">

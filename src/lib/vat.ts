@@ -5,6 +5,13 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+export function sanitizeNumericInput(value?: string | null) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.replace(/\s+/g, "").replace(/[^\d.,]/g, "");
+}
+
 export function normalizeVatRate(vatRate?: number) {
   if (typeof vatRate === "number" && Number.isFinite(vatRate) && vatRate >= 0) {
     return vatRate;
@@ -20,7 +27,7 @@ export function parseMoneyInput(value?: string | null) {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.replace(/\s+/g, "");
+  const normalized = sanitizeNumericInput(value).replace(/,/g, ".");
   if (!normalized) {
     return undefined;
   }
@@ -32,7 +39,7 @@ export function parseVatRateInput(value?: string | null) {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.replace(/\s+/g, "");
+  const normalized = sanitizeNumericInput(value).replace(/,/g, ".");
   if (!normalized) {
     return 0;
   }
@@ -41,7 +48,7 @@ export function parseVatRateInput(value?: string | null) {
 }
 
 function normalizeMoneyInput(value?: string | null) {
-  return typeof value === "string" ? value.replace(/\s+/g, "") : "";
+  return typeof value === "string" ? sanitizeNumericInput(value) : "";
 }
 
 export function calculateAmountWithVat(amountWithoutVat: number, vatRate?: number) {

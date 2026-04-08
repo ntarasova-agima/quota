@@ -2,9 +2,11 @@
 
 import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Paperclip, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import FieldLabel from "@/components/field-label";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -26,13 +28,10 @@ import {
   type RoleOption,
 } from "@/lib/constants";
 import {
-  buildShipmentMonthKey,
-  buildShipmentYearOptions,
   calculateIncomingRatio,
   formatIncomingRatio,
   getPaymentMethodOptions,
   isPaidByDateAllowed,
-  SHIPMENT_MONTH_NAMES,
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
@@ -48,12 +47,22 @@ import {
   parseMoneyInput,
   parseVatRateInput,
   resolveVatAmounts,
+  sanitizeNumericInput,
   syncVatInputPair,
   type VatAmountSource,
 } from "@/lib/vat";
+import {
+  ACCEPTED_REQUEST_ATTACHMENT_EXTENSIONS,
+  formatRequestAttachmentSize,
+  isAllowedRequestAttachment,
+  MAX_REQUEST_ATTACHMENTS,
+  MAX_REQUEST_ATTACHMENT_SIZE,
+} from "@/lib/requestAttachments";
 
 export default function NewRequestPage() {
   const createRequest = useMutation(api.requests.createRequest);
+  const generateAttachmentUploadUrl = useMutation(api.attachments.generateUploadUrl);
+  const saveAttachment = useMutation(api.attachments.saveAttachment);
   const router = useRouter();
   const today = useMemo(() => new Date(), []);
   const minDateValue = useMemo(() => {
@@ -99,8 +108,7 @@ export default function NewRequestPage() {
   ]);
   const [financeLinks, setFinanceLinks] = useState("");
   const [incomingAmount, setIncomingAmount] = useState("");
-  const [shipmentYear, setShipmentYear] = useState("");
-  const [shipmentMonth, setShipmentMonth] = useState("");
+  const [shipmentDate, setShipmentDate] = useState("");
   const [approvalDeadline, setApprovalDeadline] = useState(defaultDeadline);
   const [neededBy, setNeededBy] = useState(defaultDeadline);
   const [paidBy, setPaidBy] = useState("");
@@ -108,6 +116,12 @@ export default function NewRequestPage() {
   const [error, setError] = useState<string | null>(null);
   const [fundingError, setFundingError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showValidationErrors, setShowValidationErrors] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [fileActionError, setFileActionError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
@@ -158,10 +172,6 @@ export default function NewRequestPage() {
     [category],
   );
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
-  const shipmentYearOptions = useMemo(
-    () => buildShipmentYearOptions(today.getFullYear(), shipmentYear),
-    [shipmentYear, today],
-  );
   const paidByError = useMemo(
     () => (paidBy && !isPaidByDateAllowed(paidBy) ? "AGIMA тогда еще не было" : null),
     [paidBy],
@@ -169,6 +179,15 @@ export default function NewRequestPage() {
   const showPaymentMethod = category !== "Welcome-бонус";
   const isPaymentMethodRequired =
     category !== "Welcome-бонус" && category !== "Конкурсное задание";
+  const showCounterparty =
+    category !== "Конкурсное задание" &&
+    category !== "Welcome-бонус" &&
+    !isServiceCategory;
+  const financeLinksRequired =
+    category !== "Конкурсное задание" &&
+    category !== "Welcome-бонус" &&
+    !isServiceCategory &&
+    fundingSource === "Отгрузки проекта";
 
   const contactsList = useMemo(
     () =>
@@ -202,8 +221,8 @@ export default function NewRequestPage() {
         name: item.name.trim(),
         sourceType: item.sourceType,
         department: item.department || undefined,
-        hours: item.hours ? Number(item.hours.replace(/\s+/g, "")) : undefined,
-        directCost: item.directCost ? Number(item.directCost.replace(/\s+/g, "")) : undefined,
+        hours: parseMoneyInput(item.hours),
+        directCost: parseMoneyInput(item.directCost),
         hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
         validationSkipped: item.validationSkipped,
       })),
@@ -227,9 +246,7 @@ export default function NewRequestPage() {
     () =>
       contestHasSpecialists
         ? contestAmount
-        : amount
-          ? Number(amount.replace(/\s+/g, ""))
-          : undefined,
+        : parseMoneyInput(amount),
     [amount, contestAmount, contestHasSpecialists],
   );
   const financeLinksList = useMemo(
@@ -257,6 +274,33 @@ export default function NewRequestPage() {
       ),
     [amount, amountWithVat, contestAmount, contestHasSpecialists, incomingAmount],
   );
+  const resolvedAmountsPreview = useMemo(
+    () =>
+      resolveVatAmounts({
+        amountWithoutVat: effectiveAmountWithoutVatInput,
+        amountWithVat: parseMoneyInput(amountWithVat),
+        vatRate: parseVatRateInput(vatRate),
+        autoCalculateAmountWithVat: true,
+      }),
+    [amountWithVat, effectiveAmountWithoutVatInput, vatRate],
+  );
+  const titleInvalid = showValidationErrors && !title.trim();
+  const clientNameInvalid = showValidationErrors && !clientName.trim();
+  const amountInvalid =
+    showValidationErrors &&
+    (!resolvedAmountsPreview.amountWithoutVat ||
+      !resolvedAmountsPreview.amountWithVat ||
+      resolvedAmountsPreview.amountWithoutVat <= 0 ||
+      resolvedAmountsPreview.amountWithVat <= 0);
+  const counterpartyInvalid = showValidationErrors && showCounterparty && !counterparty.trim();
+  const paymentMethodInvalid =
+    showValidationErrors && isPaymentMethodRequired && !paymentMethod;
+  const justificationInvalid = showValidationErrors && !justification.trim();
+  const investmentReturnInvalid =
+    showValidationErrors && category === "Welcome-бонус" && !investmentReturn.trim();
+  const financeLinksInvalid = showValidationErrors && financeLinksRequired && financeLinksList.length === 0;
+  const approvalDeadlineInvalid = showValidationErrors && !approvalDeadline;
+  const neededByInvalid = showValidationErrors && !neededBy;
 
   useEffect(() => {
     if (enforcedRoles.size === 0) {
@@ -327,8 +371,75 @@ export default function NewRequestPage() {
     );
   }
 
+  function queueFiles(files: File[]) {
+    if (!files.length) {
+      return;
+    }
+    setFileActionError(null);
+    if (selectedFiles.length + files.length > MAX_REQUEST_ATTACHMENTS) {
+      setFileActionError("Можно прикрепить не более 20 файлов");
+      return;
+    }
+    for (const file of files) {
+      if (file.size > MAX_REQUEST_ATTACHMENT_SIZE) {
+        setFileActionError(`Файл ${file.name} больше 40 МБ`);
+        return;
+      }
+      if (!isAllowedRequestAttachment(file)) {
+        setFileActionError(`Формат файла ${file.name} не поддерживается`);
+        return;
+      }
+    }
+    setSelectedFiles((current) => [...current, ...files]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  async function uploadQueuedFiles(requestId: any) {
+    if (!selectedFiles.length) {
+      return true;
+    }
+    setUploadingFiles(true);
+    try {
+      for (const file of selectedFiles) {
+        const uploadUrl = await generateAttachmentUploadUrl({ requestId });
+        const response = await fetch(uploadUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+          },
+          body: file,
+        });
+        if (!response.ok) {
+          throw new Error(`Не удалось загрузить файл ${file.name}`);
+        }
+        const { storageId } = await response.json();
+        await saveAttachment({
+          requestId,
+          storageId,
+          fileName: file.name,
+          contentType: file.type || undefined,
+          fileSize: file.size,
+        });
+      }
+      setSelectedFiles([]);
+      return true;
+    } catch (err) {
+      window.alert(
+        err instanceof Error
+          ? `${err.message}. Заявка уже создана, файл можно прикрепить в карточке.`
+          : "Заявка уже создана, но часть файлов не загрузилась. Их можно прикрепить в карточке.",
+      );
+      return false;
+    } finally {
+      setUploadingFiles(false);
+    }
+  }
+
   async function submitRequest(submit: boolean) {
     setError(null);
+    setShowValidationErrors(true);
     setSubmitting(true);
     try {
       if (approvalDeadline) {
@@ -402,8 +513,8 @@ export default function NewRequestPage() {
             ? parseMoneyInput(incomingAmount)
             : undefined,
         shipmentMonth:
-          isClientTransitCategory
-            ? buildShipmentMonthKey(shipmentYear, shipmentMonth)
+          isClientTransitCategory && shipmentDate
+            ? shipmentDate.slice(0, 7)
             : undefined,
         approvalDeadline: approvalDeadline ? new Date(approvalDeadline).getTime() : undefined,
         neededBy: neededBy ? new Date(neededBy).getTime() : undefined,
@@ -414,6 +525,7 @@ export default function NewRequestPage() {
         requiredRoles,
         submit,
       } as any);
+      await uploadQueuedFiles(id);
       router.push(`/requests/${id}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось создать заявку";
@@ -437,7 +549,7 @@ export default function NewRequestPage() {
       <div className="min-h-screen bg-background text-foreground">
         <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-12">
           <AppHeader title="Новая заявка" />
-          <Card className="w-full">
+          <Card className="w-full border-amber-400 ring-2 ring-amber-300/70 shadow-[0_10px_30px_rgba(217,119,6,0.08)]">
             <CardHeader>
               <CardTitle>Новая заявка</CardTitle>
               <CardDescription>Запрос на представительские расходы.</CardDescription>
@@ -446,7 +558,7 @@ export default function NewRequestPage() {
               <form className="space-y-6" onSubmit={handleSubmit}>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label>Категория</Label>
+                    <FieldLabel required>Категория</FieldLabel>
                     <Select value={category} onValueChange={handleCategoryChange}>
                       <SelectTrigger>
                         <SelectValue placeholder="Выберите категорию" />
@@ -461,9 +573,9 @@ export default function NewRequestPage() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Источник финансирования</Label>
+                    <FieldLabel required>Источник финансирования</FieldLabel>
                     <Select value={fundingSource} onValueChange={setFundingSource}>
-                      <SelectTrigger>
+                      <SelectTrigger aria-invalid={fundingError ? true : undefined}>
                         <SelectValue placeholder="Выберите источник" />
                       </SelectTrigger>
                       <SelectContent>
@@ -482,19 +594,21 @@ export default function NewRequestPage() {
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2 sm:col-span-3">
-                  <Label htmlFor="title">Название заявки</Label>
-                  <p className="text-xs text-muted-foreground">На что нужен бюджет</p>
+                  <FieldLabel htmlFor="title" required>
+                    На что нужен бюджет
+                  </FieldLabel>
                   <Input
                     id="title"
                     value={title}
                     onChange={(event) => setTitle(event.target.value)}
+                    aria-invalid={titleInvalid ? true : undefined}
                     required
                   />
                 </div>
                 <div className="space-y-2 sm:col-span-3">
-                  <Label htmlFor="clientName">
+                  <FieldLabel htmlFor="clientName" required>
                     {isServiceCategory ? "Получатель сервиса" : "Клиент"}
-                  </Label>
+                  </FieldLabel>
                   {isServiceCategory ? (
                     <p className="text-xs text-muted-foreground">
                       Имя сотрудника или наименование отдела
@@ -504,6 +618,7 @@ export default function NewRequestPage() {
                     id="clientName"
                     value={clientName}
                     onChange={(event) => setClientName(event.target.value)}
+                    aria-invalid={clientNameInvalid ? true : undefined}
                     required
                   />
                 </div>
@@ -532,16 +647,18 @@ export default function NewRequestPage() {
                 </div>
               ) : null}
 
-              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.42fr)_minmax(0,0.4fr)]">
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.24fr)_minmax(0,0.34fr)]">
                 <div className="space-y-2">
-                  <Label htmlFor="amount">Сумма без НДС</Label>
+                  <FieldLabel htmlFor="amount" required>
+                    Сумма без НДС
+                  </FieldLabel>
                   <Input
                     id="amount"
                     type="text"
                     inputMode="decimal"
                     value={contestHasSpecialists ? String(contestAmount) : amount}
                     onChange={(event) => {
-                      const nextAmount = event.target.value.replace(/\s+/g, "");
+                      const nextAmount = sanitizeNumericInput(event.target.value);
                       setVatInputSource("without");
                       setAmount(nextAmount);
                       const synced = syncVatInputPair({
@@ -552,6 +669,7 @@ export default function NewRequestPage() {
                       });
                       setAmountWithVat(synced.amountWithVatInput);
                     }}
+                    aria-invalid={amountInvalid ? true : undefined}
                     disabled={contestHasSpecialists}
                   />
                   {contestHasSpecialists ? (
@@ -561,14 +679,16 @@ export default function NewRequestPage() {
                   ) : null}
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="amountWithVat">Сумма с НДС</Label>
+                  <FieldLabel htmlFor="amountWithVat" required>
+                    Сумма с НДС
+                  </FieldLabel>
                   <Input
                     id="amountWithVat"
                     type="text"
                     inputMode="decimal"
                     value={amountWithVat}
                     onChange={(event) => {
-                      const nextAmountWithVat = event.target.value.replace(/\s+/g, "");
+                      const nextAmountWithVat = sanitizeNumericInput(event.target.value);
                       if (contestHasSpecialists) {
                         setAmountWithVat(nextAmountWithVat);
                         return;
@@ -583,19 +703,20 @@ export default function NewRequestPage() {
                       });
                       setAmount(synced.amountWithoutVatInput);
                     }}
+                    aria-invalid={amountInvalid ? true : undefined}
                     disabled={contestHasSpecialists}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="vatRate">Ставка НДС, %</Label>
+                  <FieldLabel htmlFor="vatRate">НДС</FieldLabel>
                   <Input
                     id="vatRate"
                     type="text"
                     inputMode="decimal"
-                    className="w-full"
+                    className="w-full max-w-24"
                     value={vatRate}
                     onChange={(event) => {
-                      const nextVatRate = event.target.value.replace(/\s+/g, "");
+                      const nextVatRate = sanitizeNumericInput(event.target.value);
                       setVatRate(nextVatRate);
                       const source = contestHasSpecialists ? "without" : vatInputSource;
                       const synced = syncVatInputPair({
@@ -617,7 +738,9 @@ export default function NewRequestPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="currency">Валюта</Label>
+                  <FieldLabel htmlFor="currency" required>
+                    Валюта
+                  </FieldLabel>
                   <Select value={currency} onValueChange={setCurrency}>
                     <SelectTrigger id="currency">
                       <SelectValue placeholder="Валюта" />
@@ -634,20 +757,21 @@ export default function NewRequestPage() {
                 <p className="text-xs text-muted-foreground sm:col-span-2">
                   Введите ту сумму, которую знаете. НДС рассчитается автоматически в соответствии с указанным процентом.
                 </p>
-                <p className="text-xs text-muted-foreground sm:col-span-2">
+                <p className="text-xs text-muted-foreground sm:col-span-2 sm:text-right">
                   По умолчанию {DEFAULT_VAT_RATE}%. Если поле пустое, считаем 0%.
                 </p>
               </div>
 
-              {category !== "Конкурсное задание" &&
-              category !== "Welcome-бонус" &&
-              !isServiceCategory && (
+              {showCounterparty && (
                 <div className="space-y-2">
-                  <Label htmlFor="counterparty">Кому платим мы</Label>
+                  <FieldLabel htmlFor="counterparty" required>
+                    Кому платим мы
+                  </FieldLabel>
                   <Input
                     id="counterparty"
                     value={counterparty}
                     onChange={(event) => setCounterparty(event.target.value)}
+                    aria-invalid={counterpartyInvalid ? true : undefined}
                     required
                   />
                 </div>
@@ -656,9 +780,11 @@ export default function NewRequestPage() {
               <div className="grid gap-4 sm:grid-cols-3">
                 {showPaymentMethod ? (
                   <div className="space-y-2">
-                    <Label htmlFor="paymentMethod">Способ оплаты</Label>
+                    <FieldLabel htmlFor="paymentMethod" required={isPaymentMethodRequired}>
+                      Способ оплаты
+                    </FieldLabel>
                     <Select value={paymentMethod} onValueChange={setPaymentMethod}>
-                      <SelectTrigger id="paymentMethod">
+                      <SelectTrigger id="paymentMethod" aria-invalid={paymentMethodInvalid ? true : undefined}>
                         <SelectValue placeholder="Выберите способ оплаты" />
                       </SelectTrigger>
                       <SelectContent>
@@ -669,9 +795,6 @@ export default function NewRequestPage() {
                         ))}
                       </SelectContent>
                     </Select>
-                    {isPaymentMethodRequired ? (
-                      <p className="text-xs text-muted-foreground">Поле обязательно для этой категории.</p>
-                    ) : null}
                   </div>
                 ) : null}
                 {category !== "Конкурсное задание" && !isServiceCategory ? (
@@ -688,18 +811,21 @@ export default function NewRequestPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="justification">Обоснование</Label>
+                <FieldLabel htmlFor="justification" required>
+                  Обоснование
+                </FieldLabel>
                 <Textarea
                   id="justification"
                   value={justification}
                   onChange={(event) => setJustification(event.target.value)}
+                  aria-invalid={justificationInvalid ? true : undefined}
                   rows={4}
                   required
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="details">Детали заявки</Label>
+                <FieldLabel htmlFor="details">Детали заявки</FieldLabel>
                 <p className="text-xs text-muted-foreground">
                   Важные ссылки, описание предмета закупки
                 </p>
@@ -711,106 +837,77 @@ export default function NewRequestPage() {
                 />
               </div>
 
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  className="text-sm font-medium text-left"
-                  onClick={() => setRelatedRequestsExpanded((current) => !current)}
-                  aria-expanded={relatedRequestsExpanded}
-                >
-                  {relatedRequestsExpanded ? "▾ " : "▸ "}Указать связанные заявки
-                </button>
-                {relatedRequestsExpanded ? (
-                  <Textarea
-                    id="relatedRequests"
-                    value={relatedRequests}
-                    onChange={(event) => setRelatedRequests(event.target.value)}
-                    placeholder="Например, WB_QS_00012 или https://..."
-                    rows={3}
-                  />
-                ) : null}
-              </div>
-
               {category === "Welcome-бонус" && (
                 <div className="space-y-2">
-                  <Label htmlFor="investmentReturn">Как будем возвращать инвестиции</Label>
+                  <FieldLabel htmlFor="investmentReturn" required>
+                    Как будем возвращать инвестиции
+                  </FieldLabel>
                   <Textarea
                     id="investmentReturn"
                     value={investmentReturn}
                     onChange={(event) => setInvestmentReturn(event.target.value)}
+                    aria-invalid={investmentReturnInvalid ? true : undefined}
                     rows={3}
                     required
                   />
                 </div>
               )}
 
-              {fundingSource === "Отгрузки проекта" && (
+              {fundingSource === "Отгрузки проекта" ? (
                 <div className="space-y-2">
-                  <Label htmlFor="financeLinks">ID и название отгрузки в финплане (по одной в строке)</Label>
+                  <FieldLabel htmlFor="financeLinks" required={financeLinksRequired}>
+                    ID и название отгрузки в финплане (по одной в строке)
+                  </FieldLabel>
                   <Textarea
                     id="financeLinks"
                     value={financeLinks}
                     onChange={(event) => setFinanceLinks(event.target.value)}
+                    aria-invalid={financeLinksInvalid ? true : undefined}
                     rows={3}
                   />
                 </div>
-              )}
+              ) : null}
 
               {isClientTransitCategory ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="incomingAmount">Сколько платят нам</Label>
+                    <FieldLabel htmlFor="incomingAmount">Сколько платят нам</FieldLabel>
                     <Input
                       id="incomingAmount"
                       type="text"
                       inputMode="decimal"
                       value={incomingAmount}
-                      onChange={(event) => setIncomingAmount(event.target.value.replace(/\s+/g, ""))}
+                      onChange={(event) => setIncomingAmount(sanitizeNumericInput(event.target.value))}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="incomingRatio">Какой Х</Label>
-                    <Input id="incomingRatio" value={incomingRatioValue} readOnly />
+                    <FieldLabel htmlFor="incomingRatio">Какой Х</FieldLabel>
+                    <Input
+                      id="incomingRatio"
+                      value={incomingRatioValue}
+                      readOnly
+                      disabled
+                      tabIndex={-1}
+                      className="pointer-events-none max-w-28 bg-muted/40 text-center font-medium text-foreground disabled:opacity-100"
+                    />
                   </div>
                   <div className="space-y-2">
-                    <Label>Месяц отгрузки</Label>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <Select value={shipmentMonth} onValueChange={setShipmentMonth}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Месяц" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {SHIPMENT_MONTH_NAMES.map((item, index) => {
-                            const value = String(index + 1).padStart(2, "0");
-                            return (
-                              <SelectItem key={value} value={value}>
-                                {item}
-                              </SelectItem>
-                            );
-                          })}
-                        </SelectContent>
-                      </Select>
-                      <Select value={shipmentYear} onValueChange={setShipmentYear}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Год" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {shipmentYearOptions.map((item) => (
-                            <SelectItem key={item} value={item}>
-                              {item}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    <FieldLabel htmlFor="shipmentDate">Месяц отгрузки</FieldLabel>
+                    <Input
+                      id="shipmentDate"
+                      type="date"
+                      value={shipmentDate}
+                      onChange={(event) => setShipmentDate(event.target.value)}
+                    />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="paidBy">Когда заплатят нам</Label>
+                    <FieldLabel htmlFor="paidBy">Когда заплатят нам</FieldLabel>
                     <Input
                       id="paidBy"
                       type="date"
                       value={paidBy}
                       onChange={(event) => setPaidBy(event.target.value)}
+                      aria-invalid={paidByError ? true : undefined}
                     />
                     {paidByError ? (
                       <p className="text-xs text-destructive">{paidByError}</p>
@@ -818,6 +915,85 @@ export default function NewRequestPage() {
                   </div>
                 </div>
               ) : null}
+
+              <div className="space-y-3">
+                <FieldLabel htmlFor="requestFiles">Прикрепить файлы</FieldLabel>
+                <p className="text-xs text-muted-foreground">
+                  Например, счет в PDF, акт и другие важные документы
+                </p>
+                <input
+                  id="requestFiles"
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept={ACCEPTED_REQUEST_ATTACHMENT_EXTENSIONS.join(",")}
+                  onChange={(event) => queueFiles(Array.from(event.target.files ?? []))}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setIsDragOver(true);
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    setIsDragOver(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setIsDragOver(false);
+                    queueFiles(Array.from(event.dataTransfer.files ?? []));
+                  }}
+                  className={`flex min-h-20 w-full cursor-pointer items-center justify-between rounded-xl border px-4 py-3 text-left transition-all ${
+                    isDragOver
+                      ? "border-emerald-500 bg-emerald-50 shadow-[0_0_0_4px_rgba(16,185,129,0.08)]"
+                      : "border-border bg-background hover:border-emerald-400 hover:bg-emerald-50/50"
+                  }`}
+                >
+                  <span className="flex items-center gap-3">
+                    <span className="rounded-lg bg-emerald-100 p-2 text-emerald-700">
+                      <Paperclip className="h-4 w-4" />
+                    </span>
+                    <span>
+                      <span className="block font-medium">
+                        {isDragOver
+                          ? "Отпустите файлы, чтобы добавить"
+                          : uploadingFiles
+                            ? "Загружаем файлы"
+                            : "Нажмите или перетащите файлы сюда"}
+                      </span>
+                      <span className="block text-sm text-muted-foreground">
+                        PDF, Office, изображения · до 40 МБ на файл · до 20 файлов
+                      </span>
+                    </span>
+                  </span>
+                  <Upload className="h-4 w-4 text-muted-foreground" />
+                </button>
+                {selectedFiles.length ? (
+                  <div className="space-y-1 text-sm text-muted-foreground">
+                    {selectedFiles.map((file, index) => (
+                      <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                        <span>
+                          {file.name} · {formatRequestAttachmentSize(file.size)}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setSelectedFiles((current) => current.filter((_, currentIndex) => currentIndex !== index))
+                          }
+                        >
+                          Удалить
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {fileActionError ? <p className="text-sm text-destructive">{fileActionError}</p> : null}
+              </div>
               {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
                 (fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(category) && isAiBoss && aiToolQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
@@ -846,25 +1022,51 @@ export default function NewRequestPage() {
                 </div>
               ) : null}
 
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  className="text-sm font-medium text-left"
+                  onClick={() => setRelatedRequestsExpanded((current) => !current)}
+                  aria-expanded={relatedRequestsExpanded}
+                >
+                  {relatedRequestsExpanded ? "▾ " : "▸ "}Указать связанные заявки
+                </button>
+                {relatedRequestsExpanded ? (
+                  <Textarea
+                    id="relatedRequests"
+                    value={relatedRequests}
+                    onChange={(event) => setRelatedRequests(event.target.value)}
+                    placeholder="Например, WB_QS_00012 или https://..."
+                    rows={3}
+                  />
+                ) : null}
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="approvalDeadline">Дедлайн согласования</Label>
+                  <FieldLabel htmlFor="approvalDeadline" required>
+                    Дедлайн согласования
+                  </FieldLabel>
                   <Input
                     id="approvalDeadline"
                     type="date"
                     value={approvalDeadline}
                     onChange={(event) => setApprovalDeadline(event.target.value)}
+                    aria-invalid={approvalDeadlineInvalid ? true : undefined}
                     min={minDateValue}
                     required
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="neededBy">Когда нужно оплатить</Label>
+                  <FieldLabel htmlFor="neededBy" required>
+                    Когда нужно оплатить
+                  </FieldLabel>
                   <Input
                     id="neededBy"
                     type="date"
                     value={neededBy}
                     onChange={(event) => setNeededBy(event.target.value)}
+                    aria-invalid={neededByInvalid ? true : undefined}
                     min={minDateValue}
                     required
                   />

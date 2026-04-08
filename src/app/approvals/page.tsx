@@ -64,7 +64,7 @@ export default function ApprovalsPage() {
               <CardTitle>Требуют вашего действия</CardTitle>
               <CardDescription className="text-zinc-500">
                 {myRoles?.includes("BUH")
-                  ? "Согласования и заявки в оплатном контуре."
+                  ? "Согласования и заявки, ожидающие оплаты."
                   : myRoles?.includes("HOD")
                     ? "Заявки, где нужно провалидировать часы и прямые затраты по вашим цехам."
                   : "Список заявок, где вы указаны как согласующий."}
