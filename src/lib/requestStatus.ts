@@ -1,3 +1,5 @@
+import { resolveVatAmounts } from "./vat";
+
 type RequestLike = {
   status:
     | "draft"
@@ -11,11 +13,100 @@ type RequestLike = {
     | "paid"
     | "closed";
   isCanceled?: boolean;
+  plannedPaymentAmount?: number;
+  plannedPaymentAmountWithVat?: number;
+  paymentResidualAmount?: number;
+  paymentResidualAmountWithVat?: number;
+  vatRate?: number;
 };
 
 type ApprovalLike = {
   status: "pending" | "approved" | "rejected";
 };
+
+function resolvePaymentAmountPair(params: {
+  amountWithoutVat?: number;
+  amountWithVat?: number;
+  vatRate?: number;
+}) {
+  return resolveVatAmounts({
+    amountWithoutVat: params.amountWithoutVat,
+    amountWithVat: params.amountWithVat,
+    vatRate: params.vatRate,
+    autoCalculateAmountWithVat:
+      params.amountWithoutVat !== undefined && params.amountWithVat === undefined,
+  });
+}
+
+export function getUnallocatedPaymentAmounts(request: RequestLike) {
+  if (!["payment_planned", "partially_paid"].includes(request.status)) {
+    return {
+      amountWithoutVat: 0,
+      amountWithVat: 0,
+    };
+  }
+  const residual = resolvePaymentAmountPair({
+    amountWithoutVat: request.paymentResidualAmount,
+    amountWithVat: request.paymentResidualAmountWithVat,
+    vatRate: request.vatRate,
+  });
+  if (residual.amountWithoutVat === undefined && residual.amountWithVat === undefined) {
+    return {
+      amountWithoutVat: 0,
+      amountWithVat: 0,
+    };
+  }
+  const planned = resolvePaymentAmountPair({
+    amountWithoutVat: request.plannedPaymentAmount,
+    amountWithVat: request.plannedPaymentAmountWithVat,
+    vatRate: request.vatRate,
+  });
+  if (planned.amountWithoutVat === undefined && planned.amountWithVat === undefined) {
+    return {
+      amountWithoutVat: residual.amountWithoutVat ?? 0,
+      amountWithVat: residual.amountWithVat ?? 0,
+    };
+  }
+  return {
+    amountWithoutVat: Math.max((residual.amountWithoutVat ?? 0) - (planned.amountWithoutVat ?? 0), 0),
+    amountWithVat: Math.max((residual.amountWithVat ?? 0) - (planned.amountWithVat ?? 0), 0),
+  };
+}
+
+export function hasUnallocatedPayment(request: RequestLike) {
+  if (!["payment_planned", "partially_paid"].includes(request.status)) {
+    return false;
+  }
+  return getUnallocatedPaymentAmounts(request).amountWithoutVat > 0;
+}
+
+export function getBuhPaymentStatusSummary(request: RequestLike) {
+  if (hasUnallocatedPayment(request)) {
+    return {
+      label: "Есть нераспределенный платеж",
+      className: "border-amber-200 bg-amber-100 text-amber-800",
+    };
+  }
+
+  if (request.status === "partially_paid") {
+    return {
+      label: "Есть остаток к оплате",
+      className: "border-cyan-200 bg-cyan-50 text-cyan-700",
+    };
+  }
+
+  if (request.status === "payment_planned") {
+    return {
+      label: "Оплата запланирована",
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+    };
+  }
+
+  return {
+    label: "Нужно запланировать или оплатить",
+    className: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  };
+}
 
 export function getRequestStatusSummary(
   request: RequestLike,
