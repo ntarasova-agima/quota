@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
 import { isAiToolsFundingSource } from "../src/lib/requestRules";
+import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
 import { getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
 
 const roleEnum = v.union(
@@ -110,7 +111,7 @@ export const listPendingForMe = query({
         const specialists = request.specialists ?? [];
         const hasPendingForDepartment = specialists.some(
           (item: any) =>
-            item.department &&
+            requiresContestSpecialistValidation(item) &&
             departments.includes(item.department) &&
             (!item.hodConfirmed || item.directCost === undefined),
         );

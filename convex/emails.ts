@@ -2,6 +2,7 @@ import { internalAction, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { dedupeEmails, getApprovalRecipients } from "../src/lib/approvalRecipients";
+import { normalizeContestSpecialistSource, requiresContestSpecialistValidation } from "../src/lib/requestFields";
 import { isServiceRecipientCategory } from "../src/lib/requestRules";
 import { formatAmountPair } from "../src/lib/vat";
 
@@ -201,7 +202,7 @@ export const sendRequestSubmitted = internalAction({
         <p><strong>${title}</strong></p>
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Дедлайн согласования: ${approvalDeadline}</p>
-        <p>Нужны деньги к: ${neededBy}</p>
+        <p>Когда нужно оплатить: ${neededBy}</p>
         <p>Review: <a href="${link}">${link}</a></p>
       `,
     });
@@ -640,6 +641,9 @@ export const sendHodValidationRequest = internalAction({
     const departments = Array.from(
       new Set(
         specialists
+          .filter((item: { department?: string; validationSkipped?: boolean }) =>
+            requiresContestSpecialistValidation(item),
+          )
           .map((item: { department?: string }) => item.department?.trim())
           .filter(Boolean),
       ),
@@ -662,18 +666,21 @@ export const sendHodValidationRequest = internalAction({
       const visibleDepartments = recipient.hodDepartments ?? [];
       const specialistRows = specialists
         .filter(
-          (item: { department?: string }) =>
-            item.department && visibleDepartments.includes(item.department),
+          (item: { department?: string; validationSkipped?: boolean }) =>
+            requiresContestSpecialistValidation(item) &&
+            item.department &&
+            visibleDepartments.includes(item.department),
         )
         .map(
           (item: {
             name?: string;
+            sourceType?: string;
             department?: string;
             hours?: number;
             directCost?: number;
           }) => `
             <li>
-              Специалист: ${item.name || "Не указан"}<br />
+              ${normalizeContestSpecialistSource(item.sourceType) === "contractor" ? "Подрядчик" : "Внутренний специалист"}: ${item.name || "Не указан"}<br />
               Цех: ${item.department || "Не указан"}<br />
               Часы: ${item.hours ?? "Не указаны"}<br />
               Прямые затраты: ${item.directCost ?? "Не указаны"}

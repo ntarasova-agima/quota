@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useQuery } from "convex/react";
+import { useMemo, useState } from "react";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import { formatAmountPair } from "@/lib/vat";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { HoverHint } from "@/components/ui/hover-hint";
 import { api } from "@/lib/convex";
@@ -22,6 +24,34 @@ function getRequestDisplayTitle(request: {
 export default function ApprovalsPage() {
   const items = useQuery(api.approvals.listPendingForMe);
   const myRoles = useQuery(api.roles.myRoles);
+  const [buhQuickFilter, setBuhQuickFilter] = useState<"all" | "today" | "overdue">("all");
+  const todayStart = useMemo(() => {
+    const value = new Date();
+    value.setHours(0, 0, 0, 0);
+    return value.getTime();
+  }, []);
+  const tomorrowStart = useMemo(() => {
+    const value = new Date(todayStart);
+    value.setDate(value.getDate() + 1);
+    return value.getTime();
+  }, [todayStart]);
+  const visibleItems = useMemo(() => {
+    if (!items?.length) {
+      return items ?? [];
+    }
+    if (!myRoles?.includes("BUH") || buhQuickFilter === "all") {
+      return items;
+    }
+    return items.filter(({ kind, request }) => {
+      if (kind !== "payment" || !request.neededBy) {
+        return false;
+      }
+      if (buhQuickFilter === "today") {
+        return request.neededBy >= todayStart && request.neededBy < tomorrowStart;
+      }
+      return request.neededBy < todayStart;
+    });
+  }, [buhQuickFilter, items, myRoles, todayStart, tomorrowStart]);
 
   return (
     <RequireAuth>
@@ -39,11 +69,36 @@ export default function ApprovalsPage() {
                     ? "Заявки, где нужно провалидировать часы и прямые затраты по вашим цехам."
                   : "Список заявок, где вы указаны как согласующий."}
               </CardDescription>
+              {myRoles?.includes("BUH") ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant={buhQuickFilter === "all" ? "default" : "outline"}
+                    onClick={() => setBuhQuickFilter("all")}
+                  >
+                    Все даты
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={buhQuickFilter === "today" ? "default" : "outline"}
+                    onClick={() => setBuhQuickFilter("today")}
+                  >
+                    Сегодня
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={buhQuickFilter === "overdue" ? "default" : "outline"}
+                    onClick={() => setBuhQuickFilter("overdue")}
+                  >
+                    Просрочено
+                  </Button>
+                </div>
+              ) : null}
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {items?.length ? (
-                  items.map(({ request, approval, kind }) => (
+                {visibleItems.length ? (
+                  visibleItems.map(({ request, kind }) => (
                     <Link
                       key={request._id}
                       href={`/requests/${request._id}`}
@@ -86,7 +141,7 @@ export default function ApprovalsPage() {
                           {kind === "payment" ? (
                             <div className="mt-2 space-y-1 text-sm text-muted-foreground">
                               <div>
-                                <HoverHint label="Дата, к которой деньги должны быть оплачены">
+                                <HoverHint label="Дата, к которой заявку нужно оплатить">
                                   <span>
                                     Дедлайн оплаты:{" "}
                                     {request.neededBy

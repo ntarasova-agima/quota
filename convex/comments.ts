@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
+import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
 
 function hasHodAccessToRequest(roleRecord: any, request: any) {
   if (!roleRecord?.roles?.includes("HOD")) {
@@ -13,7 +14,10 @@ function hasHodAccessToRequest(roleRecord: any, request: any) {
     return false;
   }
   const specialists = request.specialists ?? [];
-  return specialists.some((item: any) => item.department && departments.includes(item.department));
+  return specialists.some(
+    (item: any) =>
+      requiresContestSpecialistValidation(item) && departments.includes(item.department),
+  );
 }
 
 async function hasHistoricalApprovalAccess(ctx: any, requestId: any, email: string) {

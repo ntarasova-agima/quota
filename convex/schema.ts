@@ -61,6 +61,7 @@ const schema = defineSchema({
     currency: v.string(),
     fundingSource: v.string(),
     counterparty: v.optional(v.string()),
+    paymentMethod: v.optional(v.string()),
     cfdTag: v.optional(v.string()),
     justification: v.string(),
     details: v.optional(v.string()),
@@ -72,15 +73,20 @@ const schema = defineSchema({
     attachmentCount: v.optional(v.number()),
     lastAttachmentName: v.optional(v.string()),
     financePlanLinks: v.optional(v.array(v.string())),
+    incomingAmount: v.optional(v.number()),
+    incomingRatio: v.optional(v.number()),
+    shipmentMonth: v.optional(v.string()),
     specialists: v.optional(
       v.array(
         v.object({
           id: v.string(),
           name: v.string(),
+          sourceType: v.optional(v.string()),
           department: v.optional(v.string()),
           hours: v.optional(v.number()),
           directCost: v.optional(v.number()),
           hodConfirmed: v.optional(v.boolean()),
+          validationSkipped: v.optional(v.boolean()),
         }),
       ),
     ),

@@ -12,16 +12,30 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
+import ContestParticipantsEditor, {
+  ContestParticipantDraft,
+  createContestParticipantDraft,
+} from "@/components/contest-participants-editor";
 import { api } from "@/lib/convex";
 import {
   CURRENCIES,
   DEFAULT_REQUIRED_ROLES,
   EXPENSE_CATEGORIES,
   FUNDING_SOURCES,
-  HOD_DEPARTMENTS,
   ROLE_OPTIONS,
   type RoleOption,
 } from "@/lib/constants";
+import {
+  buildShipmentMonthKey,
+  buildShipmentYearOptions,
+  calculateIncomingRatio,
+  formatIncomingRatio,
+  getPaymentMethodOptions,
+  isPaidByDateAllowed,
+  normalizeContestSpecialistSource,
+  SHIPMENT_MONTH_NAMES,
+  splitShipmentMonth,
+} from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
@@ -44,15 +58,6 @@ import {
   syncVatInputPair,
   type VatAmountSource,
 } from "@/lib/vat";
-
-type SpecialistDraft = {
-  id: string;
-  name: string;
-  department: string;
-  hours: string;
-  directCost: string;
-  hodConfirmed?: boolean;
-};
 
 type PendingEditConfirmation = {
   submit: boolean;
@@ -98,13 +103,20 @@ export default function NewRequestPage() {
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
   const [counterparty, setCounterparty] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
   const [contacts, setContacts] = useState("");
   const [relatedRequests, setRelatedRequests] = useState("");
-  const [links, setLinks] = useState("");
-  const [specialists, setSpecialists] = useState<SpecialistDraft[]>([
-    { id: crypto.randomUUID(), name: "", department: "", hours: "", directCost: "" },
+  const [relatedRequestsExpanded, setRelatedRequestsExpanded] = useState(false);
+  const [internalSpecialists, setInternalSpecialists] = useState<ContestParticipantDraft[]>([
+    createContestParticipantDraft(),
+  ]);
+  const [contractors, setContractors] = useState<ContestParticipantDraft[]>([
+    createContestParticipantDraft(),
   ]);
   const [financeLinks, setFinanceLinks] = useState("");
+  const [incomingAmount, setIncomingAmount] = useState("");
+  const [shipmentYear, setShipmentYear] = useState("");
+  const [shipmentMonth, setShipmentMonth] = useState("");
   const [approvalDeadline, setApprovalDeadline] = useState(defaultDeadline);
   const [neededBy, setNeededBy] = useState(defaultDeadline);
   const [paidBy, setPaidBy] = useState("");
@@ -157,10 +169,22 @@ export default function NewRequestPage() {
     },
     [],
   );
-  const showClientTransitPaidBy = useMemo(
+  const isClientTransitCategory = useMemo(
     () => category === CLIENT_SERVICES_TRANSIT_CATEGORY,
     [category],
   );
+  const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
+  const shipmentYearOptions = useMemo(
+    () => buildShipmentYearOptions(today.getFullYear(), shipmentYear),
+    [shipmentYear, today],
+  );
+  const paidByError = useMemo(
+    () => (paidBy && !isPaidByDateAllowed(paidBy) ? "AGIMA тогда еще не было" : null),
+    [paidBy],
+  );
+  const showPaymentMethod = category !== "Welcome-бонус";
+  const isPaymentMethodRequired =
+    category !== "Welcome-бонус" && category !== "Конкурсное задание";
 
   useEffect(() => {
     if (!data?.request) {
@@ -186,22 +210,40 @@ export default function NewRequestPage() {
     setInvestmentReturn(request.investmentReturn ?? "");
     setClientName(request.clientName ?? "");
     setCounterparty(request.counterparty ?? "");
+    setPaymentMethod(request.paymentMethod ?? "");
     setContacts((request.contacts ?? []).join("\n"));
     setRelatedRequests((request.relatedRequests ?? []).join("\n"));
-    setLinks((request.links ?? []).join("\n"));
-    setSpecialists(
-      request.specialists?.length
-        ? request.specialists.map((item) => ({
-            id: item.id,
-            name: item.name,
-            department: item.department ?? "",
-            hours: item.hours !== undefined ? String(item.hours) : "",
-            directCost: item.directCost !== undefined ? String(item.directCost) : "",
-            hodConfirmed: item.hodConfirmed ?? false,
-          }))
-        : [{ id: crypto.randomUUID(), name: "", department: "", hours: "", directCost: "" }],
+    setRelatedRequestsExpanded(Boolean(request.relatedRequests?.length));
+    const normalizedParticipants =
+      request.specialists?.map((item) => ({
+        id: item.id,
+        name: item.name,
+        department: item.department ?? "",
+        hours: item.hours !== undefined ? String(item.hours) : "",
+        directCost: item.directCost !== undefined ? String(item.directCost) : "",
+        hodConfirmed: item.hodConfirmed ?? false,
+        validationSkipped: item.validationSkipped ?? false,
+        sourceType: normalizeContestSpecialistSource(item.sourceType),
+      })) ?? [];
+    const internalRows = normalizedParticipants
+      .filter((item) => item.sourceType === "internal")
+      .map(({ sourceType: _sourceType, ...item }) => item);
+    const contractorRows = normalizedParticipants
+      .filter((item) => item.sourceType === "contractor")
+      .map(({ sourceType: _sourceType, ...item }) => item);
+    setInternalSpecialists(
+      internalRows.length ? internalRows : [createContestParticipantDraft()],
+    );
+    setContractors(
+      contractorRows.length ? contractorRows : [createContestParticipantDraft()],
     );
     setFinanceLinks((request.financePlanLinks ?? []).join("\n"));
+    setIncomingAmount(
+      request.incomingAmount !== undefined ? String(request.incomingAmount) : "",
+    );
+    const shipmentParts = splitShipmentMonth(request.shipmentMonth);
+    setShipmentYear(shipmentParts.year);
+    setShipmentMonth(shipmentParts.month);
     setApprovalDeadline(
       request.approvalDeadline
         ? new Date(request.approvalDeadline).toISOString().slice(0, 10)
@@ -222,14 +264,6 @@ export default function NewRequestPage() {
         .filter(Boolean),
     [contacts],
   );
-  const linksList = useMemo(
-    () =>
-      links
-        .split("\n")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    [links],
-  );
   const relatedRequestsList = useMemo(
     () =>
       relatedRequests
@@ -240,15 +274,26 @@ export default function NewRequestPage() {
   );
   const specialistsPayload = useMemo(
     () =>
-      specialists.map((item) => ({
+      [
+        ...internalSpecialists.map((item) => ({
+          ...item,
+          sourceType: "internal" as const,
+        })),
+        ...contractors.map((item) => ({
+          ...item,
+          sourceType: "contractor" as const,
+        })),
+      ].map((item) => ({
         id: item.id,
         name: item.name.trim(),
+        sourceType: item.sourceType,
         department: item.department || undefined,
         hours: item.hours ? Number(item.hours.replace(/\s+/g, "")) : undefined,
         directCost: item.directCost ? Number(item.directCost.replace(/\s+/g, "")) : undefined,
-        hodConfirmed: item.hodConfirmed ?? false,
+        hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
+        validationSkipped: item.validationSkipped,
       })),
-    [specialists],
+    [contractors, internalSpecialists],
   );
   const contestHasSpecialists = useMemo(
     () =>
@@ -262,13 +307,14 @@ export default function NewRequestPage() {
   const isContestCategory =
     category === "Конкурсное задание" ||
     data?.request?.category === "Конкурсное задание" ||
-    specialists.some(
+    [...internalSpecialists, ...contractors].some(
       (item) =>
         item.name.trim() ||
         item.department.trim() ||
         item.hours.trim() ||
         item.directCost.trim() ||
-        item.hodConfirmed,
+        item.hodConfirmed ||
+        item.validationSkipped,
     );
   const contestAmount = useMemo(
     () =>
@@ -293,6 +339,19 @@ export default function NewRequestPage() {
     [financeLinks],
   );
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
+  const incomingRatioValue = useMemo(
+    () =>
+      formatIncomingRatio(
+        calculateIncomingRatio({
+          incomingAmount: parseMoneyInput(incomingAmount),
+          amountWithoutVat: parseMoneyInput(
+            contestHasSpecialists ? String(contestAmount) : amount,
+          ),
+          amountWithVat: parseMoneyInput(amountWithVat),
+        }),
+      ),
+    [amount, amountWithVat, contestAmount, contestHasSpecialists, incomingAmount],
+  );
 
   const enforcedRoles = useMemo(() => {
     return new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
@@ -318,6 +377,15 @@ export default function NewRequestPage() {
   }, [fundingSource, category]);
 
   useEffect(() => {
+    if (!paymentMethod) {
+      return;
+    }
+    if (!paymentMethodOptions.includes(paymentMethod as (typeof paymentMethodOptions)[number])) {
+      setPaymentMethod("");
+    }
+  }, [paymentMethod, paymentMethodOptions]);
+
+  useEffect(() => {
     if (!contestHasSpecialists) {
       return;
     }
@@ -341,6 +409,9 @@ export default function NewRequestPage() {
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
+    }
+    if (nextCategory === "Welcome-бонус") {
+      setPaymentMethod("");
     }
   }
 
@@ -398,10 +469,13 @@ export default function NewRequestPage() {
         throw new Error("выбран неверный источник финансирования или категория заявки");
       }
       if (approvalDeadline && neededBy && new Date(approvalDeadline) > new Date(neededBy)) {
-        throw new Error("Дедлайн согласования должен быть не позже даты, когда нужны деньги");
+        throw new Error("Дедлайн согласования должен быть не позже даты, когда нужно оплатить");
       }
       if (category === "Welcome-бонус" && !investmentReturn.trim()) {
         throw new Error("Укажите, как будем возвращать инвестиции");
+      }
+      if (paidByError) {
+        throw new Error(paidByError);
       }
       const resolvedAmounts = resolveVatAmounts({
         amountWithoutVat: effectiveAmountWithoutVatInput,
@@ -434,14 +508,13 @@ export default function NewRequestPage() {
           isServiceCategory
             ? ""
             : counterparty,
+        paymentMethod:
+          category === "Welcome-бонус"
+            ? undefined
+            : paymentMethod || undefined,
         contacts: category === "Конкурсное задание" || isServiceCategory ? [] : contactsList,
         relatedRequests: relatedRequestsList,
-        links:
-          category === "Конкурсное задание" ||
-          category === "Welcome-бонус" ||
-          isServiceCategory
-            ? []
-            : linksList,
+        links: [],
         specialists: category === "Конкурсное задание" ? specialistsPayload : undefined,
         financePlanLinks:
           category === "Конкурсное задание" ||
@@ -451,10 +524,18 @@ export default function NewRequestPage() {
             : financeLinksList.length
               ? financeLinksList
               : undefined,
+        incomingAmount:
+          isClientTransitCategory && incomingAmount
+            ? parseMoneyInput(incomingAmount)
+            : undefined,
+        shipmentMonth:
+          isClientTransitCategory
+            ? buildShipmentMonthKey(shipmentYear, shipmentMonth)
+            : undefined,
         approvalDeadline: approvalDeadline ? new Date(approvalDeadline).getTime() : undefined,
         neededBy: neededBy ? new Date(neededBy).getTime() : undefined,
         paidBy:
-          showClientTransitPaidBy && paidBy
+          isClientTransitCategory && paidBy
             ? new Date(paidBy).getTime()
             : undefined,
         requiredRoles,
@@ -548,6 +629,7 @@ export default function NewRequestPage() {
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2 sm:col-span-3">
                   <Label htmlFor="title">Название заявки</Label>
+                  <p className="text-xs text-muted-foreground">На что нужен бюджет</p>
                   <Input
                     id="title"
                     value={title}
@@ -573,7 +655,30 @@ export default function NewRequestPage() {
                 </div>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-3">
+              {isContestCategory ? (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Для конкурсного задания сначала укажите внутренних специалистов и подрядчиков.
+                    Общая сумма соберется из их прямых затрат автоматически.
+                  </p>
+                  <ContestParticipantsEditor
+                    addLabel="+ Добавить внутреннего специалиста"
+                    emptyNamePlaceholder="Специалист"
+                    label="Внутренние специалисты"
+                    rows={internalSpecialists}
+                    setRows={setInternalSpecialists}
+                  />
+                  <ContestParticipantsEditor
+                    addLabel="+ Добавить подрядчика"
+                    emptyNamePlaceholder="Подрядчик"
+                    label="Подрядчики"
+                    rows={contractors}
+                    setRows={setContractors}
+                  />
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.42fr)_minmax(0,0.4fr)]">
                 <div className="space-y-2">
                   <Label htmlFor="amount">Сумма без НДС</Label>
                   <Input
@@ -597,7 +702,7 @@ export default function NewRequestPage() {
                   />
                   {contestHasSpecialists ? (
                     <p className="text-xs text-muted-foreground">
-                      Сумма без НДС считается автоматически по прямым затратам специалистов.
+                      Сумма без НДС считается автоматически по прямым затратам внутренних специалистов и подрядчиков.
                     </p>
                   ) : null}
                 </div>
@@ -633,6 +738,7 @@ export default function NewRequestPage() {
                     id="vatRate"
                     type="text"
                     inputMode="decimal"
+                    className="w-full"
                     value={vatRate}
                     onChange={(event) => {
                       const nextVatRate = event.target.value.replace(/\s+/g, "");
@@ -655,153 +761,12 @@ export default function NewRequestPage() {
                       setAmountWithVat(synced.amountWithVatInput);
                     }}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    По умолчанию {DEFAULT_VAT_RATE}%. Если поле пустое, считаем 0%.
-                  </p>
                 </div>
-                <p className="text-xs text-muted-foreground sm:col-span-3">
-                  Введите ту сумму, которую знаете. НДС рассчитается автоматически в соответствии с указанным процентом.
-                </p>
-              </div>
-
-              {isContestCategory && (
-                <div className="space-y-3 rounded-lg border border-border p-4">
-                  <div className="space-y-1">
-                    <Label>Специалисты</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Если в конкурсном задании участвуют специалисты, добавьте их здесь. После этого
-                      заявка уйдет сначала на валидацию цехов.
-                    </p>
-                  </div>
-                  {specialists.map((item, index) => (
-                    <div
-                      key={item.id}
-                      className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)]"
-                    >
-                      <Input
-                        className="min-w-0"
-                        placeholder="Специалист"
-                        value={item.name}
-                        onChange={(event) =>
-                          setSpecialists((current) =>
-                            current.map((row) =>
-                              row.id === item.id ? { ...row, name: event.target.value } : row,
-                            ),
-                          )
-                        }
-                      />
-                      <Select
-                        value={item.department || "none"}
-                        onValueChange={(value) =>
-                          setSpecialists((current) =>
-                            current.map((row) =>
-                              row.id === item.id
-                                ? { ...row, department: value === "none" ? "" : value }
-                                : row,
-                            ),
-                          )
-                        }
-                      >
-                        <SelectTrigger className="min-w-0 w-full">
-                          <SelectValue placeholder="Цех" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">Цех не выбран</SelectItem>
-                          {HOD_DEPARTMENTS.map((dep) => (
-                            <SelectItem key={dep} value={dep}>
-                              {dep}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Input
-                        className="min-w-0"
-                        placeholder="Часы"
-                        inputMode="decimal"
-                        value={item.hours}
-                        onChange={(event) =>
-                          setSpecialists((current) =>
-                            current.map((row) =>
-                              row.id === item.id
-                                ? { ...row, hours: event.target.value.replace(/\s+/g, "") }
-                                : row,
-                            ),
-                          )
-                        }
-                      />
-                      <Input
-                        className="min-w-0"
-                        placeholder="Прямые затраты"
-                        inputMode="decimal"
-                        value={item.directCost}
-                        onChange={(event) =>
-                          setSpecialists((current) =>
-                            current.map((row) =>
-                              row.id === item.id
-                                ? { ...row, directCost: event.target.value.replace(/\s+/g, "") }
-                                : row,
-                            ),
-                          )
-                        }
-                      />
-                      <div className="sm:col-span-4 -mt-1 text-xs text-muted-foreground">
-                        Уточните у руководителя цеха или отправьте на заполнение.
-                      </div>
-                      {index > 0 && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="sm:col-span-4 w-fit"
-                          onClick={() =>
-                            setSpecialists((current) => current.filter((row) => row.id !== item.id))
-                          }
-                        >
-                          Удалить специалиста
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      setSpecialists((current) => [
-                        ...current,
-                        {
-                          id: crypto.randomUUID(),
-                          name: "",
-                          department: "",
-                          hours: "",
-                          directCost: "",
-                        },
-                      ])
-                    }
-                  >
-                    + Добавить специалиста
-                  </Button>
-                </div>
-              )}
-
-              {category !== "Конкурсное задание" &&
-              category !== "Welcome-бонус" &&
-              !isServiceCategory && (
-                <div className="space-y-2">
-                  <Label htmlFor="counterparty">Контрагент (кому платим)</Label>
-                  <Input
-                    id="counterparty"
-                    value={counterparty}
-                    onChange={(event) => setCounterparty(event.target.value)}
-                    required
-                  />
-                </div>
-              )}
-
-              <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="currency">Валюта</Label>
                   <Select value={currency} onValueChange={setCurrency}>
                     <SelectTrigger id="currency">
-                      <SelectValue placeholder="Выберите валюту" />
+                      <SelectValue placeholder="Валюта" />
                     </SelectTrigger>
                     <SelectContent>
                       {CURRENCIES.map((item) => (
@@ -812,8 +777,51 @@ export default function NewRequestPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                {category !== "Конкурсное задание" && !isServiceCategory && (
-                  <div className="space-y-2 sm:col-span-2">
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  Введите ту сумму, которую знаете. НДС рассчитается автоматически в соответствии с указанным процентом.
+                </p>
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  По умолчанию {DEFAULT_VAT_RATE}%. Если поле пустое, считаем 0%.
+                </p>
+              </div>
+
+              {category !== "Конкурсное задание" &&
+              category !== "Welcome-бонус" &&
+              !isServiceCategory && (
+                <div className="space-y-2">
+                  <Label htmlFor="counterparty">Кому платим мы</Label>
+                  <Input
+                    id="counterparty"
+                    value={counterparty}
+                    onChange={(event) => setCounterparty(event.target.value)}
+                    required
+                  />
+                </div>
+              )}
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                {showPaymentMethod ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="paymentMethod">Способ оплаты</Label>
+                    <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                      <SelectTrigger id="paymentMethod">
+                        <SelectValue placeholder="Выберите способ оплаты" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {paymentMethodOptions.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {item}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {isPaymentMethodRequired ? (
+                      <p className="text-xs text-muted-foreground">Поле обязательно для этой категории.</p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {category !== "Конкурсное задание" && !isServiceCategory ? (
+                  <div className={`space-y-2 ${showPaymentMethod ? "sm:col-span-2" : "sm:col-span-3"}`}>
                     <Label htmlFor="contacts">Контакты клиента</Label>
                     <Textarea
                       id="contacts"
@@ -822,33 +830,8 @@ export default function NewRequestPage() {
                       rows={3}
                     />
                   </div>
-                )}
+                ) : null}
               </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="relatedRequests">Связана с заявками (по одной в строке)</Label>
-                <Textarea
-                  id="relatedRequests"
-                  value={relatedRequests}
-                  onChange={(event) => setRelatedRequests(event.target.value)}
-                  placeholder="Например, WB_QS_00012 или https://..."
-                  rows={3}
-                />
-              </div>
-
-              {category !== "Конкурсное задание" &&
-              category !== "Welcome-бонус" &&
-              !isServiceCategory && (
-                <div className="space-y-2">
-                  <Label htmlFor="links">Ссылки на материалы (по одной в строке)</Label>
-                  <Textarea
-                    id="links"
-                    value={links}
-                    onChange={(event) => setLinks(event.target.value)}
-                    rows={3}
-                  />
-                </div>
-              )}
 
               <div className="space-y-2">
                 <Label htmlFor="justification">Обоснование</Label>
@@ -874,6 +857,26 @@ export default function NewRequestPage() {
                 />
               </div>
 
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  className="text-sm font-medium text-left"
+                  onClick={() => setRelatedRequestsExpanded((current) => !current)}
+                  aria-expanded={relatedRequestsExpanded}
+                >
+                  {relatedRequestsExpanded ? "▾ " : "▸ "}Указать связанные заявки
+                </button>
+                {relatedRequestsExpanded ? (
+                  <Textarea
+                    id="relatedRequests"
+                    value={relatedRequests}
+                    onChange={(event) => setRelatedRequests(event.target.value)}
+                    placeholder="Например, WB_QS_00012 или https://..."
+                    rows={3}
+                  />
+                ) : null}
+              </div>
+
               {category === "Welcome-бонус" && (
                 <div className="space-y-2">
                   <Label htmlFor="investmentReturn">Как будем возвращать инвестиции</Label>
@@ -889,7 +892,7 @@ export default function NewRequestPage() {
 
               {fundingSource === "Отгрузки проекта" && (
                 <div className="space-y-2">
-                  <Label htmlFor="financeLinks">Ссылки на финплан (по одной в строке)</Label>
+                  <Label htmlFor="financeLinks">ID и название отгрузки в финплане (по одной в строке)</Label>
                   <Textarea
                     id="financeLinks"
                     value={financeLinks}
@@ -899,17 +902,68 @@ export default function NewRequestPage() {
                 </div>
               )}
 
-              {showClientTransitPaidBy && (
-                <div className="space-y-2 sm:max-w-xs">
-                  <Label htmlFor="paidBy">Когда заплатят нам</Label>
-                  <Input
-                    id="paidBy"
-                    type="date"
-                    value={paidBy}
-                    onChange={(event) => setPaidBy(event.target.value)}
-                  />
+              {isClientTransitCategory ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="incomingAmount">Сколько платят нам</Label>
+                    <Input
+                      id="incomingAmount"
+                      type="text"
+                      inputMode="decimal"
+                      value={incomingAmount}
+                      onChange={(event) => setIncomingAmount(event.target.value.replace(/\s+/g, ""))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="incomingRatio">Какой Х</Label>
+                    <Input id="incomingRatio" value={incomingRatioValue} readOnly />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Месяц отгрузки</Label>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Select value={shipmentMonth} onValueChange={setShipmentMonth}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Месяц" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SHIPMENT_MONTH_NAMES.map((item, index) => {
+                            const value = String(index + 1).padStart(2, "0");
+                            return (
+                              <SelectItem key={value} value={value}>
+                                {item}
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                      <Select value={shipmentYear} onValueChange={setShipmentYear}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Год" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {shipmentYearOptions.map((item) => (
+                            <SelectItem key={item} value={item}>
+                              {item}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="paidBy">Когда заплатят нам</Label>
+                    <Input
+                      id="paidBy"
+                      type="date"
+                      value={paidBy}
+                      onChange={(event) => setPaidBy(event.target.value)}
+                    />
+                    {paidByError ? (
+                      <p className="text-xs text-destructive">{paidByError}</p>
+                    ) : null}
+                  </div>
                 </div>
-              )}
+              ) : null}
               {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
                 (fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(category) && isAiBoss && aiToolQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
@@ -951,7 +1005,7 @@ export default function NewRequestPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="neededBy">Нужны деньги к</Label>
+                  <Label htmlFor="neededBy">Когда нужно оплатить</Label>
                   <Input
                     id="neededBy"
                     type="date"

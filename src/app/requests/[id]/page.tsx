@@ -11,7 +11,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
@@ -19,6 +18,12 @@ import RequestMetaSummary from "@/components/request-meta-summary";
 import { getApprovalStatusClass, getRequestStatusSummary } from "@/lib/requestStatus";
 import { HOD_DEPARTMENTS } from "@/lib/constants";
 import { getRoleLabel } from "@/lib/roleLabels";
+import {
+  formatIncomingRatio,
+  formatMonthKeyLabel,
+  normalizeContestSpecialistSource,
+  requiresContestSpecialistValidation,
+} from "@/lib/requestFields";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
@@ -40,10 +45,12 @@ import { HoverHint } from "@/components/ui/hover-hint";
 type SpecialistView = {
   id: string;
   name: string;
+  sourceType?: string;
   department?: string;
   hours?: number;
   directCost?: number;
   hodConfirmed?: boolean;
+  validationSkipped?: boolean;
 };
 
 const MAX_ATTACHMENTS = 20;
@@ -414,11 +421,20 @@ export default function RequestDetailPage() {
       myRoles.includes("HOD") &&
       (request.specialists ?? []).some(
         (item) =>
-          item.department &&
+          requiresContestSpecialistValidation(item) &&
           (data.hodDepartments ?? []).includes(item.department) &&
           (!item.hodConfirmed || item.directCost === undefined),
       ),
   );
+  const allContestParticipants = (request.specialists ?? []) as SpecialistView[];
+  const contestParticipants = {
+    internal: allContestParticipants.filter(
+      (item) => normalizeContestSpecialistSource(item.sourceType) === "internal",
+    ),
+    contractor: allContestParticipants.filter(
+      (item) => normalizeContestSpecialistSource(item.sourceType) === "contractor",
+    ),
+  };
   const baseStatusSummary = getRequestStatusSummary(request, approvals);
   const isActionableForViewer =
     request.status === "pending" &&
@@ -1254,7 +1270,7 @@ export default function RequestDetailPage() {
                             checked={confirmLatePaymentPlan}
                             onChange={(event) => setConfirmLatePaymentPlan(event.target.checked)}
                           />
-                          Дата позже срока “нужны деньги”. Подтверждаю, что ставлю ее сознательно.
+                          Дата позже срока “когда нужно оплатить”. Подтверждаю, что ставлю ее сознательно.
                         </label>
                       ) : null}
                       {paymentActionError ? (
@@ -1277,29 +1293,6 @@ export default function RequestDetailPage() {
                   </p>
                 ) : null}
               </div>
-              {request.relatedRequests?.length ? (
-                <div>
-                  <div className="text-muted-foreground">Связана с заявками</div>
-                  <ul className="mt-1 space-y-1">
-                    {request.relatedRequests.map((item: string, index: number) => (
-                      <li key={`${item}-${index}`}>
-                        {item.startsWith("http://") || item.startsWith("https://") ? (
-                          <a
-                            className="text-primary underline"
-                            href={item}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {item}
-                          </a>
-                        ) : (
-                          <span>{item}</span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
               {request.category !== "Конкурсное задание" ? (
               <div className="space-y-3">
                 <div className="text-muted-foreground">Файлы</div>
@@ -1482,7 +1475,7 @@ export default function RequestDetailPage() {
               request.category !== "Welcome-бонус" &&
               !isServiceCategory ? (
                 <div>
-                  <div className="text-muted-foreground">Контрагент</div>
+                  <div className="text-muted-foreground">Кому платим мы</div>
                   <p className="mt-1">{request.counterparty || "Не указан"}</p>
                 </div>
               ) : null}
@@ -1500,9 +1493,9 @@ export default function RequestDetailPage() {
                   </p>
                 </div>
                 <div>
-                  <div className="text-muted-foreground">Нужны деньги к</div>
+                  <div className="text-muted-foreground">Когда нужно оплатить</div>
                   <p className="mt-1">
-                    <HoverHint label="Дата, к которой деньги должны быть у автора заявки">
+                    <HoverHint label="Дата, к которой заявку нужно оплатить">
                       <span>
                         {request.neededBy
                           ? new Date(request.neededBy).toLocaleDateString("ru-RU")
@@ -1522,10 +1515,39 @@ export default function RequestDetailPage() {
                   <p className="mt-1 whitespace-pre-wrap">{request.details}</p>
                 </div>
               ) : null}
+              {request.relatedRequests?.length ? (
+                <div>
+                  <div className="text-muted-foreground">Связанные заявки</div>
+                  <ul className="mt-1 space-y-1">
+                    {request.relatedRequests.map((item: string, index: number) => (
+                      <li key={`${item}-${index}`}>
+                        {item.startsWith("http://") || item.startsWith("https://") ? (
+                          <a
+                            className="text-primary underline"
+                            href={item}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {item}
+                          </a>
+                        ) : (
+                          <span>{item}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {request.investmentReturn ? (
                 <div>
                   <div className="text-muted-foreground">Как будем возвращать инвестиции</div>
                   <p className="mt-1 whitespace-pre-wrap">{request.investmentReturn}</p>
+                </div>
+              ) : null}
+              {request.paymentMethod ? (
+                <div>
+                  <div className="text-muted-foreground">Способ оплаты</div>
+                  <p className="mt-1">{request.paymentMethod}</p>
                 </div>
               ) : null}
               {request.category !== "Конкурсное задание" &&
@@ -1543,29 +1565,9 @@ export default function RequestDetailPage() {
                   )}
                 </div>
               ) : null}
-              {request.category !== "Конкурсное задание" &&
-              request.category !== "Welcome-бонус" &&
-              !isServiceCategory ? (
-                <div>
-                  <div className="text-muted-foreground">Ссылки</div>
-                  {request.links.length ? (
-                    <ul className="mt-1 list-disc pl-5">
-                      {request.links.map((link, index) => (
-                        <li key={`${link}-${index}`}>
-                          <a className="text-primary underline" href={link} target="_blank" rel="noreferrer">
-                            {link}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-1 text-muted-foreground">Ссылки не указаны.</p>
-                  )}
-                </div>
-              ) : null}
               {request.financePlanLinks?.length ? (
                 <div>
-                  <div className="text-muted-foreground">Финплан</div>
+                  <div className="text-muted-foreground">ID и название отгрузки в финплане</div>
                   <ul className="mt-1 list-disc pl-5">
                     {request.financePlanLinks.map((link, index) => (
                       <li key={`${link}-${index}`}>
@@ -1583,146 +1585,183 @@ export default function RequestDetailPage() {
                   <p className="mt-1">{new Date(request.paidBy).toLocaleDateString("ru-RU")}</p>
                 </div>
               ) : null}
-              {request.fundingSource === "Отгрузки проекта" && !request.financePlanLinks?.length ? (
-                <p className="text-sm text-muted-foreground">Ссылки на финплан не указаны.</p>
-              ) : null}
-              {request.category === "Конкурсное задание" && (
-                <div className="space-y-3">
-                  <div className="text-muted-foreground">Специалисты</div>
-                  {(request.specialists ?? []).length ? (
-                    (request.specialists as SpecialistView[]).map((item) => {
-                      const draft = specialistDrafts[item.id] ?? item;
-                      const canEditThis =
-                        data.canHodEditSpecialists &&
-                        (item.department
-                          ? (data.hodDepartments ?? []).includes(item.department)
-                          : true);
-                      return (
-                        <div
-                          key={item.id}
-                          className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.8fr)]"
-                        >
-                          <Input
-                            className="min-w-0"
-                            value={draft.name}
-                            onChange={(event) =>
-                              setSpecialistDrafts((current) => ({
-                                ...current,
-                                [item.id]: { ...draft, name: event.target.value },
-                              }))
-                            }
-                            disabled={!canEditThis}
-                            placeholder="Специалист"
-                          />
-                          <Select
-                            value={draft.department ?? "none"}
-                            onValueChange={(value) =>
-                              setSpecialistDrafts((current) => ({
-                                ...current,
-                                [item.id]: {
-                                  ...draft,
-                                  department: value === "none" ? undefined : value,
-                                },
-                              }))
-                            }
-                            disabled={!canEditThis}
-                          >
-                            <SelectTrigger className="min-w-0 w-full">
-                              <SelectValue placeholder="Цех" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="none">Цех не выбран</SelectItem>
-                              {(
-                                myRoles?.includes("ADMIN") ? HOD_DEPARTMENTS : data.hodDepartments ?? []
-                              ).map((dep: string) => (
-                                <SelectItem key={dep} value={dep}>
-                                  {dep}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Input
-                            className="min-w-0"
-                            inputMode="decimal"
-                            value={draft.hours === undefined ? "" : String(draft.hours)}
-                            onChange={(event) =>
-                              setSpecialistDrafts((current) => ({
-                                ...current,
-                                [item.id]: {
-                                  ...draft,
-                                  hours: event.target.value ? Number(event.target.value) : undefined,
-                                },
-                              }))
-                            }
-                            disabled={!canEditThis}
-                            placeholder="Часы"
-                          />
-                          <Input
-                            className="min-w-0"
-                            inputMode="decimal"
-                            value={draft.directCost === undefined ? "" : String(draft.directCost)}
-                            onChange={(event) =>
-                              setSpecialistDrafts((current) => ({
-                                ...current,
-                                [item.id]: {
-                                  ...draft,
-                                  directCost: event.target.value
-                                    ? Number(event.target.value)
-                                    : undefined,
-                                },
-                              }))
-                            }
-                            disabled={!canEditThis}
-                            placeholder="Прямые затраты"
-                          />
-                          <label className="flex items-center gap-2 text-sm">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(draft.hodConfirmed)}
-                              onChange={async (event) => {
-                                const checked = event.target.checked;
-                                setSpecialistDrafts((current) => ({
-                                  ...current,
-                                  [item.id]: { ...draft, hodConfirmed: checked },
-                                }));
-                                if (!canEditThis) {
-                                  return;
-                                }
-                                setSavingSpecialistId(item.id);
-                                setError(null);
-                                try {
-                                  await updateContestSpecialist({
-                                    requestId: request._id,
-                                    specialistId: item.id,
-                                    name: draft.name,
-                                    department: draft.department,
-                                    hours: draft.hours,
-                                    directCost: draft.directCost,
-                                    hodConfirmed: checked,
-                                  });
-                                  router.refresh();
-                                } catch (err) {
-                                  setError(
-                                    err instanceof Error
-                                      ? err.message
-                                      : "Не удалось обновить специалиста",
-                                  );
-                                } finally {
-                                  setSavingSpecialistId(null);
-                                }
-                              }}
-                              disabled={!canEditThis || savingSpecialistId === item.id}
-                            />
-                            Подтверждено Цехом
-                          </label>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Специалисты не указаны.</p>
-                  )}
+              {request.incomingAmount !== undefined ? (
+                <div>
+                  <div className="text-muted-foreground">Сколько платят нам</div>
+                  <p className="mt-1">{request.incomingAmount.toLocaleString("ru-RU")} {request.currency}</p>
                 </div>
-              )}
+              ) : null}
+              {request.incomingRatio !== undefined ? (
+                <div>
+                  <div className="text-muted-foreground">Какой Х</div>
+                  <p className="mt-1">{formatIncomingRatio(request.incomingRatio)}</p>
+                </div>
+              ) : null}
+              {request.shipmentMonth ? (
+                <div>
+                  <div className="text-muted-foreground">Месяц отгрузки</div>
+                  <p className="mt-1">{formatMonthKeyLabel(request.shipmentMonth)}</p>
+                </div>
+              ) : null}
+              {request.fundingSource === "Отгрузки проекта" && !request.financePlanLinks?.length ? (
+                <p className="text-sm text-muted-foreground">ID и название отгрузки в финплане не указаны.</p>
+              ) : null}
+              {request.category === "Конкурсное задание" ? (
+                <div className="space-y-4">
+                  {[
+                    { key: "internal", label: "Внутренние специалисты", items: contestParticipants.internal },
+                    { key: "contractor", label: "Подрядчики", items: contestParticipants.contractor },
+                  ].map((section) => (
+                    <div key={section.key} className="space-y-3">
+                      <div className="text-muted-foreground">{section.label}</div>
+                      {section.items.length ? (
+                        section.items.map((item) => {
+                          const draft = specialistDrafts[item.id] ?? item;
+                          const canEditThis =
+                            !item.validationSkipped &&
+                            data.canHodEditSpecialists &&
+                            (item.department
+                              ? (data.hodDepartments ?? []).includes(item.department)
+                              : true);
+                          return (
+                            <div
+                              key={item.id}
+                              className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.8fr)]"
+                            >
+                              <Input
+                                className="min-w-0"
+                                value={draft.name}
+                                onChange={(event) =>
+                                  setSpecialistDrafts((current) => ({
+                                    ...current,
+                                    [item.id]: { ...draft, name: event.target.value },
+                                  }))
+                                }
+                                disabled={!canEditThis}
+                                placeholder={section.key === "contractor" ? "Подрядчик" : "Специалист"}
+                              />
+                              <Select
+                                value={draft.department ?? "none"}
+                                onValueChange={(value) =>
+                                  setSpecialistDrafts((current) => ({
+                                    ...current,
+                                    [item.id]: {
+                                      ...draft,
+                                      department: value === "none" ? undefined : value,
+                                    },
+                                  }))
+                                }
+                                disabled={!canEditThis}
+                              >
+                                <SelectTrigger className="min-w-0 w-full">
+                                  <SelectValue placeholder="Цех" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="none">Цех не выбран</SelectItem>
+                                  {(
+                                    myRoles?.includes("ADMIN") ? HOD_DEPARTMENTS : data.hodDepartments ?? []
+                                  ).map((dep: string) => (
+                                    <SelectItem key={dep} value={dep}>
+                                      {dep}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Input
+                                className="min-w-0"
+                                inputMode="decimal"
+                                value={draft.hours === undefined ? "" : String(draft.hours)}
+                                onChange={(event) =>
+                                  setSpecialistDrafts((current) => ({
+                                    ...current,
+                                    [item.id]: {
+                                      ...draft,
+                                      hours: event.target.value ? Number(event.target.value) : undefined,
+                                    },
+                                  }))
+                                }
+                                disabled={!canEditThis}
+                                placeholder="Часы"
+                              />
+                              <Input
+                                className="min-w-0"
+                                inputMode="decimal"
+                                value={draft.directCost === undefined ? "" : String(draft.directCost)}
+                                onChange={(event) =>
+                                  setSpecialistDrafts((current) => ({
+                                    ...current,
+                                    [item.id]: {
+                                      ...draft,
+                                      directCost: event.target.value ? Number(event.target.value) : undefined,
+                                    },
+                                  }))
+                                }
+                                disabled={!canEditThis}
+                                placeholder="Прямые затраты"
+                              />
+                              {item.validationSkipped ? (
+                                <div className="flex items-center text-sm text-muted-foreground">
+                                  Валидация не требуется
+                                </div>
+                              ) : (
+                                <label className="flex items-center gap-2 text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(draft.hodConfirmed)}
+                                    onChange={async (event) => {
+                                      const checked = event.target.checked;
+                                      setSpecialistDrafts((current) => ({
+                                        ...current,
+                                        [item.id]: { ...draft, hodConfirmed: checked },
+                                      }));
+                                      if (!canEditThis) {
+                                        return;
+                                      }
+                                      setSavingSpecialistId(item.id);
+                                      setError(null);
+                                      try {
+                                        await updateContestSpecialist({
+                                          requestId: request._id,
+                                          specialistId: item.id,
+                                          name: draft.name,
+                                          department: draft.department,
+                                          hours: draft.hours,
+                                          directCost: draft.directCost,
+                                          hodConfirmed: checked,
+                                        });
+                                        router.refresh();
+                                      } catch (err) {
+                                        setError(
+                                          err instanceof Error
+                                            ? err.message
+                                            : "Не удалось обновить специалиста",
+                                        );
+                                      } finally {
+                                        setSavingSpecialistId(null);
+                                      }
+                                    }}
+                                    disabled={!canEditThis || savingSpecialistId === item.id}
+                                  />
+                                  Подтверждено цехом
+                                </label>
+                              )}
+                              <div className="sm:col-span-5 text-xs text-muted-foreground">
+                                {item.validationSkipped
+                                  ? "Цех не получает задачу на валидацию по этой записи."
+                                  : item.hodConfirmed
+                                    ? "Прямые затраты подтверждены руководителем цеха."
+                                    : "Ждет валидации руководителя цеха."}
+                              </div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <p className="text-sm text-muted-foreground">Пока не добавлены.</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 

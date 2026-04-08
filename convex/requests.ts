@@ -17,6 +17,15 @@ import {
   normalizeRequestCategory,
 } from "../src/lib/requestRules";
 import {
+  calculateIncomingRatio,
+  formatMonthKeyLabel,
+  getPaymentMethodOptions,
+  isContestSpecialistValidated,
+  isPaidByTimestampAllowed,
+  normalizeContestSpecialistSource,
+  requiresContestSpecialistValidation,
+} from "../src/lib/requestFields";
+import {
   getAmountWithVat,
   normalizeVatRate,
   resolveVatAmounts,
@@ -108,16 +117,19 @@ function normalizeSpecialists(
   specialists: Array<{
     id: string;
     name: string;
+    sourceType?: string;
     department?: string;
     hours?: number;
     directCost?: number;
     hodConfirmed?: boolean;
+    validationSkipped?: boolean;
   }>,
 ) {
   return specialists
     .map((item) => ({
       id: item.id,
       name: item.name?.trim() ?? "",
+      sourceType: normalizeContestSpecialistSource(item.sourceType),
       department: item.department?.trim() || undefined,
       hours:
         typeof item.hours === "number" && Number.isFinite(item.hours)
@@ -127,14 +139,16 @@ function normalizeSpecialists(
         typeof item.directCost === "number" && Number.isFinite(item.directCost)
           ? item.directCost
           : undefined,
-      hodConfirmed: item.hodConfirmed ?? false,
+      hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
+      validationSkipped: item.validationSkipped ?? false,
     }))
     .filter(
       (item) =>
         item.name ||
         item.department ||
         item.hours !== undefined ||
-        item.directCost !== undefined,
+        item.directCost !== undefined ||
+        item.validationSkipped,
     );
 }
 
@@ -149,26 +163,33 @@ function hasContestSpecialists(specialists: Array<{ name: string; department?: s
 }
 
 function hasContestDepartments(
-  specialists: Array<{ department?: string }>,
+  specialists: Array<{ department?: string; validationSkipped?: boolean }>,
 ) {
-  return specialists.some((item) => Boolean(item.department));
+  return specialists.some((item) => requiresContestSpecialistValidation(item));
 }
 
 function isDepartmentSpecialistReady(
-  specialist: { department?: string; directCost?: number; hodConfirmed?: boolean },
+  specialist: {
+    department?: string;
+    directCost?: number;
+    hodConfirmed?: boolean;
+    validationSkipped?: boolean;
+  },
 ) {
-  return Boolean(
-    specialist.department &&
-      specialist.hodConfirmed &&
-      typeof specialist.directCost === "number" &&
-      Number.isFinite(specialist.directCost),
-  );
+  return isContestSpecialistValidated(specialist);
 }
 
 function areContestDepartmentsValidated(
-  specialists: Array<{ department?: string; directCost?: number; hodConfirmed?: boolean }>,
+  specialists: Array<{
+    department?: string;
+    directCost?: number;
+    hodConfirmed?: boolean;
+    validationSkipped?: boolean;
+  }>,
 ) {
-  const departmentalSpecialists = specialists.filter((item) => item.department);
+  const departmentalSpecialists = specialists.filter((item) =>
+    requiresContestSpecialistValidation(item),
+  );
   if (!departmentalSpecialists.length) {
     return true;
   }
@@ -200,7 +221,10 @@ function hasHodAccessToRequest(roleRecord: any, request: any) {
     return false;
   }
   const specialists = request.specialists ?? [];
-  return specialists.some((item: any) => item.department && departments.includes(item.department));
+  return specialists.some(
+    (item: any) =>
+      requiresContestSpecialistValidation(item) && departments.includes(item.department),
+  );
 }
 
 async function hasHistoricalApprovalAccess(ctx: { db: any }, requestId: any, email: string) {
@@ -469,11 +493,15 @@ async function getNextRequestCode(ctx: { db: any }, category: string, fundingSou
 const specialistValidator = v.object({
   id: v.string(),
   name: v.string(),
+  sourceType: v.optional(v.string()),
   department: v.optional(v.string()),
   hours: v.optional(v.number()),
   directCost: v.optional(v.number()),
   hodConfirmed: v.optional(v.boolean()),
+  validationSkipped: v.optional(v.boolean()),
 });
+
+const paymentDueFilterEnum = v.union(v.literal("today"), v.literal("overdue"));
 
 const requestPayloadValidator = {
   title: v.string(),
@@ -484,6 +512,7 @@ const requestPayloadValidator = {
   currency: v.string(),
   fundingSource: v.string(),
   counterparty: v.string(),
+  paymentMethod: v.optional(v.string()),
   justification: v.string(),
   details: v.optional(v.string()),
   investmentReturn: v.optional(v.string()),
@@ -492,6 +521,8 @@ const requestPayloadValidator = {
   relatedRequests: v.optional(v.array(v.string())),
   links: v.array(v.string()),
   financePlanLinks: v.optional(v.array(v.string())),
+  incomingAmount: v.optional(v.number()),
+  shipmentMonth: v.optional(v.string()),
   specialists: v.optional(v.array(specialistValidator)),
   approvalDeadline: v.optional(v.number()),
   neededBy: v.optional(v.number()),
@@ -508,18 +539,22 @@ const requestFieldLabels: Record<string, string> = {
   vatRate: "Ставка НДС",
   currency: "Валюта",
   fundingSource: "Источник финансирования",
-  counterparty: "Контрагент",
+  counterparty: "Кому платим мы",
+  paymentMethod: "Способ оплаты",
   justification: "Обоснование",
   details: "Детали заявки",
   investmentReturn: "Как будем возвращать инвестиции",
   clientName: "Клиент / получатель сервиса",
   contacts: "Контакты клиента",
-  relatedRequests: "Связана с заявками",
+  relatedRequests: "Связанные заявки",
   links: "Ссылки на материалы",
-  financePlanLinks: "Ссылки на финплан",
-  specialists: "Специалисты",
+  financePlanLinks: "ID и название отгрузки в финплане",
+  incomingAmount: "Сколько платят нам",
+  incomingRatio: "Какой Х",
+  shipmentMonth: "Месяц отгрузки",
+  specialists: "Участники конкурсного задания",
   approvalDeadline: "Дедлайн согласования",
-  neededBy: "Нужны деньги к",
+  neededBy: "Когда нужно оплатить",
   paidBy: "Когда заплатят нам",
   requiredRoles: "Обязательные согласующие",
   status: "Статус заявки",
@@ -536,6 +571,9 @@ function formatValueForHistory(field: string, value: unknown) {
     return String(value);
   }
   if (typeof value === "string") {
+    if (field === "shipmentMonth") {
+      return formatMonthKeyLabel(value);
+    }
     return value;
   }
   if (Array.isArray(value)) {
@@ -550,10 +588,12 @@ function formatValueForHistory(field: string, value: unknown) {
         if (item && typeof item === "object") {
           const specialist = item as any;
           const parts = [
+            specialist.sourceType === "contractor" ? "Подрядчик" : "Внутренний специалист",
             specialist.name,
             specialist.department,
             specialist.hours !== undefined ? `${specialist.hours} ч` : undefined,
             specialist.directCost !== undefined ? `${specialist.directCost}` : undefined,
+            specialist.validationSkipped ? "валидация не требуется" : undefined,
             specialist.hodConfirmed ? "подтверждено HoD" : undefined,
           ].filter(Boolean);
           return parts.join(" / ");
@@ -607,6 +647,7 @@ function diffRequestFields(previous: any, next: any) {
     "currency",
     "fundingSource",
     "counterparty",
+    "paymentMethod",
     "justification",
     "details",
     "investmentReturn",
@@ -615,6 +656,9 @@ function diffRequestFields(previous: any, next: any) {
     "relatedRequests",
     "links",
     "financePlanLinks",
+    "incomingAmount",
+    "incomingRatio",
+    "shipmentMonth",
     "specialists",
     "approvalDeadline",
     "neededBy",
@@ -713,7 +757,7 @@ function buildEditImpact(previous: any, next: any, approvals: any[]) {
 
   if (neededByChanged && previous.neededBy && next.neededBy && next.neededBy < previous.neededBy) {
     approvedReviewerEmails.forEach((email) => notifyApprovedEmails.add(email));
-    infoLines.push("Более ранняя дата получения денег уведомит уже согласовавших.");
+    infoLines.push("Более ранняя дата оплаты уведомит уже согласовавших.");
   }
 
   if (counterpartyChanged) {
@@ -759,9 +803,11 @@ function validateRequestPayload(args: any) {
   const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
   const contestWithSpecialists =
     args.category === "Конкурсное задание" && hasContestSpecialists(normalizedSpecialists);
+  const allowedPaymentMethods = getPaymentMethodOptions(args.category);
   validateOptionalVatRate(args.vatRate);
   validateOptionalMoney(args.amount, "Сумма без НДС");
   validateOptionalMoney(args.amountWithVat, "Сумма с НДС");
+  validateOptionalMoney(args.incomingAmount, "Сколько платят нам");
   const effectiveAmounts = resolveRequestAmounts(
     {
       category: args.category,
@@ -787,6 +833,19 @@ function validateRequestPayload(args: any) {
   if (!args.title.trim()) {
     throw new Error("Название заявки обязательно");
   }
+  if (
+    args.category !== "Welcome-бонус" &&
+    args.category !== "Конкурсное задание" &&
+    !args.paymentMethod
+  ) {
+    throw new Error("Укажите способ оплаты");
+  }
+  if (
+    args.paymentMethod &&
+    !allowedPaymentMethods.includes(args.paymentMethod as (typeof allowedPaymentMethods)[number])
+  ) {
+    throw new Error("Так не бывает");
+  }
   if (!args.justification || !args.justification.trim()) {
     throw new Error("Обоснование обязательно");
   }
@@ -794,7 +853,7 @@ function validateRequestPayload(args: any) {
     throw new Error("Укажите дедлайн согласования");
   }
   if (!args.neededBy) {
-    throw new Error("Укажите дату, когда нужны деньги");
+    throw new Error("Укажите, когда нужно оплатить");
   }
   if (!isFundingSourceAllowedForCategory(args.category, args.fundingSource)) {
     throw new Error("Так не бывает");
@@ -804,7 +863,7 @@ function validateRequestPayload(args: any) {
     args.neededBy !== undefined &&
     args.approvalDeadline > args.neededBy
   ) {
-    throw new Error("Дедлайн согласования должен быть не позже даты, когда нужны деньги");
+    throw new Error("Дедлайн согласования должен быть не позже даты, когда нужно оплатить");
   }
   if (args.approvalDeadline !== undefined) {
     const tomorrow = new Date();
@@ -819,8 +878,17 @@ function validateRequestPayload(args: any) {
     tomorrow.setHours(0, 0, 0, 0);
     tomorrow.setDate(tomorrow.getDate() + 1);
     if (args.neededBy < tomorrow.getTime()) {
-      throw new Error("Дата получения денег должна быть не раньше завтрашнего дня");
+      throw new Error("Дата оплаты должна быть не раньше завтрашнего дня");
     }
+  }
+  if (args.paidBy !== undefined && !isPaidByTimestampAllowed(args.paidBy)) {
+    throw new Error("AGIMA тогда еще не было");
+  }
+  if (
+    args.shipmentMonth !== undefined &&
+    !/^\d{4}-(0[1-9]|1[0-2])$/.test(args.shipmentMonth)
+  ) {
+    throw new Error("Укажите месяц отгрузки");
   }
   if (
     args.category !== "Конкурсное задание" &&
@@ -857,6 +925,23 @@ function validateRequestPayload(args: any) {
   if (isServiceRecipientCategory(args.category) && (!args.clientName || !args.clientName.trim())) {
     throw new Error("Укажите получателя сервиса");
   }
+}
+
+function getTodayBounds() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  end.setMilliseconds(-1);
+  return { start: start.getTime(), end: end.getTime() };
+}
+
+function isOpenPaymentTask(request: { status: string; neededBy?: number; isCanceled?: boolean }) {
+  return (
+    !request.isCanceled &&
+    request.neededBy !== undefined &&
+    ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+  );
 }
 
 async function createApprovalsForRequest(
@@ -996,6 +1081,7 @@ export const listAllRequests = query({
     cfdTag: v.optional(v.string()),
     category: v.optional(v.string()),
     fundingSource: v.optional(v.string()),
+    paymentDueFilter: v.optional(paymentDueFilterEnum),
     createdFrom: v.optional(v.number()),
     createdTo: v.optional(v.number()),
     requestCodeQuery: v.optional(v.string()),
@@ -1034,6 +1120,7 @@ export const listAllRequests = query({
     const requests = await baseQuery.order("desc").collect();
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const hasExplicitDateRange = args.createdFrom !== undefined || args.createdTo !== undefined;
+    const todayBounds = getTodayBounds();
     const filtered = requests.filter((req) => {
       if (args.createdByEmail && req.createdByEmail !== args.createdByEmail) {
         return false;
@@ -1058,6 +1145,20 @@ export const listAllRequests = query({
         !(req.requestCode ?? "").toLowerCase().includes(args.requestCodeQuery.trim().toLowerCase())
       ) {
         return false;
+      }
+      if (args.paymentDueFilter === "today") {
+        if (
+          !isOpenPaymentTask(req) ||
+          req.neededBy! < todayBounds.start ||
+          req.neededBy! > todayBounds.end
+        ) {
+          return false;
+        }
+      }
+      if (args.paymentDueFilter === "overdue") {
+        if (!isOpenPaymentTask(req) || req.neededBy! >= todayBounds.start) {
+          return false;
+        }
       }
       if (!hasExplicitDateRange && (req.archivedAt || req.createdAt < oneYearAgo)) {
         return false;
@@ -1283,6 +1384,7 @@ export const previewEditImpact = query({
       currency: args.currency,
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
+      paymentMethod: args.paymentMethod,
       justification: args.justification,
       details: args.details?.trim() || undefined,
       investmentReturn: args.investmentReturn?.trim() || undefined,
@@ -1291,6 +1393,13 @@ export const previewEditImpact = query({
       relatedRequests: args.relatedRequests,
       links: args.links,
       financePlanLinks: args.financePlanLinks,
+      incomingAmount: args.incomingAmount,
+      incomingRatio: calculateIncomingRatio({
+        incomingAmount: args.incomingAmount,
+        amountWithoutVat: effectiveAmounts.amount,
+        amountWithVat: effectiveAmounts.amountWithVat,
+      }),
+      shipmentMonth: args.shipmentMonth,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       approvalDeadline: args.approvalDeadline,
       neededBy: args.neededBy,
@@ -1361,6 +1470,7 @@ export const editRequest = mutation({
       currency: args.currency,
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
+      paymentMethod: args.paymentMethod,
       justification: args.justification,
       details: args.details?.trim() || undefined,
       investmentReturn: args.investmentReturn?.trim() || undefined,
@@ -1369,6 +1479,13 @@ export const editRequest = mutation({
       relatedRequests: args.relatedRequests,
       links: args.links,
       financePlanLinks: args.financePlanLinks,
+      incomingAmount: args.incomingAmount,
+      incomingRatio: calculateIncomingRatio({
+        incomingAmount: args.incomingAmount,
+        amountWithoutVat: effectiveAmounts.amount,
+        amountWithVat: effectiveAmounts.amountWithVat,
+      }),
+      shipmentMonth: args.shipmentMonth,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       approvalDeadline: args.approvalDeadline,
       neededBy: args.neededBy,
@@ -1756,6 +1873,7 @@ export const createRequest = mutation({
       currency: args.currency,
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
+      paymentMethod: args.paymentMethod,
       cfdTag: undefined,
       justification: args.justification,
       details: args.details?.trim() || undefined,
@@ -1767,6 +1885,13 @@ export const createRequest = mutation({
       attachmentCount: 0,
       lastAttachmentName: undefined,
       financePlanLinks: args.financePlanLinks,
+      incomingAmount: args.incomingAmount,
+      incomingRatio: calculateIncomingRatio({
+        incomingAmount: args.incomingAmount,
+        amountWithoutVat: effectiveAmounts.amount,
+        amountWithVat: effectiveAmounts.amountWithVat,
+      }),
+      shipmentMonth: args.shipmentMonth,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       requiredRoles: args.requiredRoles,
       status,
@@ -2256,7 +2381,7 @@ export const updatePaymentStatus = mutation({
         throw new Error("Дата оплаты не может быть раньше сегодняшнего дня");
       }
       if (request.neededBy && args.paymentPlannedAt > request.neededBy && !args.allowLatePaymentPlan) {
-        throw new Error("Дата оплаты позже даты, когда нужны деньги");
+        throw new Error("Дата оплаты позже даты, когда нужно оплатить");
       }
       const nextStatus = (request.paymentSplits?.length ?? 0) > 0 ? "partially_paid" : "payment_planned";
       const explicitPlannedAmounts = hasExplicitPaymentAmountInput(args)
@@ -2329,7 +2454,7 @@ export const updatePaymentStatus = mutation({
         throw new Error("Дата оплаты не может быть раньше сегодняшнего дня");
       }
       if (request.neededBy && args.paymentPlannedAt > request.neededBy && !args.allowLatePaymentPlan) {
-        throw new Error("Дата оплаты позже даты, когда нужны деньги");
+        throw new Error("Дата оплаты позже даты, когда нужно оплатить");
       }
       const existingSplits = request.paymentSplits ?? [];
       if (existingSplits.length >= 5) {
