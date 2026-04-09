@@ -326,6 +326,7 @@ export default function RequestDetailPage() {
   const [paymentExecutedDate, setPaymentExecutedDate] = useState("");
   const [paymentCurrencyRate, setPaymentCurrencyRate] = useState("");
   const [confirmLatePaymentPlan, setConfirmLatePaymentPlan] = useState(false);
+  const [latePaymentPlanNeedsConfirmation, setLatePaymentPlanNeedsConfirmation] = useState(false);
   const [specialistDrafts, setSpecialistDrafts] = useState<Record<string, SpecialistView>>({});
   const [savingSpecialistId, setSavingSpecialistId] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -364,6 +365,11 @@ export default function RequestDetailPage() {
     }
     return new Date(`${paymentPlannedDate}T00:00:00`).getTime() > data.request.neededBy;
   }, [paymentPlannedDate, data?.request?.neededBy]);
+  useEffect(() => {
+    if (!isLatePaymentPlan) {
+      setLatePaymentPlanNeedsConfirmation(false);
+    }
+  }, [isLatePaymentPlan]);
   const quotaReferenceTimestamp = useMemo(
     () => data?.request?.approvalDeadline ?? data?.request?.neededBy ?? Date.now(),
     [data?.request?.approvalDeadline, data?.request?.neededBy],
@@ -592,6 +598,8 @@ export default function RequestDetailPage() {
     remainingPaymentAmounts.amountWithoutVat > 0;
   const partialPlanButtonLabel =
     hasUnallocatedPayment ||
+    currentPlannedPaymentAmounts.amountWithoutVat !== undefined ||
+    (request.plannedPaymentSplits?.length ?? 0) > 0 ||
     (request.paymentSplits?.length ?? 0) > 0 ||
     request.status === "partially_paid"
       ? "Запланировать следующий платеж"
@@ -705,27 +713,20 @@ export default function RequestDetailPage() {
       return;
     }
     if (isLatePaymentPlan && !confirmLatePaymentPlan) {
-      setPaymentActionError("Дата позже нужной. Подтвердите, что сохраняете ее");
+      setLatePaymentPlanNeedsConfirmation(true);
       return;
     }
-    const remainingAmount = remainingPaymentAmounts.amountWithoutVat;
+    setLatePaymentPlanNeedsConfirmation(false);
+    const remainingAmount =
+      unallocatedPaymentAmounts.amountWithoutVat > MONEY_EPSILON
+        ? unallocatedPaymentAmounts.amountWithoutVat
+        : remainingPaymentAmounts.amountWithoutVat;
     const plannedAmounts = resolvePaymentPair({
       amountWithoutVat: parseMoneyInput(paymentPlannedAmount),
       amountWithVat: parseMoneyInput(paymentPlannedAmountWithVat),
       vatRate: paymentVatRate,
     });
     if (planningMode === "partial") {
-      if (
-        request.status === "payment_planned" &&
-        currentPlannedPaymentAmounts.amountWithoutVat !== undefined &&
-        hasUnallocatedPayment &&
-        (request.paymentSplits?.length ?? 0) === 0
-      ) {
-        setPaymentActionError(
-          "Сначала зафиксируйте текущую частичную оплату, потом планируйте следующий платеж",
-        );
-        return;
-      }
       if (
         plannedAmounts.amountWithoutVat === undefined ||
         plannedAmounts.amountWithoutVat <= 0
@@ -1132,9 +1133,48 @@ export default function RequestDetailPage() {
                   </div>
                 </div>
               ) : null}
+              {(request.plannedPaymentSplits?.length ||
+                (currentPlannedPaymentAmounts.amountWithoutVat !== undefined && request.paymentPlannedAt)) ? (
+                <div className="space-y-2">
+                  <div className="text-muted-foreground">Запланированные платежи</div>
+                  <div className="space-y-2">
+                    {(request.plannedPaymentSplits ?? []).map((split: any) => (
+                      <div
+                        key={`planned-${split.splitNumber}-${split.createdAt}`}
+                        className="rounded-lg border border-border px-3 py-2 text-sm"
+                      >
+                        <div className="font-medium">Платеж {split.splitNumber}</div>
+                        <div className="text-muted-foreground">
+                          Запланирован {new Date(split.plannedAt).toLocaleDateString("ru-RU")} ·{" "}
+                          {formatAmountPair({
+                            amountWithoutVat: split.amountWithoutVat,
+                            amountWithVat: split.amountWithVat,
+                            currency: request.currency,
+                            vatRate: split.vatRate ?? request.vatRate,
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    {currentPlannedPaymentAmounts.amountWithoutVat !== undefined && request.paymentPlannedAt ? (
+                      <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm">
+                        <div className="font-medium">Следующий платеж</div>
+                        <div className="text-muted-foreground">
+                          Запланирован {new Date(request.paymentPlannedAt).toLocaleDateString("ru-RU")} ·{" "}
+                          {formatAmountPair({
+                            amountWithoutVat: currentPlannedPaymentAmounts.amountWithoutVat,
+                            amountWithVat: currentPlannedPaymentAmounts.amountWithVat,
+                            currency: request.currency,
+                            vatRate: request.vatRate,
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
               {request.paymentSplits?.length ? (
                 <div className="space-y-2">
-                  <div className="text-muted-foreground">Транши оплаты</div>
+                  <div className="text-muted-foreground">Проведенные платежи</div>
                   <div className="space-y-2">
                     {request.paymentSplits.map((split: any) => (
                       <div
@@ -1482,7 +1522,11 @@ export default function RequestDetailPage() {
                                   });
                                   setPaymentPlannedAmountWithVat(synced.amountWithVatInput);
                                 }}
-                                placeholder={`Например, ${remainingPaymentAmounts.amountWithoutVat ?? request.amount}`}
+                                placeholder={`Например, ${
+                                  unallocatedPaymentAmounts.amountWithoutVat > MONEY_EPSILON
+                                    ? unallocatedPaymentAmounts.amountWithoutVat
+                                    : remainingPaymentAmounts.amountWithoutVat ?? request.amount
+                                }`}
                               />
                             </div>
                             <div className="space-y-2">
@@ -1504,9 +1548,11 @@ export default function RequestDetailPage() {
                                   setPaymentPlannedAmount(synced.amountWithoutVatInput);
                                 }}
                                 placeholder={`Например, ${
-                                  remainingPaymentAmounts.amountWithVat ??
-                                  request.amountWithVat ??
-                                  calculateAmountWithVat(request.amount, paymentVatRate)
+                                  unallocatedPaymentAmounts.amountWithVat > MONEY_EPSILON
+                                    ? unallocatedPaymentAmounts.amountWithVat
+                                    : remainingPaymentAmounts.amountWithVat ??
+                                      request.amountWithVat ??
+                                      calculateAmountWithVat(request.amount, paymentVatRate)
                                 }`}
                               />
                             </div>
@@ -1520,6 +1566,7 @@ export default function RequestDetailPage() {
                                   setPaymentPlannedDate(event.target.value);
                                   setPaymentActionError(null);
                                   setConfirmLatePaymentPlan(false);
+                                  setLatePaymentPlanNeedsConfirmation(false);
                                 }}
                                 min={todayDate}
                               />
@@ -1667,11 +1714,20 @@ export default function RequestDetailPage() {
                         </div>
                       ) : null}
                       {isLatePaymentPlan ? (
-                        <label className="flex items-center gap-2 text-sm text-amber-700">
+                        <label
+                          className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+                            latePaymentPlanNeedsConfirmation
+                              ? "border-destructive/40 bg-destructive/10 text-destructive"
+                              : "border-amber-200 bg-amber-50 text-amber-700"
+                          }`}
+                        >
                           <input
                             type="checkbox"
                             checked={confirmLatePaymentPlan}
-                            onChange={(event) => setConfirmLatePaymentPlan(event.target.checked)}
+                            onChange={(event) => {
+                              setConfirmLatePaymentPlan(event.target.checked);
+                              setLatePaymentPlanNeedsConfirmation(false);
+                            }}
                           />
                           Дата позже срока “когда нужно оплатить”. Ставьте галочку, если это решение согласовано с автором заявки.
                         </label>
@@ -1977,11 +2033,7 @@ export default function RequestDetailPage() {
                   <div className="text-muted-foreground">ID и название отгрузки в финплане</div>
                   <ul className="mt-1 list-disc pl-5">
                     {request.financePlanLinks.map((link, index) => (
-                      <li key={`${link}-${index}`}>
-                        <a className="text-primary underline" href={link} target="_blank" rel="noreferrer">
-                          {link}
-                        </a>
-                      </li>
+                      <li key={`${link}-${index}`}>{link}</li>
                     ))}
                   </ul>
                 </div>

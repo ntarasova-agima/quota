@@ -61,6 +61,86 @@ function sumPaymentSplitAmountsWithVat(paymentSplits: any[], vatRate?: number) {
   }, 0);
 }
 
+function sumPlannedPaymentSplitAmounts(plannedPaymentSplits: any[] = []) {
+  return plannedPaymentSplits.reduce((sum: number, split: any) => sum + (split.amountWithoutVat ?? 0), 0);
+}
+
+function sumPlannedPaymentSplitAmountsWithVat(plannedPaymentSplits: any[] = [], vatRate?: number) {
+  return plannedPaymentSplits.reduce((sum: number, split: any) => {
+    const amountWithVat =
+      getAmountWithVat(split.amountWithoutVat ?? 0, split.amountWithVat, split.vatRate ?? vatRate) ??
+      (split.amountWithoutVat ?? 0);
+    return sum + amountWithVat;
+  }, 0);
+}
+
+function getPlannedPaymentAllocations(request: any) {
+  const archived = (request.plannedPaymentSplits ?? [])
+    .map((split: any) => {
+      const monthKey = monthKeyFromTimestamp(split.plannedAt);
+      if (!monthKey) {
+        return null;
+      }
+      const amounts = toRubVatAmounts({
+        amountWithoutVat: split.amountWithoutVat ?? 0,
+        amountWithVat: split.amountWithVat,
+        currency: request.currency,
+        currencyRate: split.currencyRate ?? request.paymentCurrencyRate,
+        vatRate: split.vatRate ?? request.vatRate,
+      });
+      return {
+        monthKey,
+        ...amounts,
+      };
+    })
+    .filter(Boolean);
+
+  if (request.paymentPlannedAt && (request.plannedPaymentAmount !== undefined || request.plannedPaymentAmountWithVat !== undefined)) {
+    archived.push({
+      monthKey: monthKeyFromTimestamp(request.paymentPlannedAt),
+      ...toRubVatAmounts({
+        amountWithoutVat: request.plannedPaymentAmount ?? 0,
+        amountWithVat: request.plannedPaymentAmountWithVat,
+        currency: request.currency,
+        currencyRate: request.paymentCurrencyRate,
+        vatRate: request.vatRate,
+      }),
+    });
+  }
+
+  return archived.filter((item: any) => item?.monthKey);
+}
+
+function getUnallocatedPaymentAmounts(request: any) {
+  const residual = getRequestPaymentResidualAmounts(request);
+  const archivedPlannedWithoutVat = sumPlannedPaymentSplitAmounts(request.plannedPaymentSplits ?? []);
+  const archivedPlannedWithVat = sumPlannedPaymentSplitAmountsWithVat(
+    request.plannedPaymentSplits ?? [],
+    request.vatRate,
+  );
+  const currentPlannedWithVat =
+    getAmountWithVat(
+      request.plannedPaymentAmount ?? 0,
+      request.plannedPaymentAmountWithVat,
+      request.vatRate,
+    ) ?? (request.plannedPaymentAmount ?? 0);
+
+  return {
+    amountWithoutVat: Math.max(
+      (residual.amountWithoutVat ?? 0) -
+        archivedPlannedWithoutVat -
+        (request.plannedPaymentAmount ?? 0),
+      0,
+    ),
+    amountWithVat: Math.max(
+      (residual.amountWithVat ?? 0) -
+        archivedPlannedWithVat -
+        currentPlannedWithVat,
+      0,
+    ),
+  };
+}
+
 function getRequestPaymentTargetAmounts(request: any) {
   const paymentSplits = request.paymentSplits ?? [];
   const splitTotalWithoutVat = sumPaymentSplitAmounts(paymentSplits);
@@ -126,6 +206,8 @@ export function getEffectiveQuotaAllocations(request: any) {
   const paymentSplits = request.paymentSplits ?? [];
   const paymentTargetAmounts = getRequestPaymentTargetAmounts(request);
   const paymentResidualAmounts = getRequestPaymentResidualAmounts(request);
+  const plannedAllocations = getPlannedPaymentAllocations(request);
+  const unallocatedPaymentAmounts = getUnallocatedPaymentAmounts(request);
 
   const splitAllocations = paymentSplits
     .map((split: any) => {
@@ -170,37 +252,83 @@ export function getEffectiveQuotaAllocations(request: any) {
   }
 
   if (["awaiting_payment", "payment_planned"].includes(request.status)) {
+    if ((request.plannedPaymentSplits?.length ?? 0) === 0) {
+      const monthKey = plannedMonthKey ?? approvalMonthKey;
+      if (!monthKey) return [];
+      return [{
+        monthKey,
+        ...toRubVatAmounts({
+          amountWithoutVat: paymentTargetAmounts.amountWithoutVat,
+          amountWithVat: paymentTargetAmounts.amountWithVat,
+          currency: request.currency,
+          currencyRate: latestRate,
+          vatRate: request.vatRate,
+        }),
+      }];
+    }
+    const allocations = [...plannedAllocations];
+    if (unallocatedPaymentAmounts.amountWithoutVat > 0) {
+      const monthKey = plannedMonthKey ?? approvalMonthKey;
+      if (monthKey) {
+        allocations.push({
+          monthKey,
+          ...toRubVatAmounts({
+            amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
+            amountWithVat: unallocatedPaymentAmounts.amountWithVat,
+            currency: request.currency,
+            currencyRate: latestRate,
+            vatRate: request.vatRate,
+          }),
+        });
+      }
+    }
+    if (allocations.length) {
+      return allocations;
+    }
     const monthKey = plannedMonthKey ?? approvalMonthKey;
     if (!monthKey) return [];
-    const amounts = toRubVatAmounts({
-      amountWithoutVat: paymentTargetAmounts.amountWithoutVat,
-      amountWithVat: paymentTargetAmounts.amountWithVat,
-      currency: request.currency,
-      currencyRate: latestRate,
-      vatRate: request.vatRate,
-    });
-    return [
-      {
-        monthKey,
-        ...amounts,
-      },
-    ];
-  }
-
-  if (request.status === "partially_paid") {
-    const allocations = [...splitAllocations];
-    const monthKey = plannedMonthKey ?? approvalMonthKey;
-    if (monthKey && paymentResidualAmounts.amountWithoutVat > 0) {
-      const amounts = toRubVatAmounts({
-        amountWithoutVat: paymentResidualAmounts.amountWithoutVat,
-        amountWithVat: paymentResidualAmounts.amountWithVat,
+    return [{
+      monthKey,
+      ...toRubVatAmounts({
+        amountWithoutVat: paymentTargetAmounts.amountWithoutVat,
+        amountWithVat: paymentTargetAmounts.amountWithVat,
         currency: request.currency,
         currencyRate: latestRate,
         vatRate: request.vatRate,
-      });
+      }),
+    }];
+  }
+
+  if (request.status === "partially_paid") {
+    if ((request.plannedPaymentSplits?.length ?? 0) === 0) {
+      const allocations = [...splitAllocations];
+      const monthKey = plannedMonthKey ?? approvalMonthKey;
+      if (monthKey && paymentResidualAmounts.amountWithoutVat > 0) {
+        allocations.push({
+          monthKey,
+          ...toRubVatAmounts({
+            amountWithoutVat: paymentResidualAmounts.amountWithoutVat,
+            amountWithVat: paymentResidualAmounts.amountWithVat,
+            currency: request.currency,
+            currencyRate: latestRate,
+            vatRate: request.vatRate,
+          }),
+        });
+      }
+      return allocations;
+    }
+    const allocations = [...splitAllocations, ...plannedAllocations];
+    const monthKey = plannedMonthKey ?? approvalMonthKey;
+    if (monthKey && unallocatedPaymentAmounts.amountWithoutVat > 0) {
       allocations.push({
         monthKey,
-        ...amounts,
+        ...toRubVatAmounts({
+          amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
+          amountWithVat: unallocatedPaymentAmounts.amountWithVat,
+          currency: request.currency,
+          currencyRate: latestRate,
+          vatRate: request.vatRate,
+        }),
       });
     }
     return allocations;
