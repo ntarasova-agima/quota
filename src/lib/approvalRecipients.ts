@@ -50,5 +50,8 @@ export function getApprovalRecipients(
     }
     adminFallback.forEach((email) => recipients.add(email));
   }
+  if (recipients.size === 0) {
+    getActiveRoleEmails(roleDocs, ["ADMIN"]).forEach((email) => recipients.add(email));
+  }
   return Array.from(recipients);
 }
