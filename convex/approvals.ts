@@ -20,6 +20,13 @@ const roleEnum = v.union(
 );
 
 const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
+const additionalApprovalRoleEnum = v.union(
+  v.literal("NBD"),
+  v.literal("AI-BOSS"),
+  v.literal("COO"),
+  v.literal("CFD"),
+  v.literal("HOD"),
+);
 
 function getQuotaTableName(fundingSource: string) {
   if (fundingSource === "Квота на пресейлы") {
@@ -161,6 +168,7 @@ export const decide = mutation({
     role: roleEnum,
     decision: decisionEnum,
     comment: v.optional(v.string()),
+    additionalRole: v.optional(additionalApprovalRoleEnum),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -182,6 +190,12 @@ export const decide = mutation({
     if (args.decision === "rejected" && (!args.comment || args.comment.trim().length === 0)) {
       throw new Error("Comment required for rejection");
     }
+    if (args.additionalRole && args.decision !== "approved") {
+      throw new Error("Дополнительную роль можно указать только при согласовании");
+    }
+    if (args.additionalRole && args.additionalRole === args.role) {
+      throw new Error("Нельзя отправить на дополнительное согласование этой же роли");
+    }
 
     const request = await ctx.db.get(args.requestId);
     if (!request) {
@@ -194,25 +208,44 @@ export const decide = mutation({
       throw new Error("Role not required for this request");
     }
 
-    const approval = await ctx.db
+    const existingApprovals = await ctx.db
       .query("approvals")
       .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
-      .filter((q) => q.eq(q.field("role"), args.role))
-      .first();
+      .collect();
+    const approval = existingApprovals.find((item) => item.role === args.role);
     if (!approval) {
       throw new Error("Approval entry not found");
     }
     if (approval.status !== "pending") {
       throw new Error("Already decided");
     }
+    if (
+      args.additionalRole &&
+      (request.requiredRoles.includes(args.additionalRole) ||
+        existingApprovals.some((item) => item.role === args.additionalRole))
+    ) {
+      throw new Error("Эта роль уже участвует в согласовании");
+    }
 
+    const decidedAt = Date.now();
     await ctx.db.patch(approval._id, {
       status: args.decision,
       comment: args.comment?.trim() || undefined,
-      decidedAt: Date.now(),
+      decidedAt,
       reviewerId: userId,
       reviewerEmail: email,
     });
+    if (args.additionalRole) {
+      await ctx.db.insert("approvals", {
+        requestId: args.requestId,
+        role: args.additionalRole,
+        status: "pending",
+        requestedByRole: args.role,
+        requestedByEmail: email,
+        requestedByName: roleRecord.fullName ?? undefined,
+        requestedAt: decidedAt,
+      });
+    }
 
     const approvals = await ctx.db
       .query("approvals")
@@ -227,19 +260,27 @@ export const decide = mutation({
     }
 
     await ctx.db.patch(request._id, {
+      requiredRoles: args.additionalRole ? [...request.requiredRoles, args.additionalRole] : request.requiredRoles,
       status,
-      updatedAt: Date.now(),
+      updatedAt: decidedAt,
     });
     await logTimelineEvent(ctx, {
       requestId: request._id,
-      type: "approval_decision",
-      title: args.decision === "approved" ? "Заявка согласована" : "Заявка отклонена",
-      description: `${args.role}${args.comment?.trim() ? ` · ${args.comment.trim()}` : ""}`,
+      type: args.additionalRole ? "approval_forwarded" : "approval_decision",
+      title: args.additionalRole
+        ? "Заявка согласована и отправлена на дополнительное согласование"
+        : args.decision === "approved"
+          ? "Заявка согласована"
+          : "Заявка отклонена",
+      description: args.additionalRole
+        ? `${args.role} → ${args.additionalRole}${args.comment?.trim() ? ` · ${args.comment.trim()}` : ""}`
+        : `${args.role}${args.comment?.trim() ? ` · ${args.comment.trim()}` : ""}`,
       actorEmail: email,
       actorName: roleRecord.fullName ?? undefined,
       metadata: {
         role: args.role,
         requestStatus: status,
+        additionalRole: args.additionalRole,
       },
     });
 
@@ -278,15 +319,32 @@ export const decide = mutation({
       }
     }
 
-    await ctx.scheduler.runAfter(0, internal.emails.sendDecision, {
-      requestId: request._id,
-      decision: args.decision,
-      role: args.role,
-      comment: args.comment?.trim() || undefined,
-      reviewerName: roleRecord.fullName ?? undefined,
-      reviewerEmail: email,
-      requestStatus: status,
-    });
+    if (args.additionalRole) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendAdditionalApprovalRequested, {
+        requestId: request._id,
+        additionalRole: args.additionalRole,
+        requestedByRole: args.role,
+        requestedByName: roleRecord.fullName ?? undefined,
+        requestedByEmail: email,
+      });
+      await ctx.scheduler.runAfter(0, internal.emails.sendAdditionalApprovalForwardedToAuthor, {
+        requestId: request._id,
+        additionalRole: args.additionalRole,
+        requestedByRole: args.role,
+        requestedByName: roleRecord.fullName ?? undefined,
+        requestedByEmail: email,
+      });
+    } else {
+      await ctx.scheduler.runAfter(0, internal.emails.sendDecision, {
+        requestId: request._id,
+        decision: args.decision,
+        role: args.role,
+        comment: args.comment?.trim() || undefined,
+        reviewerName: roleRecord.fullName ?? undefined,
+        reviewerEmail: email,
+        requestStatus: status,
+      });
+    }
 
     return { status };
   },

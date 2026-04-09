@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
-import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
+import { canManageAttachments, ensureCanViewRequest } from "./requestAccessHelpers";
 
 const MAX_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_SIZE = 40 * 1024 * 1024;
@@ -46,64 +46,8 @@ function isAllowedAttachment(fileName: string, contentType?: string) {
   );
 }
 
-async function getRoleRecord(ctx: { db: any }, email: string) {
-  return await ctx.db
-    .query("roles")
-    .withIndex("by_email", (q: any) => q.eq("email", email))
-    .first();
-}
-
-function hasHodAccessToRequest(roleRecord: any, request: any) {
-  if (!roleRecord?.roles?.includes("HOD")) {
-    return false;
-  }
-  const departments = roleRecord.hodDepartments ?? [];
-  if (!departments.length) {
-    return false;
-  }
-  const specialists = request.specialists ?? [];
-  return specialists.some(
-    (item: any) =>
-      requiresContestSpecialistValidation(item) && departments.includes(item.department),
-  );
-}
-
-async function hasHistoricalApprovalAccess(ctx: any, requestId: any, email: string) {
-  const approvals = await ctx.db
-    .query("approvals")
-    .withIndex("by_request", (q: any) => q.eq("requestId", requestId))
-    .collect();
-  return approvals.some((approval: any) => approval.reviewerEmail === email);
-}
-
 async function ensureCanAccessRequest(ctx: any, requestId: any) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) {
-    throw new Error("Not authenticated");
-  }
-  const email = await getCurrentEmail(ctx);
-  if (!email) {
-    throw new Error("Missing user email");
-  }
-  const request = await ctx.db.get(requestId);
-  if (!request) {
-    throw new Error("Request not found");
-  }
-  const roleRecord = await getRoleRecord(ctx, email);
-  const canViewAll = roleRecord?.roles?.some((role: string) =>
-    ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role),
-  );
-  const canHodView = hasHodAccessToRequest(roleRecord, request);
-  const isCreator = request.createdBy === userId || request.createdByEmail === email;
-  const canViewByHistory = await hasHistoricalApprovalAccess(ctx, requestId, email);
-  if (!canViewAll && !canHodView && !isCreator && !canViewByHistory) {
-    throw new Error("Not authorized");
-  }
-  return {
-    email,
-    request,
-    roleRecord,
-  };
+  return await ensureCanViewRequest(ctx, requestId);
 }
 
 export const generateUploadUrl = mutation({
@@ -111,7 +55,10 @@ export const generateUploadUrl = mutation({
     requestId: v.id("requests"),
   },
   handler: async (ctx, args) => {
-    await ensureCanAccessRequest(ctx, args.requestId);
+    const access = await ensureCanAccessRequest(ctx, args.requestId);
+    if (!canManageAttachments(access)) {
+      throw new Error("Загружать файлы может только автор, согласующие и администратор");
+    }
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -126,6 +73,9 @@ export const saveAttachment = mutation({
   },
   handler: async (ctx, args) => {
     const access = await ensureCanAccessRequest(ctx, args.requestId);
+    if (!canManageAttachments(access)) {
+      throw new Error("Загружать файлы может только автор, согласующие и администратор");
+    }
     if ((access.request.attachmentCount ?? 0) >= MAX_ATTACHMENTS) {
       throw new Error("Можно прикрепить не более 20 файлов");
     }
@@ -180,6 +130,9 @@ export const deleteAttachment = mutation({
       throw new Error("Файл не найден");
     }
     const access = await ensureCanAccessRequest(ctx, attachment.requestId);
+    if (!canManageAttachments(access)) {
+      throw new Error("Удалять файлы может только автор, согласующие и администратор");
+    }
     const isAdmin = access.roleRecord?.roles?.includes("ADMIN");
     if (!isAdmin && attachment.uploadedByEmail !== email) {
       throw new Error("Удалить файл может только тот, кто его загрузил, или администратор");

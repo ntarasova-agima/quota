@@ -3,6 +3,16 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
+import {
+  canManageViewerAccess,
+  getRoleRecord,
+  hasHistoricalApprovalAccess,
+  hasHodAccessToRequest,
+  hasViewerAccess,
+  upsertViewerAccessEntry,
+  REQUEST_ALL_LIST_ROLES,
+  REQUEST_WIDE_VIEW_ROLES,
+} from "./requestAccessHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
@@ -106,13 +116,6 @@ function isSameMonth(left?: number, right?: number) {
   return getMonthKey(left) === getMonthKey(right);
 }
 
-async function getRoleRecord(ctx: { db: any }, email: string) {
-  return await ctx.db
-    .query("roles")
-    .withIndex("by_email", (q: any) => q.eq("email", email))
-    .first();
-}
-
 function normalizeSpecialists(
   specialists: Array<{
     id: string;
@@ -210,29 +213,6 @@ function calculateContestAmount(
       (typeof item.directCost === "number" && Number.isFinite(item.directCost) ? item.directCost : 0),
     0,
   );
-}
-
-function hasHodAccessToRequest(roleRecord: any, request: any) {
-  if (!roleRecord?.roles?.includes("HOD")) {
-    return false;
-  }
-  const departments = roleRecord.hodDepartments ?? [];
-  if (!departments.length) {
-    return false;
-  }
-  const specialists = request.specialists ?? [];
-  return specialists.some(
-    (item: any) =>
-      requiresContestSpecialistValidation(item) && departments.includes(item.department),
-  );
-}
-
-async function hasHistoricalApprovalAccess(ctx: { db: any }, requestId: any, email: string) {
-  const approvals = await ctx.db
-    .query("approvals")
-    .withIndex("by_request", (q: any) => q.eq("requestId", requestId))
-    .collect();
-  return approvals.some((approval: any) => approval.reviewerEmail === email);
 }
 
 function getApprovedReviewerEmails(approvals: any[]) {
@@ -1405,7 +1385,7 @@ export const listAllRequests = query({
     }
     const record = await getRoleRecord(ctx, email);
     const canViewAll = record?.roles?.some((role: string) =>
-      ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN", "HOD"].includes(role),
+      REQUEST_ALL_LIST_ROLES.includes(role as (typeof REQUEST_ALL_LIST_ROLES)[number]),
     );
     const hasReviewedAny = email
       ? (
@@ -1415,14 +1395,15 @@ export const listAllRequests = query({
             .take(1)
         ).length > 0
       : false;
-    if (!canViewAll && !hasReviewedAny) {
+    const allRequests = await ctx.db.query("requests").collect();
+    const hasExplicitViewerAccessAny = allRequests.some((req: any) => hasViewerAccess(req, email));
+    if (!canViewAll && !hasReviewedAny && !hasExplicitViewerAccessAny) {
       throw new Error("Not authorized");
     }
 
-    const baseQuery = args.status
-      ? ctx.db.query("requests").withIndex("by_status", (q) => q.eq("status", args.status!))
-      : ctx.db.query("requests");
-    const requests = await baseQuery.order("desc").collect();
+    const requests = args.status
+      ? allRequests.filter((req: any) => req.status === args.status)
+      : allRequests;
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const hasExplicitDateRange = args.createdFrom !== undefined || args.createdTo !== undefined;
     const todayBounds = getTodayBounds();
@@ -1490,7 +1471,12 @@ export const listAllRequests = query({
           ).filter((req): req is any => Boolean(req)),
         ]
       : scopedToCurrentRole;
-    const deduped = Array.from(new Map(withHistorical.map((req) => [req._id, req])).values());
+    const withViewerAccess = [
+      ...withHistorical,
+      ...filtered.filter((req) => hasViewerAccess(req, email)),
+      ...filtered.filter((req) => req.createdBy === userId || req.createdByEmail === email),
+    ];
+    const deduped = Array.from(new Map(withViewerAccess.map((req) => [req._id, req])).values());
     const filteredByTag =
       args.cfdTag === undefined
         ? deduped
@@ -1525,6 +1511,38 @@ export const listAllRequests = query({
       pageSize,
       totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
     };
+  },
+});
+
+export const canUseAllRequestsView = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const record = await getRoleRecord(ctx, email);
+    const canViewAll = record?.roles?.some((role: string) =>
+      REQUEST_ALL_LIST_ROLES.includes(role as (typeof REQUEST_ALL_LIST_ROLES)[number]),
+    );
+    if (canViewAll) {
+      return true;
+    }
+    const hasReviewedAny = (
+      await ctx.db
+        .query("approvals")
+        .filter((q: any) => q.eq(q.field("reviewerEmail"), email))
+        .take(1)
+    ).length > 0;
+    if (hasReviewedAny) {
+      return true;
+    }
+    const requests = await ctx.db.query("requests").collect();
+    return requests.some((request: any) => hasViewerAccess(request, email));
   },
 });
 
@@ -1575,14 +1593,16 @@ export const getRequest = query({
     }
     const record = await getRoleRecord(ctx, email);
     const canViewAll = record?.roles?.some((role: string) =>
-      ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role),
+      REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
     );
     const canHodView = hasHodAccessToRequest(record, request);
     const canViewByHistory = await hasHistoricalApprovalAccess(ctx, args.id, email);
+    const hasExplicitViewerAccess = hasViewerAccess(request, email);
     if (
       !canViewAll &&
       !canHodView &&
       !canViewByHistory &&
+      !hasExplicitViewerAccess &&
       request.createdBy !== userId &&
       request.createdByEmail !== email
     ) {
@@ -1598,6 +1618,11 @@ export const getRequest = query({
       approvals,
       isCreator,
       canHodEditSpecialists: canHodView,
+      canManageFiles: isCreator || canViewAll || canHodView || canViewByHistory,
+      canManageViewerAccess: canManageViewerAccess({
+        isCreator,
+        roleRecord: record,
+      }),
       hodDepartments: record?.hodDepartments ?? [],
     };
   },
@@ -1622,7 +1647,7 @@ export const listChangeHistory = query({
     }
     const record = await getRoleRecord(ctx, email);
     const canViewAll = record?.roles?.some((role: string) =>
-      ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role),
+      REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
     );
     const canHodView = hasHodAccessToRequest(record, request);
     const canViewByHistory = await hasHistoricalApprovalAccess(ctx, args.requestId, email);
@@ -1630,6 +1655,7 @@ export const listChangeHistory = query({
       !canViewAll &&
       !canHodView &&
       !canViewByHistory &&
+      !hasViewerAccess(request, email) &&
       request.createdBy !== userId &&
       request.createdByEmail !== email
     ) {
@@ -1641,6 +1667,79 @@ export const listChangeHistory = query({
       .collect();
     items.sort((a, b) => b.createdAt - a.createdAt);
     return items;
+  },
+});
+
+export const grantViewerAccess = mutation({
+  args: {
+    id: v.id("requests"),
+    targetEmail: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    const isCreator = request.createdBy === userId || request.createdByEmail === email;
+    if (!canManageViewerAccess({ isCreator, roleRecord })) {
+      throw new Error("Not authorized");
+    }
+    const targetEmail = args.targetEmail.trim().toLowerCase();
+    if (!targetEmail) {
+      throw new Error("Укажите почту");
+    }
+    const targetRecord = await getRoleRecord(ctx, targetEmail);
+    if (!targetRecord?.active) {
+      throw new Error("Такого активного пользователя нет");
+    }
+    if (targetEmail === request.createdByEmail.trim().toLowerCase()) {
+      throw new Error("Автор уже имеет доступ к заявке");
+    }
+
+    const { created, viewerAccess } = upsertViewerAccessEntry(request, {
+      email: targetEmail,
+      fullName: targetRecord.fullName,
+      grantedByEmail: email,
+      grantedByName: roleRecord?.fullName,
+      source: "share",
+      grantedAt: Date.now(),
+    });
+    if (!created) {
+      return { created: false };
+    }
+
+    await ctx.db.patch(request._id, {
+      viewerAccess,
+      updatedAt: Date.now(),
+    });
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "viewer_access_granted",
+      title: "Выдан доступ к заявке",
+      description: `${targetRecord.fullName ? `${targetRecord.fullName} · ` : ""}${targetEmail}`,
+      actorEmail: email,
+      actorName: roleRecord?.fullName ?? undefined,
+      metadata: {
+        source: "share",
+        recipientEmail: targetEmail,
+      },
+    });
+    await ctx.scheduler.runAfter(0, internal.emails.sendRequestViewerAccessGranted, {
+      requestId: request._id,
+      recipients: [targetEmail],
+      grantedByEmail: email,
+      grantedByName: roleRecord?.fullName ?? undefined,
+    });
+    return { created: true };
   },
 });
 

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useParams, useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { api } from "@/lib/convex";
 import { Button } from "@/components/ui/button";
@@ -74,6 +74,19 @@ type PaymentTimelineRow = {
   splitNumber?: number;
 };
 
+type MentionEntry = {
+  email: string;
+  name: string;
+};
+
+type ActiveContact = {
+  email: string;
+  fullName: string | null;
+  creatorTitle: string | null;
+};
+
+const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "HOD"] as const;
+
 const MAX_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_SIZE = 40 * 1024 * 1024;
 const ACCEPTED_ATTACHMENT_EXTENSIONS = [
@@ -124,6 +137,97 @@ function formatDateInputFromTimestamp(timestamp: number) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function getPersonDisplayName(person: ActiveContact | MentionEntry) {
+  if ("fullName" in person) {
+    return person.fullName?.trim() || person.email;
+  }
+  return person.name?.trim() || person.email;
+}
+
+function findMentionDraft(text: string, cursor: number) {
+  const prefix = text.slice(0, cursor);
+  const match = prefix.match(/(^|\s)@([^\s@]{0,50})$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    start: prefix.length - match[2].length - 1,
+    query: match[2].trim().toLowerCase(),
+  };
+}
+
+function insertMention(text: string, cursor: number, mentionDraft: { start: number }, person: ActiveContact) {
+  const name = getPersonDisplayName(person);
+  const token = `@${name}`;
+  const nextValue = `${text.slice(0, mentionDraft.start)}${token} ${text.slice(cursor)}`;
+  return {
+    nextValue,
+    nextCursor: mentionDraft.start + token.length + 1,
+    mention: {
+      email: person.email,
+      name,
+    },
+  };
+}
+
+function getVisibleMentions(body: string, mentions: MentionEntry[] = []) {
+  return Array.from(
+    new Map(
+      mentions
+        .filter((item) => item.email && item.name && body.includes(`@${item.name}`))
+        .map((item) => [`${item.email}::${item.name}`, item]),
+    ).values(),
+  );
+}
+
+function renderCommentBody(body: string, mentions: MentionEntry[] = []): ReactNode {
+  const visibleMentions = getVisibleMentions(body, mentions);
+  if (!visibleMentions.length) {
+    return body;
+  }
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  while (cursor < body.length) {
+    let nextMatch:
+      | {
+          index: number;
+          token: string;
+          mention: MentionEntry;
+        }
+      | null = null;
+    for (const mention of visibleMentions) {
+      const token = `@${mention.name}`;
+      const index = body.indexOf(token, cursor);
+      if (index === -1) {
+        continue;
+      }
+      if (!nextMatch || index < nextMatch.index) {
+        nextMatch = { index, token, mention };
+      }
+    }
+    if (!nextMatch) {
+      nodes.push(body.slice(cursor));
+      break;
+    }
+    if (nextMatch.index > cursor) {
+      nodes.push(body.slice(cursor, nextMatch.index));
+    }
+    nodes.push(
+      <HoverHint
+        key={`${nextMatch.mention.email}-${nextMatch.index}`}
+        label={nextMatch.mention.email}
+        className="align-baseline"
+      >
+        <span className="rounded-sm bg-emerald-100 px-1 py-0.5 text-emerald-800">
+          {nextMatch.token}
+        </span>
+      </HoverHint>,
+    );
+    cursor = nextMatch.index + nextMatch.token.length;
+  }
+  return nodes;
 }
 
 function getMonthKeyFromTimestamp(timestamp: number) {
@@ -358,6 +462,8 @@ export default function RequestDetailPage() {
   const { isAuthenticated } = useConvexAuth();
   const data = useQuery(api.requests.getRequest, isAuthenticated ? { id: requestId } : "skip");
   const myRoles = (useQuery(api.roles.myRoles, isAuthenticated ? {} : "skip") ?? []) as string[];
+  const myProfile = useQuery(api.roles.myProfile, isAuthenticated ? {} : "skip");
+  const activeContacts = useQuery(api.roles.listActiveContacts, isAuthenticated ? {} : "skip");
   const comments = useQuery(
     api.comments.listByRequest,
     isAuthenticated ? { requestId } : "skip",
@@ -386,16 +492,24 @@ export default function RequestDetailPage() {
   const createTag = useMutation(api.cfdTags.create);
   const addComment = useMutation(api.comments.addComment);
   const editComment = useMutation(api.comments.editComment);
+  const grantViewerAccess = useMutation(api.requests.grantViewerAccess);
   const [commentByRole, setCommentByRole] = useState<Record<string, string>>({});
   const [adminCommentByRole, setAdminCommentByRole] = useState<Record<string, string>>({});
+  const [forwardRoleByApproval, setForwardRoleByApproval] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [paymentActionError, setPaymentActionError] = useState<string | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
+  const [viewerAccessError, setViewerAccessError] = useState<string | null>(null);
   const [submittingRole, setSubmittingRole] = useState<string | null>(null);
   const [newComment, setNewComment] = useState("");
+  const [newCommentMentions, setNewCommentMentions] = useState<MentionEntry[]>([]);
+  const [commentCursor, setCommentCursor] = useState(0);
   const [replyTo, setReplyTo] = useState<Id<"comments"> | null>(null);
   const [editingId, setEditingId] = useState<Id<"comments"> | null>(null);
   const [editingBody, setEditingBody] = useState("");
+  const [viewerAccessQuery, setViewerAccessQuery] = useState("");
+  const [selectedViewerAccessEmail, setSelectedViewerAccessEmail] = useState<string | null>(null);
+  const [grantingViewerAccess, setGrantingViewerAccess] = useState(false);
   const [selectedTag, setSelectedTag] = useState("");
   const [customTagName, setCustomTagName] = useState("");
   const [updatingStatus, setUpdatingStatus] = useState(false);
@@ -419,6 +533,7 @@ export default function RequestDetailPage() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [previewAttachmentId, setPreviewAttachmentId] = useState<Id<"requestAttachments"> | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const newCommentRef = useRef<HTMLTextAreaElement | null>(null);
   const todayDate = useMemo(() => formatDateInputFromTimestamp(Date.now()), []);
 
   const canDecide = useMemo(() => new Set(myRoles), [myRoles]);
@@ -426,6 +541,8 @@ export default function RequestDetailPage() {
   const isNbd = useMemo(() => myRoles.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles.includes("AI-BOSS"), [myRoles]);
   const isCoo = useMemo(() => myRoles.includes("COO"), [myRoles]);
+  const canManageViewerAccess = Boolean(data?.canManageViewerAccess);
+  const canManageFiles = Boolean(data?.canManageFiles);
   const canSetCfdTag = useMemo(
     () =>
       myRoles.includes("CFD") ||
@@ -550,8 +667,11 @@ export default function RequestDetailPage() {
     }
     return Array.from(groups.values()).sort((a, b) => b.createdAt - a.createdAt);
   }, [changeHistory]);
-  const canEditComment = (commentId: Id<"comments">) => {
-    return (repliesByParent.get(commentId) ?? 0) === 0;
+  const canEditComment = (comment: { _id: Id<"comments">; authorEmail: string }) => {
+    return (
+      (repliesByParent.get(comment._id) ?? 0) === 0 &&
+      comment.authorEmail.trim().toLowerCase() === myProfile?.email?.trim().toLowerCase()
+    );
   };
   const previewAttachment = useMemo(
     () => attachments?.find((item) => item._id === previewAttachmentId) ?? null,
@@ -642,6 +762,11 @@ export default function RequestDetailPage() {
     }
     setSpecialistDrafts(next);
   }, [data?.request?._id, data?.request?.updatedAt]);
+  useEffect(() => {
+    setNewCommentMentions((current) =>
+      current.filter((item) => newComment.includes(`@${item.name}`)),
+    );
+  }, [newComment]);
 
   if (data === null) {
     return (
@@ -712,6 +837,45 @@ export default function RequestDetailPage() {
       (item) => normalizeContestSpecialistSource(item.sourceType) === "contractor",
     ),
   };
+  const viewerAccessEntries = (request.viewerAccess ?? []) as Array<{
+    email: string;
+    fullName?: string;
+    grantedByEmail: string;
+    grantedByName?: string;
+    source: "share" | "mention";
+    grantedAt: number;
+  }>;
+  const viewerAccessEmails = new Set(
+    viewerAccessEntries.map((item) => item.email.trim().toLowerCase()),
+  );
+  const availableForwardRoles = (approvalRole: string) =>
+    ADDITIONAL_APPROVAL_ROLES.filter(
+      (role) => role !== approvalRole && !approvals.some((item) => item.role === role),
+    );
+  const mentionDraft = findMentionDraft(newComment, commentCursor);
+  const mentionSuggestions =
+    !mentionDraft || !(activeContacts ?? []).length
+      ? []
+      : (activeContacts ?? [])
+          .filter((item) => {
+            if (!mentionDraft.query) {
+              return true;
+            }
+            const label = getPersonDisplayName(item).toLowerCase();
+            return label.includes(mentionDraft.query) || item.email.toLowerCase().includes(mentionDraft.query);
+          })
+          .slice(0, 6);
+  const viewerAccessSuggestions = !viewerAccessQuery.trim()
+    ? []
+    : (activeContacts ?? [])
+        .filter((item) => item.email !== request.createdByEmail)
+        .filter((item) => !viewerAccessEmails.has(item.email.trim().toLowerCase()))
+        .filter((item) => {
+          const query = viewerAccessQuery.trim().toLowerCase();
+          const label = getPersonDisplayName(item).toLowerCase();
+          return label.includes(query) || item.email.toLowerCase().includes(query);
+        })
+        .slice(0, 8);
   const baseStatusSummary =
     canSetPaymentPlanned && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
       ? getBuhPaymentStatusSummary(request)
@@ -720,7 +884,7 @@ export default function RequestDetailPage() {
     request.status === "pending" &&
     approvals.some((approval) => approval.status === "pending" && canDecide.has(approval.role));
   const statusSummary =
-    request.status === "pending"
+    request.status === "pending" && !baseStatusSummary.label.startsWith("Частично согласовано")
       ? getPendingStatusPresentation(isActionableForViewer)
       : baseStatusSummary;
   const contextualHint = hasPendingHodValidation
@@ -740,6 +904,10 @@ export default function RequestDetailPage() {
             : null;
   async function uploadFiles(files: File[]) {
     if (!files.length) {
+      return;
+    }
+    if (!canManageFiles) {
+      setFileActionError("Добавлять файлы может только автор, согласующие и администратор");
       return;
     }
     setFileActionError(null);
@@ -1022,7 +1190,11 @@ export default function RequestDetailPage() {
     }
   }
 
-  async function handleDecision(role: string, decision: "approved" | "rejected") {
+  async function handleDecision(
+    role: string,
+    decision: "approved" | "rejected",
+    additionalRole?: string,
+  ) {
     setError(null);
     if (decision === "rejected" && !commentByRole[role]?.trim()) {
       setError("Комментарий обязателен для отказа");
@@ -1035,7 +1207,12 @@ export default function RequestDetailPage() {
         role: role as any,
         decision,
         comment: commentByRole[role],
+        additionalRole: decision === "approved" && additionalRole ? (additionalRole as any) : undefined,
       });
+      setForwardRoleByApproval((current) => ({
+        ...current,
+        [role]: "",
+      }));
       router.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось принять решение";
@@ -1057,8 +1234,11 @@ export default function RequestDetailPage() {
         requestId,
         body: newComment,
         parentId: replyTo ?? undefined,
+        mentions: newCommentMentions,
       });
       setNewComment("");
+      setNewCommentMentions([]);
+      setCommentCursor(0);
       setReplyTo(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось добавить комментарий");
@@ -1077,6 +1257,46 @@ export default function RequestDetailPage() {
       setEditingBody("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось изменить комментарий");
+    }
+  }
+
+  function handleMentionSelect(person: ActiveContact) {
+    if (!mentionDraft) {
+      return;
+    }
+    const textarea = newCommentRef.current;
+    const cursor = textarea?.selectionStart ?? commentCursor;
+    const { nextValue, nextCursor, mention } = insertMention(newComment, cursor, mentionDraft, person);
+    setNewComment(nextValue);
+    setNewCommentMentions((current) =>
+      Array.from(new Map([...current, mention].map((item) => [item.email, item])).values()),
+    );
+    setCommentCursor(nextCursor);
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }
+
+  async function handleGrantViewerAccess() {
+    if (!selectedViewerAccessEmail) {
+      setViewerAccessError("Выберите человека, которому нужно дать доступ");
+      return;
+    }
+    setViewerAccessError(null);
+    setGrantingViewerAccess(true);
+    try {
+      await grantViewerAccess({
+        id: request._id,
+        targetEmail: selectedViewerAccessEmail,
+      });
+      setViewerAccessQuery("");
+      setSelectedViewerAccessEmail(null);
+      router.refresh();
+    } catch (err) {
+      setViewerAccessError(err instanceof Error ? err.message : "Не удалось выдать доступ");
+    } finally {
+      setGrantingViewerAccess(false);
     }
   }
 
@@ -1933,6 +2153,88 @@ export default function RequestDetailPage() {
                   </p>
                 ) : null}
               </div>
+              {viewerAccessEntries.length || canManageViewerAccess ? (
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-muted-foreground">Доступ к заявке</div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Эти люди могут открыть заявку по ссылке и комментировать ее, но не могут редактировать или согласовывать.
+                    </p>
+                  </div>
+                  {viewerAccessEntries.length ? (
+                    <div className="space-y-2">
+                      {viewerAccessEntries
+                        .slice()
+                        .sort((left, right) => right.grantedAt - left.grantedAt)
+                        .map((item) => (
+                          <div
+                            key={`${item.email}-${item.source}`}
+                            className="rounded-lg border border-border px-3 py-2 text-sm"
+                          >
+                            <div className="font-medium">
+                              {item.fullName ? `${item.fullName} · ` : ""}
+                              {item.email}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {item.source === "mention" ? "Доступ через @" : "Доступ выдан вручную"}
+                              {item.grantedByName || item.grantedByEmail
+                                ? ` · ${item.grantedByName ? `${item.grantedByName} · ` : ""}${item.grantedByEmail}`
+                                : ""}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Пока никому дополнительно не выдали доступ.</p>
+                  )}
+                  {canManageViewerAccess ? (
+                    <div className="space-y-2 rounded-lg border border-border p-3">
+                      <Label htmlFor="viewer-access">Кому дать доступ</Label>
+                      <Input
+                        id="viewer-access"
+                        value={viewerAccessQuery}
+                        onChange={(event) => {
+                          setViewerAccessQuery(event.target.value);
+                          setSelectedViewerAccessEmail(null);
+                          setViewerAccessError(null);
+                        }}
+                        placeholder="Начните вводить имя или почту"
+                      />
+                      {viewerAccessSuggestions.length ? (
+                        <div className="rounded-lg border border-border bg-background">
+                          {viewerAccessSuggestions.map((item) => (
+                            <button
+                              key={item.email}
+                              type="button"
+                              className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
+                              onClick={() => {
+                                setSelectedViewerAccessEmail(item.email);
+                                setViewerAccessQuery(getPersonDisplayName(item));
+                                setViewerAccessError(null);
+                              }}
+                            >
+                              <span className="font-medium">{getPersonDisplayName(item)}</span>
+                              <span className="text-xs text-muted-foreground">{item.email}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          onClick={handleGrantViewerAccess}
+                          disabled={grantingViewerAccess || !selectedViewerAccessEmail}
+                        >
+                          Дать доступ
+                        </Button>
+                      </div>
+                      {viewerAccessError ? (
+                        <p className="text-sm text-destructive">{viewerAccessError}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="space-y-3">
                 <div>
                   <div className="text-muted-foreground">Прикрепить файлы</div>
@@ -1940,64 +2242,70 @@ export default function RequestDetailPage() {
                     Например, счет в PDF, акт и другие важные документы
                   </p>
                 </div>
-                <div className="flex flex-wrap items-end gap-3">
-                  <div className="flex min-w-[320px] flex-1 flex-col gap-2">
-                    <input
-                      id="attachment"
-                      ref={fileInputRef}
-                      type="file"
-                      className="hidden"
-                      multiple
-                      accept={ACCEPTED_ATTACHMENT_EXTENSIONS.join(",")}
-                      onChange={async (event) => {
-                        await uploadFiles(Array.from(event.target.files ?? []));
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        setIsDragOver(true);
-                      }}
-                      onDragLeave={(event) => {
-                        event.preventDefault();
-                        setIsDragOver(false);
-                      }}
-                      onDrop={async (event) => {
-                        event.preventDefault();
-                        setIsDragOver(false);
-                        await uploadFiles(Array.from(event.dataTransfer.files ?? []));
-                      }}
-                      className={`flex min-h-20 w-full cursor-pointer items-center justify-between rounded-xl border px-4 py-3 text-left transition-all ${
-                        isDragOver
-                          ? "border-emerald-500 bg-emerald-50 shadow-[0_0_0_4px_rgba(16,185,129,0.08)]"
-                          : "border-border bg-background hover:border-emerald-400 hover:bg-emerald-50/50"
-                      }`}
-                    >
-                      <span className="flex items-center gap-3">
-                        <span className="rounded-lg bg-emerald-100 p-2 text-emerald-700">
-                          <Paperclip className="h-4 w-4" />
-                        </span>
-                        <span>
-                          <span className="block font-medium">
-                            {isDragOver
-                              ? "Отпустите файлы, чтобы загрузить"
-                              : uploadingFile
-                              ? selectedFiles.length === 1
-                                ? `Загружаем: ${selectedFiles[0].name}`
-                                : `Загружаем файлов: ${selectedFiles.length}`
-                              : "Нажмите или перетащите файлы сюда"}
+                {canManageFiles ? (
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="flex min-w-[320px] flex-1 flex-col gap-2">
+                      <input
+                        id="attachment"
+                        ref={fileInputRef}
+                        type="file"
+                        className="hidden"
+                        multiple
+                        accept={ACCEPTED_ATTACHMENT_EXTENSIONS.join(",")}
+                        onChange={async (event) => {
+                          await uploadFiles(Array.from(event.target.files ?? []));
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          setIsDragOver(true);
+                        }}
+                        onDragLeave={(event) => {
+                          event.preventDefault();
+                          setIsDragOver(false);
+                        }}
+                        onDrop={async (event) => {
+                          event.preventDefault();
+                          setIsDragOver(false);
+                          await uploadFiles(Array.from(event.dataTransfer.files ?? []));
+                        }}
+                        className={`flex min-h-20 w-full cursor-pointer items-center justify-between rounded-xl border px-4 py-3 text-left transition-all ${
+                          isDragOver
+                            ? "border-emerald-500 bg-emerald-50 shadow-[0_0_0_4px_rgba(16,185,129,0.08)]"
+                            : "border-border bg-background hover:border-emerald-400 hover:bg-emerald-50/50"
+                        }`}
+                      >
+                        <span className="flex items-center gap-3">
+                          <span className="rounded-lg bg-emerald-100 p-2 text-emerald-700">
+                            <Paperclip className="h-4 w-4" />
                           </span>
-                          <span className="block text-sm text-muted-foreground">
-                            PDF, Office, изображения, архивы · до 40 МБ на файл · до 20 файлов
+                          <span>
+                            <span className="block font-medium">
+                              {isDragOver
+                                ? "Отпустите файлы, чтобы загрузить"
+                                : uploadingFile
+                                ? selectedFiles.length === 1
+                                  ? `Загружаем: ${selectedFiles[0].name}`
+                                  : `Загружаем файлов: ${selectedFiles.length}`
+                                : "Нажмите или перетащите файлы сюда"}
+                            </span>
+                            <span className="block text-sm text-muted-foreground">
+                              PDF, Office, изображения, архивы · до 40 МБ на файл · до 20 файлов
+                            </span>
                           </span>
                         </span>
-                      </span>
-                      <Upload className="h-4 w-4 text-muted-foreground" />
-                    </button>
+                        <Upload className="h-4 w-4 text-muted-foreground" />
+                      </button>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Вам доступен просмотр файлов. Добавлять новые файлы могут только автор, согласующие и администратор.
+                  </p>
+                )}
                 {selectedFiles.length ? (
                   <div className="space-y-1 text-sm text-muted-foreground">
                     {selectedFiles.map((file) => (
@@ -2540,6 +2848,14 @@ export default function RequestDetailPage() {
                     {approval.comment && (
                       <p className="mt-2 text-muted-foreground">Комментарий: {approval.comment}</p>
                     )}
+                    {approval.requestedByRole ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Дополнительное согласование после {getRoleLabel(approval.requestedByRole)}
+                        {approval.requestedByName || approval.requestedByEmail
+                          ? ` · ${approval.requestedByName ? `${approval.requestedByName} · ` : ""}${approval.requestedByEmail ?? ""}`
+                          : ""}
+                      </p>
+                    ) : null}
 
                     {approval.status === "pending" && canDecide.has(approval.role) && (
                       <div className="mt-4 space-y-3">
@@ -2558,6 +2874,31 @@ export default function RequestDetailPage() {
                             placeholder="Обязателен для отказа"
                           />
                         </div>
+                        {availableForwardRoles(approval.role).length ? (
+                          <div className="space-y-2">
+                            <Label htmlFor={`forward-role-${approval.role}`}>Дополнительное согласование после вас</Label>
+                            <Select
+                              value={forwardRoleByApproval[approval.role] ?? ""}
+                              onValueChange={(value) =>
+                                setForwardRoleByApproval((current) => ({
+                                  ...current,
+                                  [approval.role]: value,
+                                }))
+                              }
+                            >
+                              <SelectTrigger id={`forward-role-${approval.role}`}>
+                                <SelectValue placeholder="Выберите роль" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {availableForwardRoles(approval.role).map((role) => (
+                                  <SelectItem key={role} value={role}>
+                                    {getRoleLabel(role)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ) : null}
                         <div className="flex gap-3">
                           <Button
                             type="button"
@@ -2566,6 +2907,23 @@ export default function RequestDetailPage() {
                           >
                             Согласовать
                           </Button>
+                          {availableForwardRoles(approval.role).length ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => {
+                                const nextRole = forwardRoleByApproval[approval.role];
+                                if (!nextRole) {
+                                  setError("Выберите роль, чтобы отправить заявку на дополнительное согласование");
+                                  return;
+                                }
+                                void handleDecision(approval.role, "approved", nextRole);
+                              }}
+                              disabled={submittingRole === approval.role}
+                            >
+                              Согласовать и отправить дальше
+                            </Button>
+                          ) : null}
                           <Button
                             type="button"
                             variant="destructive"
@@ -2642,7 +3000,7 @@ export default function RequestDetailPage() {
                       ? `${comment.authorName} · ${comment.authorEmail}`
                       : comment.authorEmail;
                     const createdAt = new Date(comment.createdAt).toLocaleString("ru-RU");
-                    const canEdit = canEditComment(comment._id);
+                    const canEdit = canEditComment(comment);
                     return (
                       <div
                         key={comment._id}
@@ -2679,7 +3037,9 @@ export default function RequestDetailPage() {
                             </div>
                           </form>
                         ) : (
-                          <p className="mt-2 whitespace-pre-wrap">{comment.body}</p>
+                          <p className="mt-2 whitespace-pre-wrap">
+                            {renderCommentBody(comment.body, comment.mentions)}
+                          </p>
                         )}
                         <div className="mt-2 flex gap-2 text-xs">
                           <Button
@@ -2714,12 +3074,33 @@ export default function RequestDetailPage() {
 
               <form className="space-y-3" onSubmit={handleAddComment}>
                 <Textarea
+                  ref={newCommentRef}
                   value={newComment}
-                  onChange={(event) => setNewComment(event.target.value)}
+                  onChange={(event) => {
+                    setNewComment(event.target.value);
+                    setCommentCursor(event.target.selectionStart ?? event.target.value.length);
+                  }}
+                  onClick={(event) => setCommentCursor(event.currentTarget.selectionStart ?? 0)}
+                  onKeyUp={(event) => setCommentCursor(event.currentTarget.selectionStart ?? 0)}
                   rows={3}
-                  placeholder="Напишите комментарий"
+                  placeholder="Напишите комментарий. Для упоминания введите @"
                   required
                 />
+                {mentionDraft && mentionSuggestions.length ? (
+                  <div className="rounded-lg border border-border bg-background">
+                    {mentionSuggestions.map((person) => (
+                      <button
+                        key={person.email}
+                        type="button"
+                        className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
+                        onClick={() => handleMentionSelect(person)}
+                      >
+                        <span className="font-medium">{getPersonDisplayName(person)}</span>
+                        <span className="text-xs text-muted-foreground">{person.email}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 {replyTo && (
                   <div className="text-xs text-muted-foreground">
                     Ответ на комментарий

@@ -41,6 +41,20 @@ const plannedPaymentSplitValidator = v.object({
   createdAt: v.number(),
 });
 
+const viewerAccessValidator = v.object({
+  email: v.string(),
+  fullName: v.optional(v.string()),
+  grantedByEmail: v.string(),
+  grantedByName: v.optional(v.string()),
+  source: v.union(v.literal("share"), v.literal("mention")),
+  grantedAt: v.number(),
+});
+
+const commentMentionValidator = v.object({
+  email: v.string(),
+  name: v.string(),
+});
+
 const schema = defineSchema({
   ...authTables,
   roles: defineTable({
@@ -91,6 +105,7 @@ const schema = defineSchema({
     incomingRatio: v.optional(v.number()),
     shipmentDate: v.optional(v.number()),
     shipmentMonth: v.optional(v.string()),
+    viewerAccess: v.optional(v.array(viewerAccessValidator)),
     specialists: v.optional(
       v.array(
         v.object({
@@ -167,6 +182,10 @@ const schema = defineSchema({
     decidedAt: v.optional(v.number()),
     reviewerId: v.optional(v.id("users")),
     reviewerEmail: v.optional(v.string()),
+    requestedByRole: v.optional(roleEnum),
+    requestedByEmail: v.optional(v.string()),
+    requestedByName: v.optional(v.string()),
+    requestedAt: v.optional(v.number()),
   })
     .index("by_request", ["requestId"])
     .index("by_role", ["role"])
@@ -177,6 +196,7 @@ const schema = defineSchema({
     authorEmail: v.string(),
     authorName: v.optional(v.string()),
     body: v.string(),
+    mentions: v.optional(v.array(commentMentionValidator)),
     parentId: v.optional(v.id("comments")),
     createdAt: v.number(),
     updatedAt: v.number(),

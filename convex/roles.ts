@@ -124,6 +124,29 @@ export const listAdContacts = query({
   },
 });
 
+export const listActiveContacts = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const roles = await ctx.db.query("roles").collect();
+    return roles
+      .filter((role) => role.active)
+      .map((role) => ({
+        email: role.email,
+        fullName: role.fullName ?? null,
+        creatorTitle: role.creatorTitle ?? null,
+      }))
+      .sort((left, right) => {
+        const leftLabel = left.fullName?.trim() || left.email;
+        const rightLabel = right.fullName?.trim() || right.email;
+        return leftLabel.localeCompare(rightLabel, "ru");
+      });
+  },
+});
+
 export const ensureCurrentUserRole = mutation({
   args: {},
   handler: async (ctx) => {

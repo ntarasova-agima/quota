@@ -1,65 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, query } from "./_generated/server";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { getCurrentEmail } from "./authHelpers";
 import { logEmailEvent, logTimelineEvent } from "./timelineHelpers";
-import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
-
-function hasHodAccessToRequest(roleRecord: any, request: any) {
-  if (!roleRecord?.roles?.includes("HOD")) {
-    return false;
-  }
-  const departments = roleRecord.hodDepartments ?? [];
-  if (!departments.length) {
-    return false;
-  }
-  const specialists = request.specialists ?? [];
-  return specialists.some(
-    (item: any) =>
-      requiresContestSpecialistValidation(item) && departments.includes(item.department),
-  );
-}
-
-async function hasHistoricalApprovalAccess(ctx: any, requestId: any, email: string) {
-  const approvals = await ctx.db
-    .query("approvals")
-    .withIndex("by_request", (q: any) => q.eq("requestId", requestId))
-    .collect();
-  return approvals.some((approval: any) => approval.reviewerEmail === email);
-}
-
-async function ensureCanViewRequest(ctx: any, requestId: any) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) {
-    throw new Error("Not authenticated");
-  }
-  const email = await getCurrentEmail(ctx);
-  if (!email) {
-    throw new Error("Missing user email");
-  }
-  const request = await ctx.db.get(requestId);
-  if (!request) {
-    throw new Error("Request not found");
-  }
-  const record = await ctx.db
-    .query("roles")
-    .withIndex("by_email", (q: any) => q.eq("email", email))
-    .first();
-  const canViewAll = record?.roles?.some((role: string) =>
-    ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role),
-  );
-  const canHodView = hasHodAccessToRequest(record, request);
-  const canViewByHistory = await hasHistoricalApprovalAccess(ctx, requestId, email);
-  if (
-    !canViewAll &&
-    !canHodView &&
-    !canViewByHistory &&
-    request.createdBy !== userId &&
-    request.createdByEmail !== email
-  ) {
-    throw new Error("Not authorized");
-  }
-}
+import { ensureCanViewRequest } from "./requestAccessHelpers";
 
 export const listByRequest = query({
   args: {
