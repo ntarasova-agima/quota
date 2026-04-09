@@ -60,6 +60,20 @@ type SpecialistView = {
   validationSkipped?: boolean;
 };
 
+type PaymentTimelineRow = {
+  key: string;
+  status: "planned" | "paid";
+  source: "planned_queue" | "current_planned" | "paid";
+  order: number;
+  amountWithoutVat?: number;
+  amountWithVat?: number;
+  vatRate?: number;
+  date: number;
+  actorEmail?: string;
+  actorName?: string;
+  splitNumber?: number;
+};
+
 const MAX_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_SIZE = 40 * 1024 * 1024;
 const ACCEPTED_ATTACHMENT_EXTENSIONS = [
@@ -267,6 +281,76 @@ function getPendingStatusPresentation(isActionableForViewer: boolean) {
       };
 }
 
+function getCurrentPlannedAmounts(request: {
+  plannedPaymentAmount?: number;
+  plannedPaymentAmountWithVat?: number;
+  vatRate?: number;
+}) {
+  return resolvePaymentPair({
+    amountWithoutVat: request.plannedPaymentAmount,
+    amountWithVat: request.plannedPaymentAmountWithVat,
+    vatRate: request.vatRate,
+  });
+}
+
+function buildPaymentTimelineRows(request: {
+  paymentSplits?: Array<any>;
+  plannedPaymentSplits?: Array<any>;
+  paymentPlannedAt?: number;
+  plannedPaymentAmount?: number;
+  plannedPaymentAmountWithVat?: number;
+  paymentPlannedByEmail?: string;
+  paymentPlannedByName?: string;
+  vatRate?: number;
+}) {
+  const rows: PaymentTimelineRow[] = [];
+  const paidRows = (request.paymentSplits ?? []).map((split: any, index: number) => ({
+    key: `paid-${split.splitNumber ?? index}-${split.createdAt ?? index}`,
+    status: "paid" as const,
+    source: "paid" as const,
+    order: index,
+    amountWithoutVat: split.amountWithoutVat,
+    amountWithVat: split.amountWithVat,
+    vatRate: split.vatRate ?? request.vatRate,
+    date: split.paidAt,
+    actorEmail: split.actorEmail,
+    actorName: split.actorName,
+    splitNumber: split.splitNumber,
+  }));
+  const queuedRows = (request.plannedPaymentSplits ?? []).map((split: any, index: number) => ({
+    key: `planned-${split.splitNumber ?? index}-${split.createdAt ?? index}`,
+    status: "planned" as const,
+    source: "planned_queue" as const,
+    order: paidRows.length + index,
+    amountWithoutVat: split.amountWithoutVat,
+    amountWithVat: split.amountWithVat,
+    vatRate: split.vatRate ?? request.vatRate,
+    date: split.plannedAt,
+    actorEmail: split.actorEmail,
+    actorName: split.actorName,
+    splitNumber: split.splitNumber,
+  }));
+  rows.push(...paidRows, ...queuedRows);
+
+  const currentPlanned = getCurrentPlannedAmounts(request);
+  if (request.paymentPlannedAt && currentPlanned.amountWithoutVat !== undefined) {
+    rows.push({
+      key: `planned-current-${request.paymentPlannedAt}`,
+      status: "planned",
+      source: "current_planned",
+      order: rows.length,
+      amountWithoutVat: currentPlanned.amountWithoutVat,
+      amountWithVat: currentPlanned.amountWithVat,
+      vatRate: request.vatRate,
+      date: request.paymentPlannedAt,
+      actorEmail: request.paymentPlannedByEmail,
+      actorName: request.paymentPlannedByName,
+    });
+  }
+
+  return rows;
+}
+
 export default function RequestDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -294,6 +378,7 @@ export default function RequestDetailPage() {
   const resumeRequest = useMutation(api.requests.resumeRequest);
   const assignCfdTag = useMutation(api.requests.assignCfdTag);
   const updatePaymentStatus = useMutation(api.requests.updatePaymentStatus);
+  const cancelPaymentEntry = useMutation(api.requests.cancelPaymentEntry);
   const updateContestSpecialist = useMutation(api.requests.updateContestSpecialist);
   const generateAttachmentUploadUrl = useMutation(api.attachments.generateUploadUrl);
   const saveAttachment = useMutation(api.attachments.saveAttachment);
@@ -477,6 +562,7 @@ export default function RequestDetailPage() {
     if (data?.request) {
       const targetAmounts = getPaymentTargetAmounts(data.request);
       const remainingAmounts = getPaymentRemainingAmounts(data.request);
+      const activePlannedRow = buildPaymentTimelineRows(data.request).find((row) => row.status === "planned");
       setSelectedTag(data.request.cfdTag ?? "");
       setCustomTagName("");
       setFinplanCostIdsRaw((data.request.finplanCostIds ?? []).join(", "));
@@ -506,23 +592,21 @@ export default function RequestDetailPage() {
             : "",
       );
       setPaymentExecutedAmount(
-        data.request.plannedPaymentAmount !== undefined
-          ? String(data.request.plannedPaymentAmount)
+        activePlannedRow?.amountWithoutVat !== undefined
+          ? String(activePlannedRow.amountWithoutVat)
           : remainingAmounts.amountWithoutVat !== undefined
             ? String(remainingAmounts.amountWithoutVat)
             : "",
       );
       setPaymentExecutedAmountWithVat(
-        data.request.plannedPaymentAmountWithVat !== undefined
-          ? String(data.request.plannedPaymentAmountWithVat)
+        activePlannedRow?.amountWithVat !== undefined
+          ? String(activePlannedRow.amountWithVat)
           : remainingAmounts.amountWithVat !== undefined
             ? String(remainingAmounts.amountWithVat)
             : "",
       );
       setPaymentExecutedDate(
-        data.request.paidAt
-          ? formatDateInputFromTimestamp(data.request.paidAt)
-          : todayDate,
+        todayDate,
       );
       setPaymentCurrencyRate(
         data.request.paymentCurrencyRate !== undefined
@@ -537,6 +621,7 @@ export default function RequestDetailPage() {
     data?.request?.status,
     data?.request?.plannedPaymentAmount,
     data?.request?.plannedPaymentAmountWithVat,
+    data?.request?.plannedPaymentSplits,
     data?.request?.finplanCostIds,
     data?.request?.actualPaidAmount,
     data?.request?.actualPaidAmountWithVat,
@@ -585,6 +670,8 @@ export default function RequestDetailPage() {
   const { request, approvals } = data;
   const isServiceCategory = isServiceRecipientCategory(request.category);
   const remainingPaymentAmounts = getPaymentRemainingAmounts(request);
+  const paymentTimelineRows = buildPaymentTimelineRows(request);
+  const activePlannedPaymentRow = paymentTimelineRows.find((row) => row.status === "planned");
   const currentPlannedPaymentAmounts = resolvePaymentPair({
     amountWithoutVat: request.plannedPaymentAmount,
     amountWithVat: request.plannedPaymentAmountWithVat,
@@ -803,21 +890,28 @@ export default function RequestDetailPage() {
       return;
     }
     if (
-      remainingPaymentAmounts.amountWithoutVat !== undefined &&
-      executedAmounts.amountWithoutVat > remainingPaymentAmounts.amountWithoutVat
+      (activePlannedPaymentRow?.amountWithoutVat ?? remainingPaymentAmounts.amountWithoutVat) !== undefined &&
+      executedAmounts.amountWithoutVat >
+        (activePlannedPaymentRow?.amountWithoutVat ?? remainingPaymentAmounts.amountWithoutVat)!
     ) {
-      setPaymentActionError("Сумма частичной оплаты не может быть больше остатка платежа");
+      setPaymentActionError(
+        activePlannedPaymentRow
+          ? "Сумма частичной оплаты не может быть больше суммы этого платежа"
+          : "Сумма частичной оплаты не может быть больше остатка платежа",
+      );
       return;
     }
     if (
-      remainingPaymentAmounts.amountWithoutVat !== undefined &&
+      (activePlannedPaymentRow?.amountWithoutVat ?? remainingPaymentAmounts.amountWithoutVat) !== undefined &&
       isSameMoneyValue(
         executedAmounts.amountWithoutVat,
-        remainingPaymentAmounts.amountWithoutVat,
+        activePlannedPaymentRow?.amountWithoutVat ?? remainingPaymentAmounts.amountWithoutVat,
       )
     ) {
       setPaymentActionError(
-        "Сумма совпадает с остатком платежа. Чтобы закрыть весь платеж, нажмите «Оплачено»",
+        activePlannedPaymentRow
+          ? "Сумма совпадает с суммой этого платежа. Чтобы отметить его полностью, нажмите «Оплачено»"
+          : "Сумма совпадает с остатком платежа. Чтобы закрыть весь платеж, нажмите «Оплачено»",
       );
       return;
     }
@@ -848,14 +942,42 @@ export default function RequestDetailPage() {
       setPaymentActionError("Укажите дату оплаты");
       return;
     }
+    const executedAmounts = resolvePaymentPair({
+      amountWithoutVat: parseMoneyInput(paymentExecutedAmount),
+      amountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
+      vatRate: paymentVatRate,
+    });
+    if (
+      executedAmounts.amountWithoutVat === undefined ||
+      executedAmounts.amountWithoutVat <= 0
+    ) {
+      setPaymentActionError("Укажите сумму оплаты");
+      return;
+    }
+    const maxPayableAmount =
+      activePlannedPaymentRow?.amountWithoutVat ?? remainingPaymentAmounts.amountWithoutVat;
+    if (
+      maxPayableAmount !== undefined &&
+      executedAmounts.amountWithoutVat > maxPayableAmount
+    ) {
+      setPaymentActionError(
+        activePlannedPaymentRow
+          ? "Сумма оплаты не может быть больше суммы этого платежа"
+          : "Сумма оплаты превышает остаток",
+      );
+      return;
+    }
+    const closesWholeRequest =
+      remainingPaymentAmounts.amountWithoutVat !== undefined &&
+      isSameMoneyValue(executedAmounts.amountWithoutVat, remainingPaymentAmounts.amountWithoutVat);
     setUpdatingStatus(true);
     try {
       await updatePaymentStatus({
         id: request._id,
-        status: "paid",
+        status: closesWholeRequest ? "paid" : "partially_paid",
         finplanCostIdsRaw,
-        actualPaidAmount: parseMoneyInput(paymentExecutedAmount),
-        actualPaidAmountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
+        actualPaidAmount: executedAmounts.amountWithoutVat,
+        actualPaidAmountWithVat: executedAmounts.amountWithVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
         paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
       });
@@ -863,6 +985,37 @@ export default function RequestDetailPage() {
     } catch (err) {
       setPaymentActionError(
         getDisplayErrorMessage(err, "Не удалось обновить статус"),
+      );
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
+
+  async function handleCancelPaymentRow(row: PaymentTimelineRow) {
+    const message =
+      row.status === "planned"
+        ? "Отменить этот запланированный платеж?"
+        : "Отменить этот проведенный платеж?";
+    if (typeof window !== "undefined" && !window.confirm(message)) {
+      return;
+    }
+    setPaymentActionError(null);
+    setUpdatingStatus(true);
+    try {
+      await cancelPaymentEntry({
+        id: request._id,
+        entryType:
+          row.status === "paid"
+            ? "paid_split"
+            : row.source === "current_planned"
+              ? "planned_current"
+              : "planned_split",
+        splitNumber: row.splitNumber,
+      });
+      router.refresh();
+    } catch (err) {
+      setPaymentActionError(
+        getDisplayErrorMessage(err, "Не удалось отменить платеж"),
       );
     } finally {
       setUpdatingStatus(false);
@@ -1133,70 +1286,26 @@ export default function RequestDetailPage() {
                   </div>
                 </div>
               ) : null}
-              {(request.plannedPaymentSplits?.length ||
-                (currentPlannedPaymentAmounts.amountWithoutVat !== undefined && request.paymentPlannedAt)) ? (
+              {!(canSetPaymentPlanned || canSetPaid) && paymentTimelineRows.length ? (
                 <div className="space-y-2">
-                  <div className="text-muted-foreground">Запланированные платежи</div>
+                  <div className="text-muted-foreground">Платежи</div>
                   <div className="space-y-2">
-                    {(request.plannedPaymentSplits ?? []).map((split: any) => (
+                    {paymentTimelineRows.map((row, index) => (
                       <div
-                        key={`planned-${split.splitNumber}-${split.createdAt}`}
+                        key={row.key}
                         className="rounded-lg border border-border px-3 py-2 text-sm"
                       >
-                        <div className="font-medium">Платеж {split.splitNumber}</div>
+                        <div className="font-medium">Платеж {index + 1}</div>
                         <div className="text-muted-foreground">
-                          Запланирован {new Date(split.plannedAt).toLocaleDateString("ru-RU")} ·{" "}
+                          {row.status === "paid" ? "Оплачен" : "Запланирован"}{" "}
+                          {new Date(row.date).toLocaleDateString("ru-RU")} ·{" "}
                           {formatAmountPair({
-                            amountWithoutVat: split.amountWithoutVat,
-                            amountWithVat: split.amountWithVat,
+                            amountWithoutVat: row.amountWithoutVat,
+                            amountWithVat: row.amountWithVat,
                             currency: request.currency,
-                            vatRate: split.vatRate ?? request.vatRate,
+                            vatRate: row.vatRate ?? request.vatRate,
                           })}
                         </div>
-                      </div>
-                    ))}
-                    {currentPlannedPaymentAmounts.amountWithoutVat !== undefined && request.paymentPlannedAt ? (
-                      <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm">
-                        <div className="font-medium">Следующий платеж</div>
-                        <div className="text-muted-foreground">
-                          Запланирован {new Date(request.paymentPlannedAt).toLocaleDateString("ru-RU")} ·{" "}
-                          {formatAmountPair({
-                            amountWithoutVat: currentPlannedPaymentAmounts.amountWithoutVat,
-                            amountWithVat: currentPlannedPaymentAmounts.amountWithVat,
-                            currency: request.currency,
-                            vatRate: request.vatRate,
-                          })}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-              {request.paymentSplits?.length ? (
-                <div className="space-y-2">
-                  <div className="text-muted-foreground">Проведенные платежи</div>
-                  <div className="space-y-2">
-                    {request.paymentSplits.map((split: any) => (
-                      <div
-                        key={`${split.splitNumber}-${split.createdAt}`}
-                        className="rounded-lg border border-border px-3 py-2 text-sm"
-                      >
-                        <div className="font-medium">Транш {split.splitNumber}</div>
-                        <div className="text-muted-foreground">
-                          Оплачен {new Date(split.paidAt).toLocaleDateString("ru-RU")} ·{" "}
-                          {split.amountWithoutVat} {request.currency} без НДС
-                          {split.amountWithVat !== undefined
-                            ? ` · ${split.amountWithVat} ${request.currency} с НДС`
-                            : ""}
-                        </div>
-                        {split.remainingAmountWithoutVat !== undefined || split.nextPaymentAt ? (
-                          <div className="text-muted-foreground">
-                            Остаток: {split.remainingAmountWithoutVat ?? "—"} {request.currency}
-                            {split.nextPaymentAt
-                              ? ` · следующая дата ${new Date(split.nextPaymentAt).toLocaleDateString("ru-RU")}`
-                              : ""}
-                          </div>
-                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -1500,209 +1609,279 @@ export default function RequestDetailPage() {
                         </p>
                       </div>
 
-                      {canSetPaymentPlanned ? (
-                        <div className="space-y-2 rounded-lg border border-border/70 p-3">
-                          <div className="text-sm font-medium">Планирование платежей</div>
-                          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
-                            <div className="space-y-2">
-                              <Label htmlFor="paymentPlannedAmount">Сумма планируемого платежа без НДС</Label>
-                              <Input
-                                id="paymentPlannedAmount"
-                                inputMode="decimal"
-                                value={paymentPlannedAmount}
-                                onChange={(event) => {
-                                  const nextAmount = sanitizeNumericInput(event.target.value);
-                                  setPaymentPlannedAmount(nextAmount);
-                                  setPaymentActionError(null);
-                                  const synced = syncVatInputPair({
-                                    amountWithoutVatInput: nextAmount,
-                                    amountWithVatInput: paymentPlannedAmountWithVat,
-                                    vatRateInput: String(paymentVatRate),
-                                    source: "without",
-                                  });
-                                  setPaymentPlannedAmountWithVat(synced.amountWithVatInput);
-                                }}
-                                placeholder={`Например, ${
-                                  unallocatedPaymentAmounts.amountWithoutVat > MONEY_EPSILON
-                                    ? unallocatedPaymentAmounts.amountWithoutVat
-                                    : remainingPaymentAmounts.amountWithoutVat ?? request.amount
-                                }`}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="paymentPlannedAmountWithVat">Сумма планируемого платежа с НДС</Label>
-                              <Input
-                                id="paymentPlannedAmountWithVat"
-                                inputMode="decimal"
-                                value={paymentPlannedAmountWithVat}
-                                onChange={(event) => {
-                                  const nextAmountWithVat = sanitizeNumericInput(event.target.value);
-                                  setPaymentPlannedAmountWithVat(nextAmountWithVat);
-                                  setPaymentActionError(null);
-                                  const synced = syncVatInputPair({
-                                    amountWithoutVatInput: paymentPlannedAmount,
-                                    amountWithVatInput: nextAmountWithVat,
-                                    vatRateInput: String(paymentVatRate),
-                                    source: "with",
-                                  });
-                                  setPaymentPlannedAmount(synced.amountWithoutVatInput);
-                                }}
-                                placeholder={`Например, ${
-                                  unallocatedPaymentAmounts.amountWithVat > MONEY_EPSILON
-                                    ? unallocatedPaymentAmounts.amountWithVat
-                                    : remainingPaymentAmounts.amountWithVat ??
-                                      request.amountWithVat ??
-                                      calculateAmountWithVat(request.amount, paymentVatRate)
-                                }`}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="paymentDatePlanned">Дата оплаты</Label>
-                              <Input
-                                id="paymentDatePlanned"
-                                type="date"
-                                value={paymentPlannedDate}
-                                onChange={(event) => {
-                                  setPaymentPlannedDate(event.target.value);
-                                  setPaymentActionError(null);
-                                  setConfirmLatePaymentPlan(false);
-                                  setLatePaymentPlanNeedsConfirmation(false);
-                                }}
-                                min={todayDate}
-                              />
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap gap-2 pt-1">
-                            <Button
-                              type="button"
-                              className="h-9 border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                              disabled={
-                                updatingStatus ||
-                                !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
-                              }
-                              onClick={() => handlePlanPayment("full")}
-                            >
-                              Запланировать оплату
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="h-9 border-blue-300 text-blue-700 hover:bg-blue-50"
-                              disabled={
-                                updatingStatus ||
-                                !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
-                              }
-                              onClick={() => handlePlanPayment("partial")}
-                            >
-                              {partialPlanButtonLabel}
-                            </Button>
-                          </div>
-                          {currentPlannedPaymentAmounts.amountWithoutVat !== undefined && request.paymentPlannedAt ? (
+                      {(canSetPaymentPlanned || canSetPaid) ? (
+                        <div className="space-y-3 rounded-lg border border-border/70 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-sm font-medium">Платежи</div>
                             <p className="text-xs text-muted-foreground">
-                              Запланированный платеж: {formatAmountPair({
-                                amountWithoutVat: currentPlannedPaymentAmounts.amountWithoutVat,
-                                amountWithVat: currentPlannedPaymentAmounts.amountWithVat,
+                              Нераспределенная сумма к оплате: {formatAmountPair({
+                                amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
+                                amountWithVat: unallocatedPaymentAmounts.amountWithVat,
                                 currency: request.currency,
                                 vatRate: request.vatRate,
-                              })} · {new Date(request.paymentPlannedAt).toLocaleDateString("ru-RU")}
+                              })}
                             </p>
-                          ) : null}
-                          <p className="text-xs text-muted-foreground">
-                            Нераспределенная сумма к оплате: {formatAmountPair({
-                              amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
-                              amountWithVat: unallocatedPaymentAmounts.amountWithVat,
-                              currency: request.currency,
-                              vatRate: request.vatRate,
-                            })}
-                          </p>
-                        </div>
-                      ) : null}
-
-                      {canSetPaid && hasRemainingPayment ? (
-                        <div className="space-y-2 rounded-lg border border-border/70 p-3">
-                          <div className="text-sm font-medium">Фиксация оплаты</div>
-                          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] xl:items-end">
-                            <div className="space-y-2">
-                              <Label htmlFor="paymentExecutedAmount">Сумма частичной оплаты без НДС</Label>
-                              <Input
-                                id="paymentExecutedAmount"
-                                inputMode="decimal"
-                                value={paymentExecutedAmount}
-                                onChange={(event) => {
-                                  const nextAmount = sanitizeNumericInput(event.target.value);
-                                  setPaymentExecutedAmount(nextAmount);
-                                  setPaymentActionError(null);
-                                  const synced = syncVatInputPair({
-                                    amountWithoutVatInput: nextAmount,
-                                    amountWithVatInput: paymentExecutedAmountWithVat,
-                                    vatRateInput: String(paymentVatRate),
-                                    source: "without",
-                                  });
-                                  setPaymentExecutedAmountWithVat(synced.amountWithVatInput);
-                                }}
-                                placeholder={`Например, ${remainingPaymentAmounts.amountWithoutVat ?? request.amount}`}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="paymentExecutedAmountWithVat">Сумма частичной оплаты с НДС</Label>
-                              <Input
-                                id="paymentExecutedAmountWithVat"
-                                inputMode="decimal"
-                                value={paymentExecutedAmountWithVat}
-                                onChange={(event) => {
-                                  const nextAmountWithVat = sanitizeNumericInput(event.target.value);
-                                  setPaymentExecutedAmountWithVat(nextAmountWithVat);
-                                  setPaymentActionError(null);
-                                  const synced = syncVatInputPair({
-                                    amountWithoutVatInput: paymentExecutedAmount,
-                                    amountWithVatInput: nextAmountWithVat,
-                                    vatRateInput: String(paymentVatRate),
-                                    source: "with",
-                                  });
-                                  setPaymentExecutedAmount(synced.amountWithoutVatInput);
-                                }}
-                                placeholder={`Например, ${
-                                  remainingPaymentAmounts.amountWithVat ??
-                                  request.amountWithVat ??
-                                  calculateAmountWithVat(request.amount, paymentVatRate)
-                                }`}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="paymentExecutedDate">Дата оплаты</Label>
-                              <Input
-                                id="paymentExecutedDate"
-                                type="date"
-                                value={paymentExecutedDate}
-                                onChange={(event) => {
-                                  setPaymentExecutedDate(event.target.value);
-                                  setPaymentActionError(null);
-                                }}
-                              />
-                            </div>
-                            <Button
-                              type="button"
-                              className="h-9 border-cyan-600 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
-                              disabled={
-                                updatingStatus ||
-                                !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
-                              }
-                              onClick={handlePartialPayment}
-                            >
-                              Частично оплачено
-                            </Button>
-                            <Button
-                              type="button"
-                              className="h-9 border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
-                              disabled={
-                                updatingStatus ||
-                                !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
-                              }
-                              onClick={handlePaid}
-                            >
-                              Оплачено
-                            </Button>
                           </div>
+
+                          {paymentTimelineRows.length ? (
+                            <div className="space-y-3">
+                              {paymentTimelineRows.map((row, index) => {
+                                const isActivePlannedRow =
+                                  row.status === "planned" && activePlannedPaymentRow?.key === row.key;
+                                return (
+                                  <div
+                                    key={row.key}
+                                    className={`space-y-3 rounded-lg border px-3 py-3 ${
+                                      row.status === "paid"
+                                        ? "border-emerald-200 bg-emerald-50/40"
+                                        : isActivePlannedRow
+                                          ? "border-blue-300 bg-blue-50/40"
+                                          : "border-border bg-background"
+                                    }`}
+                                  >
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div className="space-y-1">
+                                        <div className="font-medium">Платеж {index + 1}</div>
+                                        <div className="text-sm text-muted-foreground">
+                                          {row.status === "paid" ? "Оплачен" : "Запланирован"}{" "}
+                                          {new Date(row.date).toLocaleDateString("ru-RU")} ·{" "}
+                                          {formatAmountPair({
+                                            amountWithoutVat: row.amountWithoutVat,
+                                            amountWithVat: row.amountWithVat,
+                                            currency: request.currency,
+                                            vatRate: row.vatRate ?? request.vatRate,
+                                          })}
+                                        </div>
+                                      </div>
+                                      <div className="flex flex-wrap gap-2">
+                                        <span
+                                          className={`rounded-full border px-2.5 py-1 text-xs ${
+                                            row.status === "paid"
+                                              ? "border-emerald-200 bg-emerald-100 text-emerald-800"
+                                              : isActivePlannedRow
+                                                ? "border-blue-200 bg-blue-100 text-blue-800"
+                                                : "border-slate-200 bg-slate-100 text-slate-700"
+                                          }`}
+                                        >
+                                          {row.status === "paid"
+                                            ? "Оплачен"
+                                            : isActivePlannedRow
+                                              ? "Готов к оплате"
+                                              : "Запланирован"}
+                                        </span>
+                                        {(canSetPaymentPlanned || canSetPaid) ? (
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="h-8 border-rose-300 text-rose-700 hover:bg-rose-50"
+                                            disabled={updatingStatus}
+                                            onClick={() => handleCancelPaymentRow(row)}
+                                          >
+                                            {row.status === "paid" ? "Отменить оплату" : "Отменить план"}
+                                          </Button>
+                                        ) : null}
+                                      </div>
+                                    </div>
+
+                                    {isActivePlannedRow && canSetPaid ? (
+                                      <div className="space-y-3 rounded-lg border border-border/70 bg-background/80 p-3">
+                                        <div className="text-sm font-medium">Зафиксировать этот платеж</div>
+                                        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] xl:items-end">
+                                          <div className="space-y-2">
+                                            <Label htmlFor="paymentExecutedAmount">Сумма без НДС</Label>
+                                            <Input
+                                              id="paymentExecutedAmount"
+                                              inputMode="decimal"
+                                              value={paymentExecutedAmount}
+                                              onChange={(event) => {
+                                                const nextAmount = sanitizeNumericInput(event.target.value);
+                                                setPaymentExecutedAmount(nextAmount);
+                                                setPaymentActionError(null);
+                                                const synced = syncVatInputPair({
+                                                  amountWithoutVatInput: nextAmount,
+                                                  amountWithVatInput: paymentExecutedAmountWithVat,
+                                                  vatRateInput: String(paymentVatRate),
+                                                  source: "without",
+                                                });
+                                                setPaymentExecutedAmountWithVat(synced.amountWithVatInput);
+                                              }}
+                                              placeholder={`Например, ${row.amountWithoutVat ?? remainingPaymentAmounts.amountWithoutVat ?? request.amount}`}
+                                            />
+                                          </div>
+                                          <div className="space-y-2">
+                                            <Label htmlFor="paymentExecutedAmountWithVat">Сумма с НДС</Label>
+                                            <Input
+                                              id="paymentExecutedAmountWithVat"
+                                              inputMode="decimal"
+                                              value={paymentExecutedAmountWithVat}
+                                              onChange={(event) => {
+                                                const nextAmountWithVat = sanitizeNumericInput(event.target.value);
+                                                setPaymentExecutedAmountWithVat(nextAmountWithVat);
+                                                setPaymentActionError(null);
+                                                const synced = syncVatInputPair({
+                                                  amountWithoutVatInput: paymentExecutedAmount,
+                                                  amountWithVatInput: nextAmountWithVat,
+                                                  vatRateInput: String(paymentVatRate),
+                                                  source: "with",
+                                                });
+                                                setPaymentExecutedAmount(synced.amountWithoutVatInput);
+                                              }}
+                                              placeholder={`Например, ${
+                                                row.amountWithVat ??
+                                                remainingPaymentAmounts.amountWithVat ??
+                                                request.amountWithVat ??
+                                                calculateAmountWithVat(request.amount, paymentVatRate)
+                                              }`}
+                                            />
+                                          </div>
+                                          <div className="space-y-2">
+                                            <Label htmlFor="paymentExecutedDate">Дата оплаты</Label>
+                                            <Input
+                                              id="paymentExecutedDate"
+                                              type="date"
+                                              value={paymentExecutedDate}
+                                              onChange={(event) => {
+                                                setPaymentExecutedDate(event.target.value);
+                                                setPaymentActionError(null);
+                                              }}
+                                            />
+                                          </div>
+                                          <Button
+                                            type="button"
+                                            className="h-9 border-cyan-600 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
+                                            disabled={
+                                              updatingStatus ||
+                                              !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                            }
+                                            onClick={handlePartialPayment}
+                                          >
+                                            Частично оплачено
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            className="h-9 border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
+                                            disabled={
+                                              updatingStatus ||
+                                              !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                            }
+                                            onClick={handlePaid}
+                                          >
+                                            Оплачено
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+
+                          {canSetPaymentPlanned &&
+                          hasRemainingPayment &&
+                          (unallocatedPaymentAmounts.amountWithoutVat > MONEY_EPSILON ||
+                            paymentTimelineRows.length === 0) ? (
+                            <div className="space-y-3 rounded-lg border border-dashed border-blue-300 bg-blue-50/30 p-3">
+                              <div className="text-sm font-medium">
+                                {paymentTimelineRows.length ? "Следующий платеж" : "Первый платеж"}
+                              </div>
+                              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
+                                <div className="space-y-2">
+                                  <Label htmlFor="paymentPlannedAmount">Сумма без НДС</Label>
+                                  <Input
+                                    id="paymentPlannedAmount"
+                                    inputMode="decimal"
+                                    value={paymentPlannedAmount}
+                                    onChange={(event) => {
+                                      const nextAmount = sanitizeNumericInput(event.target.value);
+                                      setPaymentPlannedAmount(nextAmount);
+                                      setPaymentActionError(null);
+                                      const synced = syncVatInputPair({
+                                        amountWithoutVatInput: nextAmount,
+                                        amountWithVatInput: paymentPlannedAmountWithVat,
+                                        vatRateInput: String(paymentVatRate),
+                                        source: "without",
+                                      });
+                                      setPaymentPlannedAmountWithVat(synced.amountWithVatInput);
+                                    }}
+                                    placeholder={`Например, ${
+                                      unallocatedPaymentAmounts.amountWithoutVat > MONEY_EPSILON
+                                        ? unallocatedPaymentAmounts.amountWithoutVat
+                                        : remainingPaymentAmounts.amountWithoutVat ?? request.amount
+                                    }`}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="paymentPlannedAmountWithVat">Сумма с НДС</Label>
+                                  <Input
+                                    id="paymentPlannedAmountWithVat"
+                                    inputMode="decimal"
+                                    value={paymentPlannedAmountWithVat}
+                                    onChange={(event) => {
+                                      const nextAmountWithVat = sanitizeNumericInput(event.target.value);
+                                      setPaymentPlannedAmountWithVat(nextAmountWithVat);
+                                      setPaymentActionError(null);
+                                      const synced = syncVatInputPair({
+                                        amountWithoutVatInput: paymentPlannedAmount,
+                                        amountWithVatInput: nextAmountWithVat,
+                                        vatRateInput: String(paymentVatRate),
+                                        source: "with",
+                                      });
+                                      setPaymentPlannedAmount(synced.amountWithoutVatInput);
+                                    }}
+                                    placeholder={`Например, ${
+                                      unallocatedPaymentAmounts.amountWithVat > MONEY_EPSILON
+                                        ? unallocatedPaymentAmounts.amountWithVat
+                                        : remainingPaymentAmounts.amountWithVat ??
+                                          request.amountWithVat ??
+                                          calculateAmountWithVat(request.amount, paymentVatRate)
+                                    }`}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="paymentDatePlanned">Дата оплаты</Label>
+                                  <Input
+                                    id="paymentDatePlanned"
+                                    type="date"
+                                    value={paymentPlannedDate}
+                                    onChange={(event) => {
+                                      setPaymentPlannedDate(event.target.value);
+                                      setPaymentActionError(null);
+                                      setConfirmLatePaymentPlan(false);
+                                      setLatePaymentPlanNeedsConfirmation(false);
+                                    }}
+                                    min={todayDate}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  type="button"
+                                  className="h-9 border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                  disabled={
+                                    updatingStatus ||
+                                    !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                  }
+                                  onClick={() => handlePlanPayment("full")}
+                                >
+                                  Запланировать оплату
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-9 border-blue-300 text-blue-700 hover:bg-blue-50"
+                                  disabled={
+                                    updatingStatus ||
+                                    !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                  }
+                                  onClick={() => handlePlanPayment("partial")}
+                                >
+                                  {partialPlanButtonLabel}
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+
                           <p className="text-xs text-muted-foreground">
                             Остаток к оплате: {formatAmountPair({
                               amountWithoutVat: remainingPaymentAmounts.amountWithoutVat,

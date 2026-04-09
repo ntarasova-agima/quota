@@ -685,6 +685,19 @@ function hasPaymentAmountDifference(
   );
 }
 
+function getPaymentProgressStatus(params: {
+  paidSplitsCount: number;
+  hasPlannedPayments: boolean;
+}) {
+  if (params.paidSplitsCount > 0) {
+    return "partially_paid" as const;
+  }
+  if (params.hasPlannedPayments) {
+    return "payment_planned" as const;
+  }
+  return "awaiting_payment" as const;
+}
+
 function resolveRequestAmounts(
   params: {
     category: string;
@@ -3137,6 +3150,153 @@ export const updatePaymentStatus = mutation({
       actorName,
     });
     return { status: "closed" };
+  },
+});
+
+export const cancelPaymentEntry = mutation({
+  args: {
+    id: v.id("requests"),
+    entryType: v.union(
+      v.literal("planned_current"),
+      v.literal("planned_split"),
+      v.literal("paid_split"),
+    ),
+    splitNumber: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const record = await getRoleRecord(ctx, email);
+    if (!record || !record.roles.some((role: string) => role === "BUH" || role === "ADMIN")) {
+      throw new Error("Not authorized");
+    }
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    if (!["awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status)) {
+      throw new Error("Отменять платежи можно только в оплате");
+    }
+
+    const actorName = record.fullName?.trim() || undefined;
+    const now = Date.now();
+
+    if (args.entryType === "planned_current") {
+      const currentPlanned = resolvePaymentAmountInput({
+        amountWithoutVat: request.plannedPaymentAmount,
+        amountWithVat: request.plannedPaymentAmountWithVat,
+        vatRate: request.vatRate,
+      });
+      if (!request.paymentPlannedAt || currentPlanned.amountWithoutVat === undefined) {
+        throw new Error("Текущий запланированный платеж не найден");
+      }
+      const nextStatus = getPaymentProgressStatus({
+        paidSplitsCount: (request.paymentSplits ?? []).length,
+        hasPlannedPayments: (request.plannedPaymentSplits?.length ?? 0) > 0,
+      });
+      await ctx.db.patch(args.id, {
+        status: nextStatus,
+        paymentPlannedAt: undefined,
+        paymentPlannedByEmail: undefined,
+        paymentPlannedByName: undefined,
+        plannedPaymentAmount: undefined,
+        plannedPaymentAmountWithVat: undefined,
+        paymentReminderSentAt: undefined,
+        updatedAt: now,
+      });
+      await logTimelineEvent(ctx, {
+        requestId: request._id,
+        type: "payment_plan_canceled",
+        title: "Отменен запланированный платеж",
+        actorEmail: email,
+        actorName,
+      });
+      return { canceled: true };
+    }
+
+    if (args.entryType === "planned_split") {
+      if (!args.splitNumber) {
+        throw new Error("Не указан номер запланированного платежа");
+      }
+      const nextPlannedSplits = (request.plannedPaymentSplits ?? []).filter(
+        (split) => split.splitNumber !== args.splitNumber,
+      );
+      if (nextPlannedSplits.length === (request.plannedPaymentSplits?.length ?? 0)) {
+        throw new Error("Запланированный платеж не найден");
+      }
+      const nextStatus = getPaymentProgressStatus({
+        paidSplitsCount: (request.paymentSplits ?? []).length,
+        hasPlannedPayments:
+          nextPlannedSplits.length > 0 ||
+          (request.paymentPlannedAt !== undefined &&
+            request.plannedPaymentAmount !== undefined),
+      });
+      await ctx.db.patch(args.id, {
+        status: nextStatus,
+        plannedPaymentSplits: nextPlannedSplits.length ? nextPlannedSplits : undefined,
+        paymentReminderSentAt: undefined,
+        updatedAt: now,
+      });
+      await logTimelineEvent(ctx, {
+        requestId: request._id,
+        type: "payment_plan_canceled",
+        title: `Отменен платеж ${args.splitNumber}`,
+        actorEmail: email,
+        actorName,
+      });
+      return { canceled: true };
+    }
+
+    if (!args.splitNumber) {
+      throw new Error("Не указан номер проведенного платежа");
+    }
+    const nextPaidSplits = (request.paymentSplits ?? []).filter(
+      (split) => split.splitNumber !== args.splitNumber,
+    );
+    if (nextPaidSplits.length === (request.paymentSplits?.length ?? 0)) {
+      throw new Error("Проведенный платеж не найден");
+    }
+    const targetAmounts = getRequestPaymentTargetAmounts(request);
+    const paidTotalWithoutVat = sumPaymentSplitAmounts(nextPaidSplits);
+    const paidTotalWithVat = sumPaymentSplitAmountsWithVat(nextPaidSplits, request.vatRate);
+    const nextResidualAmount = Math.max((targetAmounts.amountWithoutVat ?? 0) - paidTotalWithoutVat, 0);
+    const nextResidualAmountWithVat =
+      targetAmounts.amountWithVat !== undefined
+        ? Math.max(targetAmounts.amountWithVat - paidTotalWithVat, 0)
+        : undefined;
+    const nextStatus = getPaymentProgressStatus({
+      paidSplitsCount: nextPaidSplits.length,
+      hasPlannedPayments:
+        (request.plannedPaymentSplits?.length ?? 0) > 0 ||
+        (request.paymentPlannedAt !== undefined && request.plannedPaymentAmount !== undefined),
+    });
+
+    await ctx.db.patch(args.id, {
+      status: nextStatus,
+      paymentSplits: nextPaidSplits.length ? nextPaidSplits : undefined,
+      actualPaidAmount: paidTotalWithoutVat > 0 ? paidTotalWithoutVat : undefined,
+      actualPaidAmountWithVat: paidTotalWithVat > 0 ? paidTotalWithVat : undefined,
+      paymentResidualAmount: nextResidualAmount > 0 ? nextResidualAmount : undefined,
+      paymentResidualAmountWithVat:
+        nextResidualAmountWithVat !== undefined && nextResidualAmountWithVat > 0
+          ? nextResidualAmountWithVat
+          : undefined,
+      paidAt: undefined,
+      paidByEmail: undefined,
+      paidByName: undefined,
+      closeReminderSentAt: undefined,
+      updatedAt: now,
+    });
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "payment_canceled",
+      title: `Отменен проведенный платеж ${args.splitNumber}`,
+      actorEmail: email,
+      actorName,
+    });
+    return { canceled: true };
   },
 });
 
