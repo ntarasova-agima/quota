@@ -64,6 +64,35 @@ describe("quotaUsage", () => {
     ]);
   });
 
+  it("allocates multiple planned payments across their months", () => {
+    const allocations = getEffectiveQuotaAllocations({
+      status: "payment_planned",
+      amount: 1000,
+      amountWithVat: 1220,
+      vatRate: 22,
+      currency: "RUB",
+      approvalDeadline: new Date("2026-04-10").getTime(),
+      paymentResidualAmount: 1000,
+      paymentResidualAmountWithVat: 1220,
+      plannedPaymentAmount: 300,
+      plannedPaymentAmountWithVat: 366,
+      paymentPlannedAt: new Date("2026-06-01").getTime(),
+      plannedPaymentSplits: [
+        {
+          amountWithoutVat: 250,
+          amountWithVat: 305,
+          plannedAt: new Date("2026-05-15").getTime(),
+        },
+      ],
+    });
+
+    expect(allocations).toEqual([
+      { monthKey: "2026-05", amountWithoutVat: 250, amountWithVat: 305 },
+      { monthKey: "2026-06", amountWithoutVat: 300, amountWithVat: 366 },
+      { monthKey: "2026-06", amountWithoutVat: 450, amountWithVat: 549 },
+    ]);
+  });
+
   it("uses split totals and final remainder for fully paid requests", () => {
     const allocations = getEffectiveQuotaAllocations({
       status: "paid",

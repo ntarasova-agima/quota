@@ -15,6 +15,11 @@ type RequestLike = {
   isCanceled?: boolean;
   plannedPaymentAmount?: number;
   plannedPaymentAmountWithVat?: number;
+  plannedPaymentSplits?: Array<{
+    amountWithoutVat?: number;
+    amountWithVat?: number;
+    vatRate?: number;
+  }>;
   paymentResidualAmount?: number;
   paymentResidualAmountWithVat?: number;
   vatRate?: number;
@@ -36,6 +41,26 @@ function resolvePaymentAmountPair(params: {
     autoCalculateAmountWithVat:
       params.amountWithoutVat !== undefined && params.amountWithVat === undefined,
   });
+}
+
+function sumPlannedPaymentAmounts(
+  plannedPaymentSplits: RequestLike["plannedPaymentSplits"] = [],
+  vatRate?: number,
+) {
+  return plannedPaymentSplits.reduce(
+    (sum, split) => {
+      const resolved = resolvePaymentAmountPair({
+        amountWithoutVat: split.amountWithoutVat,
+        amountWithVat: split.amountWithVat,
+        vatRate: split.vatRate ?? vatRate,
+      });
+      return {
+        amountWithoutVat: (sum.amountWithoutVat ?? 0) + (resolved.amountWithoutVat ?? 0),
+        amountWithVat: (sum.amountWithVat ?? 0) + (resolved.amountWithVat ?? 0),
+      };
+    },
+    { amountWithoutVat: 0, amountWithVat: 0 },
+  );
 }
 
 export function getUnallocatedPaymentAmounts(request: RequestLike) {
@@ -61,15 +86,20 @@ export function getUnallocatedPaymentAmounts(request: RequestLike) {
     amountWithVat: request.plannedPaymentAmountWithVat,
     vatRate: request.vatRate,
   });
-  if (planned.amountWithoutVat === undefined && planned.amountWithVat === undefined) {
-    return {
-      amountWithoutVat: residual.amountWithoutVat ?? 0,
-      amountWithVat: residual.amountWithVat ?? 0,
-    };
-  }
+  const archivedPlanned = sumPlannedPaymentAmounts(request.plannedPaymentSplits, request.vatRate);
   return {
-    amountWithoutVat: Math.max((residual.amountWithoutVat ?? 0) - (planned.amountWithoutVat ?? 0), 0),
-    amountWithVat: Math.max((residual.amountWithVat ?? 0) - (planned.amountWithVat ?? 0), 0),
+    amountWithoutVat: Math.max(
+        (residual.amountWithoutVat ?? 0) -
+        (planned.amountWithoutVat ?? 0) -
+        (archivedPlanned.amountWithoutVat ?? 0),
+      0,
+    ),
+    amountWithVat: Math.max(
+      (residual.amountWithVat ?? 0) -
+        (planned.amountWithVat ?? 0) -
+        (archivedPlanned.amountWithVat ?? 0),
+      0,
+    ),
   };
 }
 

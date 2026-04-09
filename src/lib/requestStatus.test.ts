@@ -68,4 +68,27 @@ describe("requestStatus", () => {
       }).label,
     ).toBe("Есть нераспределенный платеж");
   });
+
+  it("subtracts archived planned payments from unallocated remainder", () => {
+    expect(
+      getUnallocatedPaymentAmounts({
+        status: "payment_planned",
+        paymentResidualAmount: 1000,
+        paymentResidualAmountWithVat: 1220,
+        plannedPaymentAmount: 200,
+        plannedPaymentAmountWithVat: 244,
+        plannedPaymentSplits: [
+          {
+            amountWithoutVat: 300,
+            amountWithVat: 366,
+            vatRate: 22,
+          },
+        ],
+        vatRate: 22,
+      }),
+    ).toEqual({
+      amountWithoutVat: 500,
+      amountWithVat: 610,
+    });
+  });
 });

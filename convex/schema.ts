@@ -28,6 +28,19 @@ const paymentSplitValidator = v.object({
   createdAt: v.number(),
 });
 
+const plannedPaymentSplitValidator = v.object({
+  splitNumber: v.number(),
+  amountWithoutVat: v.number(),
+  amountWithVat: v.optional(v.number()),
+  vatRate: v.optional(v.number()),
+  currencyRate: v.optional(v.number()),
+  plannedAt: v.number(),
+  finplanCostIds: v.optional(v.array(v.string())),
+  actorEmail: v.string(),
+  actorName: v.optional(v.string()),
+  createdAt: v.number(),
+});
+
 const schema = defineSchema({
   ...authTables,
   roles: defineTable({
@@ -131,6 +144,7 @@ const schema = defineSchema({
     paymentPlannedByName: v.optional(v.string()),
     finplanCostIds: v.optional(v.array(v.string())),
     paymentSplits: v.optional(v.array(paymentSplitValidator)),
+    plannedPaymentSplits: v.optional(v.array(plannedPaymentSplitValidator)),
     approvalReminderSentAt: v.optional(v.number()),
     paymentReminderSentAt: v.optional(v.number()),
     closeReminderSentAt: v.optional(v.number()),
