@@ -32,4 +32,11 @@ describe("approvalRecipients", () => {
       "admin@agima.ru",
     ]);
   });
+
+  it("falls back to the author admin when otherwise nobody would receive the notification", () => {
+    expect(getApprovalRecipients(roleDocs, ["COO"], ["admin@agima.ru", "dual@agima.ru"])).toEqual([
+      "admin@agima.ru",
+      "dual@agima.ru",
+    ]);
+  });
 });
