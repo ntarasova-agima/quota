@@ -17,13 +17,15 @@ export default function AppHeader({
 }) {
   const profile = useQuery(api.roles.myProfile);
   const hasHistoricalApprovalAccess = useQuery(api.approvals.hasReviewedAny);
+  const canUseAllRequestsView = useQuery(api.requests.canUseAllRequestsView);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const roles = profile?.roles?.length ? formatRoleList(profile.roles) : "роль не назначена";
   const name = profile?.fullName || profile?.email || "";
   const canViewAllRequests =
     profile?.roles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)) ||
-    hasHistoricalApprovalAccess;
+    hasHistoricalApprovalAccess ||
+    canUseAllRequestsView;
   const canApprove = profile?.roles?.some((role) =>
     ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role),
   );
@@ -33,6 +35,7 @@ export default function AppHeader({
   const isCoo = profile?.roles?.includes("COO");
   const isBuh = profile?.roles?.includes("BUH");
   const isHod = profile?.roles?.includes("HOD");
+  const isAdmin = profile?.roles?.includes("ADMIN");
   const requestView = searchParams.get("view") ?? "my";
 
   return (
@@ -102,7 +105,7 @@ export default function AppHeader({
             <Link href="/coo-quota">Квоты</Link>
           </Button>
         )}
-        {showAdmin && (
+        {(showAdmin || isAdmin) && (
           <Button asChild variant={pathname === "/admin/roles" ? "default" : "outline"}>
             <Link href="/admin/roles">Роли</Link>
           </Button>

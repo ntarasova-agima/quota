@@ -322,12 +322,16 @@ export const sendRequestUpdatedSummary = internalAction({
       return;
     }
     const { request } = data;
+    const recipients = dedupeEmails(args.recipients, [request.createdByEmail]);
+    if (recipients.length === 0) {
+      return;
+    }
     const link = `${getBaseUrl()}/requests/${request._id}`;
     const title = request.title ?? `${request.clientName} :: ${request.category}`;
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "request_updated_summary",
-      to: Array.from(new Set(args.recipients)),
+      to: recipients,
       subject: args.repeatedApproval
         ? `Повторное согласование: ${request.requestCode ?? "без номера"}`
         : `В заявку внесены изменения: ${request.requestCode ?? "без номера"}`,
@@ -429,6 +433,170 @@ export const sendApprovalRequestedToRecipients = internalAction({
             ? `<ul>${args.summaryLines.map((line) => `<li>${line}</li>`).join("")}</ul>`
             : ""
         }
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendAdditionalApprovalRequested = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    additionalRole: roleEnum,
+    requestedByRole: roleEnum,
+    requestedByName: v.optional(v.string()),
+    requestedByEmail: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request, roles } = data;
+    const recipients = getApprovalRecipients(roles, [args.additionalRole], [request.createdByEmail]);
+    if (recipients.length === 0) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const owner = getRequestOwnerLabel(request);
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const requestedBy = args.requestedByName
+      ? `${args.requestedByName}, ${args.requestedByRole}`
+      : args.requestedByEmail
+        ? `${args.requestedByEmail}, ${args.requestedByRole}`
+        : args.requestedByRole;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "approval_requested_additional",
+      to: recipients,
+      subject: `Дополнительное согласование: ${request.requestCode ?? "без номера"}`,
+      html: `
+        <p>Заявка передана вам на дополнительное согласование.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>${owner.label}: ${owner.value}</p>
+        <p>Источник финансирования: ${request.fundingSource}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Кто отправил дальше: ${requestedBy}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendAdditionalApprovalForwardedToAuthor = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    additionalRole: roleEnum,
+    requestedByRole: roleEnum,
+    requestedByName: v.optional(v.string()),
+    requestedByEmail: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request } = data;
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const requestedBy = args.requestedByName
+      ? `${args.requestedByName}, ${args.requestedByRole}`
+      : args.requestedByEmail
+        ? `${args.requestedByEmail}, ${args.requestedByRole}`
+        : args.requestedByRole;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "approval_forwarded_to_author",
+      to: [request.createdByEmail],
+      subject: `Отправлено на дополнительное согласование: ${request.requestCode ?? "без номера"}`,
+      html: `
+        <p>Заявка отправлена на дополнительное согласование.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>Кто отправил: ${requestedBy}</p>
+        <p>Кому передали: ${args.additionalRole}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendCommentMentioned = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    recipients: v.array(v.string()),
+    authorEmail: v.string(),
+    authorName: v.optional(v.string()),
+    commentBody: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data || args.recipients.length === 0) {
+      return;
+    }
+    const { request } = data;
+    const recipients = dedupeEmails(args.recipients, [args.authorEmail]);
+    if (recipients.length === 0) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const author = args.authorName ? `${args.authorName} (${args.authorEmail})` : args.authorEmail;
+    const excerpt = args.commentBody.length > 280 ? `${args.commentBody.slice(0, 277)}...` : args.commentBody;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "comment_mentioned",
+      to: recipients,
+      subject: `Вас отметили в комментарии: ${request.requestCode ?? "без номера"}`,
+      html: `
+        <p>Вас отметили в комментарии к заявке.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>Кто отметил: ${author}</p>
+        <p>Комментарий: ${excerpt}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendRequestViewerAccessGranted = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    recipients: v.array(v.string()),
+    grantedByEmail: v.string(),
+    grantedByName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data || args.recipients.length === 0) {
+      return;
+    }
+    const { request } = data;
+    const recipients = dedupeEmails(args.recipients, [args.grantedByEmail]);
+    if (recipients.length === 0) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const grantedBy = args.grantedByName
+      ? `${args.grantedByName} (${args.grantedByEmail})`
+      : args.grantedByEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "request_viewer_access_granted",
+      to: recipients,
+      subject: `Вам дали доступ к заявке: ${request.requestCode ?? "без номера"}`,
+      html: `
+        <p>Для вас открыли просмотр и комментарии по заявке.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>Кто выдал доступ: ${grantedBy}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });

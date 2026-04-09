@@ -94,6 +94,10 @@ export default function RequestsPage() {
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
   const { isAuthenticated } = useConvexAuth();
   const myRoles = useQuery(api.roles.myRoles, isAuthenticated ? {} : "skip");
+  const canUseAllRequestsView = useQuery(
+    api.requests.canUseAllRequestsView,
+    isAuthenticated ? {} : "skip",
+  );
   const isApprover = useMemo(
     () => myRoles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)),
     [myRoles],
@@ -105,7 +109,7 @@ export default function RequestsPage() {
   );
   const isBuh = useMemo(() => myRoles?.includes("BUH") ?? false, [myRoles]);
   const rawView = searchParams.get("view") ?? "my";
-  const activeView = rawView === "all" && isApprover ? "all" : "my";
+  const activeView = rawView === "all" && canUseAllRequestsView ? "all" : "my";
   const adContacts = useQuery(api.roles.listAdContacts, isAuthenticated && isApprover ? {} : "skip");
   const cfdTags = useQuery(api.cfdTags.list, isAuthenticated && isTagViewer ? {} : "skip");
   const updatePaymentStatus = useMutation(api.requests.updatePaymentStatus);
@@ -128,7 +132,7 @@ export default function RequestsPage() {
   );
   const allRequests = useQuery(
     api.requests.listAllRequests,
-    isAuthenticated && isApprover
+    isAuthenticated && canUseAllRequestsView
       ? {
           status: statusFilter === "all" ? undefined : (statusFilter as any),
           createdByEmail: authorFilter === "all" ? undefined : authorFilter,
@@ -293,7 +297,7 @@ export default function RequestsPage() {
                           approval.status === "pending" && (myRoles ?? []).includes(approval.role),
                       );
                     const statusSummary =
-                      request.status === "pending"
+                      request.status === "pending" && !baseStatusSummary.label.startsWith("Частично согласовано")
                         ? getPendingStatusPresentation(isActionableForViewer)
                         : baseStatusSummary;
                     const canSendToPayment = request.status === "approved";
@@ -671,7 +675,7 @@ export default function RequestsPage() {
                             approval.status === "pending" && (myRoles ?? []).includes(approval.role),
                         );
                       const statusSummary =
-                        request.status === "pending"
+                        request.status === "pending" && !baseStatusSummary.label.startsWith("Частично согласовано")
                           ? getPendingStatusPresentation(isActionableForViewer)
                           : baseStatusSummary;
                       return (
