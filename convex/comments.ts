@@ -5,6 +5,28 @@ import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
 import { ensureCanViewRequest, getRoleRecord, upsertViewerAccessEntry } from "./requestAccessHelpers";
+import { isAgimaEmail } from "../src/lib/authRules";
+
+function normalizeMentionEntries(
+  mentions: Array<{ key: string; email: string; name: string; token: string }> = [],
+  authorEmail: string,
+) {
+  return Array.from(
+    new Map(
+      mentions
+        .map((item) => ({
+          key: item.key.trim() || item.email.trim().toLowerCase(),
+          email: item.email.trim().toLowerCase(),
+          name: item.name.trim(),
+          token: item.token.trim() || item.name.trim(),
+        }))
+        .filter((item) => item.email && item.name && item.token)
+        .filter((item) => item.email !== authorEmail.trim().toLowerCase())
+        .filter((item) => isAgimaEmail(item.email))
+        .map((item) => [item.email, item]),
+    ).values(),
+  );
+}
 
 export const listByRequest = query({
   args: {
@@ -29,8 +51,10 @@ export const addComment = mutation({
     mentions: v.optional(
       v.array(
         v.object({
+          key: v.string(),
           email: v.string(),
           name: v.string(),
+          token: v.string(),
         }),
       ),
     ),
@@ -43,29 +67,17 @@ export const addComment = mutation({
     if (!body) {
       throw new Error("Комментарий не может быть пустым");
     }
-    const mentionCandidates = Array.from(
-      new Map(
-        (args.mentions ?? [])
-          .map((item) => ({
-            email: item.email.trim().toLowerCase(),
-            name: item.name.trim(),
-          }))
-          .filter((item) => item.email && item.name && body.includes(`@${item.name}`))
-          .filter((item) => item.email !== access.email.trim().toLowerCase())
-          .map((item) => [`${item.email}::${item.name}`, item]),
-      ).values(),
-    );
-    const validMentions: Array<{ email: string; name: string }> = [];
+    const mentionCandidates = normalizeMentionEntries(args.mentions ?? [], access.email);
+    const validMentions: Array<{ key: string; email: string; name: string; token: string }> = [];
     let viewerAccess = access.request.viewerAccess;
     let viewerAccessChanged = false;
     for (const mention of mentionCandidates) {
       const targetRecord = await getRoleRecord(ctx, mention.email);
-      if (!targetRecord?.active) {
-        continue;
-      }
       validMentions.push({
+        key: targetRecord?._id ? String(targetRecord._id) : mention.email,
         email: mention.email,
-        name: targetRecord.fullName?.trim() || mention.name,
+        name: targetRecord?.fullName?.trim() || mention.name,
+        token: mention.token,
       });
       const nextViewerAccess = upsertViewerAccessEntry(
         {
@@ -74,7 +86,7 @@ export const addComment = mutation({
         },
         {
           email: mention.email,
-          fullName: targetRecord.fullName,
+          fullName: targetRecord?.fullName ?? mention.name,
           grantedByEmail: access.email,
           grantedByName: access.roleRecord?.fullName ?? identity?.name ?? undefined,
           source: "mention",
@@ -132,6 +144,16 @@ export const editComment = mutation({
   args: {
     id: v.id("comments"),
     body: v.string(),
+    mentions: v.optional(
+      v.array(
+        v.object({
+          key: v.string(),
+          email: v.string(),
+          name: v.string(),
+          token: v.string(),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -160,9 +182,59 @@ export const editComment = mutation({
     if (!body) {
       throw new Error("Комментарий не может быть пустым");
     }
+    const request = await ctx.db.get(comment.requestId);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    const identity = await ctx.auth.getUserIdentity();
+    const mentionCandidates = normalizeMentionEntries(args.mentions ?? [], email);
+    const previousMentionEmails = new Set(
+      (comment.mentions ?? []).map((item: any) => item.email.trim().toLowerCase()),
+    );
+    const validMentions: Array<{ key: string; email: string; name: string; token: string }> = [];
+    let viewerAccess = request.viewerAccess;
+    let viewerAccessChanged = false;
+    const newMentionRecipients: string[] = [];
+    for (const mention of mentionCandidates) {
+      const targetRecord = await getRoleRecord(ctx, mention.email);
+      validMentions.push({
+        key: targetRecord?._id ? String(targetRecord._id) : mention.email,
+        email: mention.email,
+        name: targetRecord?.fullName?.trim() || mention.name,
+        token: mention.token,
+      });
+      const nextViewerAccess = upsertViewerAccessEntry(
+        {
+          ...request,
+          viewerAccess,
+        },
+        {
+          email: mention.email,
+          fullName: targetRecord?.fullName ?? mention.name,
+          grantedByEmail: email,
+          grantedByName: roleRecord?.fullName ?? identity?.name ?? undefined,
+          source: "mention",
+          grantedAt: Date.now(),
+        },
+      );
+      if (nextViewerAccess.created) {
+        viewerAccess = nextViewerAccess.viewerAccess;
+        viewerAccessChanged = true;
+      }
+      if (!previousMentionEmails.has(mention.email)) {
+        newMentionRecipients.push(mention.email);
+      }
+    }
+    if (viewerAccessChanged) {
+      await ctx.db.patch(request._id, {
+        viewerAccess,
+        updatedAt: Date.now(),
+      });
+    }
     await ctx.db.patch(comment._id, {
       body,
-      mentions: comment.mentions?.filter((item: any) => body.includes(`@${item.name}`)) || undefined,
+      mentions: validMentions.length ? validMentions : undefined,
       updatedAt: Date.now(),
     });
     await logTimelineEvent(ctx, {
@@ -171,6 +243,15 @@ export const editComment = mutation({
       title: "Комментарий отредактирован",
       actorEmail: email,
     });
+    if (newMentionRecipients.length) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendCommentMentioned, {
+        requestId: comment.requestId,
+        recipients: newMentionRecipients,
+        authorEmail: email,
+        authorName: roleRecord?.fullName ?? identity?.name ?? undefined,
+        commentBody: body,
+      });
+    }
     return { updated: true };
   },
 });

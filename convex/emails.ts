@@ -1,7 +1,11 @@
 import { internalAction, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { dedupeEmails, getApprovalRecipients } from "../src/lib/approvalRecipients";
+import {
+  dedupeEmails,
+  getApprovalRecipientsForApprovals,
+  getApprovalRecipientsForTargets,
+} from "../src/lib/approvalRecipients";
 import { normalizeContestSpecialistSource, requiresContestSpecialistValidation } from "../src/lib/requestFields";
 import { isServiceRecipientCategory } from "../src/lib/requestRules";
 import { formatAmountPair } from "../src/lib/vat";
@@ -168,12 +172,19 @@ export const sendRequestSubmitted = internalAction({
     if (!data) {
       throw new Error("Request not found");
     }
-    const { request, roles: roleDocs } = data;
-    const roles = request.requiredRoles;
-    if (roles.length === 0) {
+    const { request, roles: roleDocs, approvals } = data;
+    const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
+    if (pendingApprovals.length === 0) {
       return;
     }
-    const recipients = getApprovalRecipients(roleDocs, roles, [request.createdByEmail]);
+    const recipients = getApprovalRecipientsForApprovals(
+      roleDocs,
+      pendingApprovals.map((approval) => ({
+        role: approval.role,
+        department: approval.department,
+      })),
+      [request.createdByEmail],
+    );
     if (recipients.length === 0) {
       return;
     }
@@ -261,6 +272,53 @@ export const sendDecision = internalAction({
   },
 });
 
+export const sendApprovalReminder = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    remindedByEmail: v.string(),
+    remindedByName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request, roles: roleDocs, approvals } = data;
+    const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
+    const recipients = getApprovalRecipientsForApprovals(
+      roleDocs,
+      pendingApprovals.map((approval) => ({
+        role: approval.role,
+        department: approval.department,
+      })),
+      [request.createdByEmail, args.remindedByEmail],
+    );
+    if (!recipients.length) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const remindedBy = args.remindedByName
+      ? `${args.remindedByName} (${args.remindedByEmail})`
+      : args.remindedByEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "approval_reminder",
+      to: recipients,
+      subject: `Напоминание о согласовании: ${request.requestCode ?? request.clientName}`,
+      html: `
+        <p>Напоминаем о согласовании заявки.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>Напомнил: ${remindedBy}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
 export const sendPaymentRequested = internalAction({
   args: {
     requestId: v.id("requests"),
@@ -274,7 +332,7 @@ export const sendPaymentRequested = internalAction({
     }
     const { request, roles, approvals } = data;
     const buhRecipients = roles
-      .filter((role) => role.active && role.roles.includes("BUH"))
+      .filter((role) => role.active && role.roles.some((item: string) => ["BUH", "CFD"].includes(item)))
       .map((role) => role.email);
     if (buhRecipients.length === 0) {
       return;
@@ -442,10 +500,16 @@ export const sendApprovalRequestedToRecipients = internalAction({
 export const sendAdditionalApprovalRequested = internalAction({
   args: {
     requestId: v.id("requests"),
-    additionalRole: roleEnum,
+    targets: v.array(
+      v.object({
+        role: roleEnum,
+        department: v.optional(v.string()),
+      }),
+    ),
     requestedByRole: roleEnum,
     requestedByName: v.optional(v.string()),
     requestedByEmail: v.optional(v.string()),
+    forwardMode: v.optional(v.union(v.literal("approve"), v.literal("defer"))),
   },
   handler: async (ctx, args) => {
     const data = await ctx.runQuery(internal.emails.getRequestData, {
@@ -455,7 +519,7 @@ export const sendAdditionalApprovalRequested = internalAction({
       return;
     }
     const { request, roles } = data;
-    const recipients = getApprovalRecipients(roles, [args.additionalRole], [request.createdByEmail]);
+    const recipients = getApprovalRecipientsForTargets(roles, args.targets, [request.createdByEmail]);
     if (recipients.length === 0) {
       return;
     }
@@ -473,12 +537,23 @@ export const sendAdditionalApprovalRequested = internalAction({
       to: recipients,
       subject: `Дополнительное согласование: ${request.requestCode ?? "без номера"}`,
       html: `
-        <p>Заявка передана вам на дополнительное согласование.</p>
+        <p>${
+          args.forwardMode === "defer"
+            ? "Заявка передана вам на дополнительное согласование, пока текущий согласующий отложил свое решение."
+            : "Заявка передана вам на дополнительное согласование."
+        }</p>
         <p>Наименование заявки: <strong>${requestTitle}</strong></p>
         <p>${owner.label}: ${owner.value}</p>
         <p>Источник финансирования: ${request.fundingSource}</p>
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Кто отправил дальше: ${requestedBy}</p>
+        <p>Кому передали: ${args.targets
+          .map((target) =>
+            target.role === "HOD" && target.department
+              ? `Руководитель цеха · ${target.department}`
+              : target.role,
+          )
+          .join(", ")}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -488,10 +563,16 @@ export const sendAdditionalApprovalRequested = internalAction({
 export const sendAdditionalApprovalForwardedToAuthor = internalAction({
   args: {
     requestId: v.id("requests"),
-    additionalRole: roleEnum,
+    targets: v.array(
+      v.object({
+        role: roleEnum,
+        department: v.optional(v.string()),
+      }),
+    ),
     requestedByRole: roleEnum,
     requestedByName: v.optional(v.string()),
     requestedByEmail: v.optional(v.string()),
+    forwardMode: v.optional(v.union(v.literal("approve"), v.literal("defer"))),
   },
   handler: async (ctx, args) => {
     const data = await ctx.runQuery(internal.emails.getRequestData, {
@@ -514,10 +595,20 @@ export const sendAdditionalApprovalForwardedToAuthor = internalAction({
       to: [request.createdByEmail],
       subject: `Отправлено на дополнительное согласование: ${request.requestCode ?? "без номера"}`,
       html: `
-        <p>Заявка отправлена на дополнительное согласование.</p>
+        <p>${
+          args.forwardMode === "defer"
+            ? "Заявка отправлена на дополнительное согласование, а текущий согласующий отложил свое решение."
+            : "Заявка отправлена на дополнительное согласование."
+        }</p>
         <p>Наименование заявки: <strong>${requestTitle}</strong></p>
         <p>Кто отправил: ${requestedBy}</p>
-        <p>Кому передали: ${args.additionalRole}</p>
+        <p>Кому передали: ${args.targets
+          .map((target) =>
+            target.role === "HOD" && target.department
+              ? `Руководитель цеха · ${target.department}`
+              : target.role,
+          )
+          .join(", ")}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -558,6 +649,48 @@ export const sendCommentMentioned = internalAction({
         <p>Наименование заявки: <strong>${requestTitle}</strong></p>
         <p>Кто отметил: ${author}</p>
         <p>Комментарий: ${excerpt}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendDeferredApprovalResolved = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    recipientEmail: v.string(),
+    recipientName: v.optional(v.string()),
+    resolvedRole: roleEnum,
+    resolvedDepartment: v.optional(v.string()),
+    resolverEmail: v.string(),
+    resolverName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request } = data;
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const resolver = args.resolverName
+      ? `${args.resolverName} (${args.resolverEmail})`
+      : args.resolverEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "deferred_approval_resolved",
+      to: [args.recipientEmail],
+      subject: `Дополнительное согласование завершено: ${request.requestCode ?? "без номера"}`,
+      html: `
+        <p>Дополнительное согласование завершено, можно вернуться к своему решению.</p>
+        <p>Наименование заявки: <strong>${request.title ?? `${request.clientName} :: ${request.category}`}</strong></p>
+        <p>Кто согласовал: ${resolver}</p>
+        <p>Роль: ${
+          args.resolvedRole === "HOD" && args.resolvedDepartment
+            ? `Руководитель цеха · ${args.resolvedDepartment}`
+            : args.resolvedRole
+        }</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -656,7 +789,7 @@ export const sendPaymentDeadlineReminder = internalAction({
       return;
     }
     const buhRecipients = roles
-      .filter((role) => role.active && role.roles.includes("BUH"))
+      .filter((role) => role.active && role.roles.some((item: string) => ["BUH", "CFD"].includes(item)))
       .map((role) => role.email);
     const recipients = Array.from(new Set([request.createdByEmail, ...buhRecipients]));
     if (recipients.length === 0) {
@@ -678,6 +811,48 @@ export const sendPaymentDeadlineReminder = internalAction({
       requestId: args.requestId,
       kind: "payment",
       expectedAt: args.plannedAt,
+    });
+  },
+});
+
+export const sendManualPaymentReminder = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    remindedByEmail: v.string(),
+    remindedByName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request, roles } = data;
+    const recipients = dedupeEmails(
+      roles
+        .filter((role) => role.active && role.roles.some((item: string) => ["BUH", "CFD"].includes(item)))
+        .map((role) => role.email),
+      [args.remindedByEmail],
+    );
+    if (!recipients.length) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const remindedBy = args.remindedByName
+      ? `${args.remindedByName} (${args.remindedByEmail})`
+      : args.remindedByEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "payment_reminder",
+      to: recipients,
+      subject: `Напоминание об оплате: ${request.requestCode ?? request.clientName}`,
+      html: `
+        <p>Напоминаем об оплате заявки.</p>
+        <p>Напомнил: ${remindedBy}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
     });
   },
 });
@@ -812,10 +987,16 @@ export const sendApprovalDeadlineReminder = internalAction({
     ) {
       return;
     }
-    const pendingRoles = approvals
-      .filter((approval) => approval.status === "pending")
-      .map((approval) => approval.role);
-    const recipients = getApprovalRecipients(roles, pendingRoles, [request.createdByEmail]);
+    const recipients = getApprovalRecipientsForApprovals(
+      roles,
+      approvals
+        .filter((approval) => approval.status === "pending")
+        .map((approval) => ({
+          role: approval.role,
+          department: approval.department,
+        })),
+      [request.createdByEmail],
+    );
     if (!recipients.length) {
       return;
     }

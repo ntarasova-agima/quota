@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { normalizeEmail } from "../src/lib/authRules";
 import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
 import { getCurrentEmail } from "./authHelpers";
+import { getEffectiveRequiredHodDepartments } from "./requestWorkflow";
 
 export const REQUEST_WIDE_VIEW_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"] as const;
 export const REQUEST_ALL_LIST_ROLES = [...REQUEST_WIDE_VIEW_ROLES, "HOD"] as const;
@@ -21,6 +22,14 @@ export function hasHodAccessToRequest(roleRecord: any, request: any) {
   const departments = roleRecord.hodDepartments ?? [];
   if (!departments.length) {
     return false;
+  }
+  const explicitlyRequiredDepartments = getEffectiveRequiredHodDepartments({
+    category: request.category,
+    requiredHodDepartments: request.requiredHodDepartments,
+    specialists: request.specialists,
+  });
+  if (explicitlyRequiredDepartments.some((department) => departments.includes(department))) {
+    return true;
   }
   const specialists = request.specialists ?? [];
   return specialists.some(

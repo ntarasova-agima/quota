@@ -51,8 +51,10 @@ const viewerAccessValidator = v.object({
 });
 
 const commentMentionValidator = v.object({
+  key: v.string(),
   email: v.string(),
   name: v.string(),
+  token: v.string(),
 });
 
 const schema = defineSchema({
@@ -106,6 +108,7 @@ const schema = defineSchema({
     shipmentDate: v.optional(v.number()),
     shipmentMonth: v.optional(v.string()),
     viewerAccess: v.optional(v.array(viewerAccessValidator)),
+    requiredHodDepartments: v.optional(v.array(v.string())),
     specialists: v.optional(
       v.array(
         v.object({
@@ -173,6 +176,7 @@ const schema = defineSchema({
   approvals: defineTable({
     requestId: v.id("requests"),
     role: roleEnum,
+    department: v.optional(v.string()),
     status: v.union(
       v.literal("pending"),
       v.literal("approved"),
@@ -186,6 +190,8 @@ const schema = defineSchema({
     requestedByEmail: v.optional(v.string()),
     requestedByName: v.optional(v.string()),
     requestedAt: v.optional(v.number()),
+    requestedByApprovalId: v.optional(v.id("approvals")),
+    requestedByDeferred: v.optional(v.boolean()),
   })
     .index("by_request", ["requestId"])
     .index("by_role", ["role"])
