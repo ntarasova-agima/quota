@@ -7,6 +7,12 @@ import { logTimelineEvent } from "./timelineHelpers";
 import { isAiToolsFundingSource } from "../src/lib/requestRules";
 import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
 import { getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
+import {
+  buildApprovalTargets,
+  getApprovalIdentity,
+  getPendingContestValidationDepartments,
+  getRequestApprovalStatus,
+} from "./requestWorkflow";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -27,6 +33,7 @@ const additionalApprovalRoleEnum = v.union(
   v.literal("CFD"),
   v.literal("HOD"),
 );
+const forwardModeEnum = v.union(v.literal("approve"), v.literal("defer"));
 
 function getQuotaTableName(fundingSource: string) {
   if (fundingSource === "Квота на пресейлы") {
@@ -63,11 +70,15 @@ export const listPendingForMe = query({
 
     const approvals: any[] = [];
     for (const role of roles) {
-      const items = await ctx.db
+      let items = await ctx.db
         .query("approvals")
         .withIndex("by_role", (q) => q.eq("role", role))
         .filter((q) => q.eq(q.field("status"), "pending"))
         .collect();
+      if (role === "HOD") {
+        const departments = roleRecord.hodDepartments ?? [];
+        items = items.filter((item) => item.department && departments.includes(item.department));
+      }
       approvals.push(...items);
     }
 
@@ -78,14 +89,23 @@ export const listPendingForMe = query({
         continue;
       }
       seen.add(approval.requestId);
-      const request = await ctx.db.get(approval.requestId);
+      const request = await ctx.db.get(approval.requestId) as any;
       if (!request) {
         continue;
       }
-      results.push({ approval, request, kind: "approval" });
+      const kind =
+        approval.role === "HOD" &&
+        getPendingContestValidationDepartments({
+          category: request.category,
+          specialists: request.specialists,
+          requiredHodDepartments: request.requiredHodDepartments,
+        }).some((department) => (roleRecord.hodDepartments ?? []).includes(department))
+          ? "hod"
+          : "approval";
+      results.push({ approval, request, kind });
     }
 
-    if (roles.includes("BUH")) {
+    if (roles.some((role) => ["BUH", "CFD"].includes(role))) {
       const paymentRequests = await ctx.db.query("requests").collect();
       for (const request of paymentRequests) {
         if (
@@ -100,7 +120,7 @@ export const listPendingForMe = query({
           request,
           approval: {
             requestId: request._id,
-            role: "BUH",
+            role: roles.includes("BUH") ? "BUH" : "CFD",
             status: "pending",
           },
           kind: "payment",
@@ -112,17 +132,15 @@ export const listPendingForMe = query({
       const departments = roleRecord.hodDepartments ?? [];
       const hodRequests = await ctx.db.query("requests").collect();
       for (const request of hodRequests) {
-        if (seen.has(request._id) || request.isCanceled || request.status !== "hod_pending") {
+        if (seen.has(request._id) || request.isCanceled) {
           continue;
         }
-        const specialists = request.specialists ?? [];
-        const hasPendingForDepartment = specialists.some(
-          (item: any) =>
-            requiresContestSpecialistValidation(item) &&
-            departments.includes(item.department) &&
-            (!item.hodConfirmed || item.directCost === undefined),
-        );
-        if (!hasPendingForDepartment) {
+        const pendingDepartments = getPendingContestValidationDepartments({
+          category: request.category,
+          specialists: request.specialists,
+          requiredHodDepartments: request.requiredHodDepartments,
+        }).filter((department) => departments.includes(department));
+        if (!pendingDepartments.length) {
           continue;
         }
         seen.add(request._id);
@@ -132,6 +150,7 @@ export const listPendingForMe = query({
             requestId: request._id,
             role: "HOD",
             status: "pending",
+            department: pendingDepartments[0],
           },
           kind: "hod",
         });
@@ -166,9 +185,12 @@ export const decide = mutation({
   args: {
     requestId: v.id("requests"),
     role: roleEnum,
+    department: v.optional(v.string()),
     decision: decisionEnum,
     comment: v.optional(v.string()),
-    additionalRole: v.optional(additionalApprovalRoleEnum),
+    additionalRoles: v.optional(v.array(additionalApprovalRoleEnum)),
+    additionalHodDepartments: v.optional(v.array(v.string())),
+    forwardMode: v.optional(forwardModeEnum),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -186,15 +208,25 @@ export const decide = mutation({
     if (!roleRecord || !roleRecord.active || !roleRecord.roles.includes(args.role)) {
       throw new Error("Not authorized for this role");
     }
+    if (
+      args.role === "HOD" &&
+      (!args.department || !(roleRecord.hodDepartments ?? []).includes(args.department.trim()))
+    ) {
+      throw new Error("Not authorized for this department");
+    }
 
     if (args.decision === "rejected" && (!args.comment || args.comment.trim().length === 0)) {
       throw new Error("Comment required for rejection");
     }
-    if (args.additionalRole && args.decision !== "approved") {
-      throw new Error("Дополнительную роль можно указать только при согласовании");
+    const additionalRoles = Array.from(new Set(args.additionalRoles ?? []));
+    if (additionalRoles.length > 0 && args.decision !== "approved") {
+      throw new Error("Дополнительные роли можно указать только при согласовании");
     }
-    if (args.additionalRole && args.additionalRole === args.role) {
-      throw new Error("Нельзя отправить на дополнительное согласование этой же роли");
+    if (args.forwardMode && additionalRoles.length === 0) {
+      throw new Error("Выберите роли, чтобы отправить заявку дальше");
+    }
+    if (args.forwardMode === "defer" && args.decision !== "approved") {
+      throw new Error("Отложить согласование можно только при согласовании");
     }
 
     const request = await ctx.db.get(args.requestId);
@@ -212,38 +244,76 @@ export const decide = mutation({
       .query("approvals")
       .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
       .collect();
-    const approval = existingApprovals.find((item) => item.role === args.role);
+    const approval = existingApprovals.find(
+      (item) =>
+        item.role === args.role &&
+        (args.role !== "HOD" || (item.department ?? "") === (args.department?.trim() ?? "")),
+    );
     if (!approval) {
       throw new Error("Approval entry not found");
     }
     if (approval.status !== "pending") {
       throw new Error("Already decided");
     }
-    if (
-      args.additionalRole &&
-      (request.requiredRoles.includes(args.additionalRole) ||
-        existingApprovals.some((item) => item.role === args.additionalRole))
-    ) {
-      throw new Error("Эта роль уже участвует в согласовании");
+
+    const additionalTargets = buildApprovalTargets({
+      requiredRoles: additionalRoles,
+      requiredHodDepartments: additionalRoles.includes("HOD")
+        ? args.additionalHodDepartments
+        : undefined,
+    }).filter(
+      (target) => getApprovalIdentity(target) !== getApprovalIdentity({
+        role: args.role,
+        department: args.department?.trim() || undefined,
+      }),
+    );
+
+    if (additionalRoles.includes("HOD") && !additionalTargets.some((target) => target.role === "HOD")) {
+      throw new Error("Выберите цех для руководителя цеха");
+    }
+
+    for (const target of additionalTargets) {
+      if (
+        target.role !== "HOD" &&
+        roleRecord.roles.includes(target.role as any)
+      ) {
+        throw new Error("Нельзя отправить заявку самому себе");
+      }
+      if (
+        target.role === "HOD" &&
+        roleRecord.roles.includes("HOD") &&
+        target.department &&
+        (roleRecord.hodDepartments ?? []).includes(target.department)
+      ) {
+        throw new Error("Нельзя отправить заявку самому себе");
+      }
+      if (existingApprovals.some((item) => getApprovalIdentity(item) === getApprovalIdentity(target))) {
+        throw new Error("Эта роль уже участвует в согласовании");
+      }
     }
 
     const decidedAt = Date.now();
-    await ctx.db.patch(approval._id, {
-      status: args.decision,
-      comment: args.comment?.trim() || undefined,
-      decidedAt,
-      reviewerId: userId,
-      reviewerEmail: email,
-    });
-    if (args.additionalRole) {
+    if (args.forwardMode !== "defer") {
+      await ctx.db.patch(approval._id, {
+        status: args.decision,
+        comment: args.comment?.trim() || undefined,
+        decidedAt,
+        reviewerId: userId,
+        reviewerEmail: email,
+      });
+    }
+    for (const target of additionalTargets) {
       await ctx.db.insert("approvals", {
         requestId: args.requestId,
-        role: args.additionalRole,
+        role: target.role as any,
+        department: target.department,
         status: "pending",
         requestedByRole: args.role,
         requestedByEmail: email,
         requestedByName: roleRecord.fullName ?? undefined,
         requestedAt: decidedAt,
+        requestedByApprovalId: approval._id,
+        requestedByDeferred: args.forwardMode === "defer" ? true : undefined,
       });
     }
 
@@ -251,41 +321,66 @@ export const decide = mutation({
       .query("approvals")
       .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
       .collect();
-
-    let status: "pending" | "approved" | "rejected" = "pending";
-    if (approvals.some((item) => item.status === "rejected")) {
-      status = "rejected";
-    } else if (approvals.every((item) => item.status === "approved")) {
-      status = "approved";
-    }
+    const nextRequiredHodDepartments = Array.from(
+      new Set([
+        ...(request.requiredHodDepartments ?? []),
+        ...additionalTargets
+          .filter((target) => target.role === "HOD")
+          .map((target) => target.department)
+          .filter(Boolean) as string[],
+      ]),
+    );
+    const nextRequiredRoles = Array.from(
+      new Set([
+        ...request.requiredRoles,
+        ...additionalTargets.map((target) => target.role),
+      ]),
+    );
+    const status = getRequestApprovalStatus({
+      category: request.category,
+      specialists: request.specialists,
+      requiredHodDepartments: nextRequiredHodDepartments,
+      approvals,
+    });
 
     await ctx.db.patch(request._id, {
-      requiredRoles: args.additionalRole ? [...request.requiredRoles, args.additionalRole] : request.requiredRoles,
+      requiredRoles: nextRequiredRoles as any,
+      requiredHodDepartments: nextRequiredHodDepartments.length ? nextRequiredHodDepartments : undefined,
       status,
       updatedAt: decidedAt,
     });
     await logTimelineEvent(ctx, {
       requestId: request._id,
-      type: args.additionalRole ? "approval_forwarded" : "approval_decision",
-      title: args.additionalRole
-        ? "Заявка согласована и отправлена на дополнительное согласование"
+      type: additionalTargets.length > 0 ? "approval_forwarded" : "approval_decision",
+      title: additionalTargets.length > 0
+        ? args.forwardMode === "defer"
+          ? "Согласование отложено и заявка отправлена дальше"
+          : "Заявка согласована и отправлена на дополнительное согласование"
         : args.decision === "approved"
           ? "Заявка согласована"
           : "Заявка отклонена",
-      description: args.additionalRole
-        ? `${args.role} → ${args.additionalRole}${args.comment?.trim() ? ` · ${args.comment.trim()}` : ""}`
-        : `${args.role}${args.comment?.trim() ? ` · ${args.comment.trim()}` : ""}`,
+      description: additionalTargets.length > 0
+        ? `${args.role}${args.department ? ` · ${args.department}` : ""} → ${additionalTargets
+            .map((target) =>
+              target.role === "HOD" && target.department
+                ? `HOD · ${target.department}`
+                : target.role,
+            )
+            .join(", ")}${args.comment?.trim() ? ` · ${args.comment.trim()}` : ""}`
+        : `${args.role}${args.department ? ` · ${args.department}` : ""}${args.comment?.trim() ? ` · ${args.comment.trim()}` : ""}`,
       actorEmail: email,
       actorName: roleRecord.fullName ?? undefined,
       metadata: {
         role: args.role,
+        department: args.department?.trim() || undefined,
         requestStatus: status,
-        additionalRole: args.additionalRole,
+        additionalRoles,
+        forwardMode: args.forwardMode,
       },
     });
 
     const quotaTableName = getQuotaTableName(request.fundingSource);
-    if (status === "approved" && quotaTableName) {
+    if (status === "approved" && request.status !== "approved" && quotaTableName) {
       if (!request.neededBy) {
         throw new Error("Missing neededBy for quota-backed request");
       }
@@ -319,21 +414,40 @@ export const decide = mutation({
       }
     }
 
-    if (args.additionalRole) {
+    if (additionalTargets.length > 0) {
       await ctx.scheduler.runAfter(0, internal.emails.sendAdditionalApprovalRequested, {
         requestId: request._id,
-        additionalRole: args.additionalRole,
+        targets: additionalTargets.map((target) => ({
+          role: target.role as any,
+          department: target.department,
+        })),
         requestedByRole: args.role,
         requestedByName: roleRecord.fullName ?? undefined,
         requestedByEmail: email,
+        forwardMode: args.forwardMode ?? "approve",
       });
       await ctx.scheduler.runAfter(0, internal.emails.sendAdditionalApprovalForwardedToAuthor, {
         requestId: request._id,
-        additionalRole: args.additionalRole,
+        targets: additionalTargets.map((target) => ({
+          role: target.role as any,
+          department: target.department,
+        })),
         requestedByRole: args.role,
         requestedByName: roleRecord.fullName ?? undefined,
         requestedByEmail: email,
+        forwardMode: args.forwardMode ?? "approve",
       });
+      if (args.forwardMode !== "defer") {
+        await ctx.scheduler.runAfter(0, internal.emails.sendDecision, {
+          requestId: request._id,
+          decision: args.decision,
+          role: args.role,
+          comment: args.comment?.trim() || undefined,
+          reviewerName: roleRecord.fullName ?? undefined,
+          reviewerEmail: email,
+          requestStatus: status,
+        });
+      }
     } else {
       await ctx.scheduler.runAfter(0, internal.emails.sendDecision, {
         requestId: request._id,
@@ -343,6 +457,22 @@ export const decide = mutation({
         reviewerName: roleRecord.fullName ?? undefined,
         reviewerEmail: email,
         requestStatus: status,
+      });
+    }
+    if (
+      args.decision === "approved" &&
+      approval.requestedByDeferred &&
+      approval.requestedByEmail &&
+      approval.requestedByEmail.trim().toLowerCase() !== email.trim().toLowerCase()
+    ) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendDeferredApprovalResolved, {
+        requestId: request._id,
+        recipientEmail: approval.requestedByEmail,
+        recipientName: approval.requestedByName ?? undefined,
+        resolvedRole: args.role,
+        resolvedDepartment: (approval.department ?? args.department?.trim()) || undefined,
+        resolverEmail: email,
+        resolverName: roleRecord.fullName ?? undefined,
       });
     }
 
@@ -377,8 +507,10 @@ export const remindApproval = mutation({
     if (request.status !== "pending") {
       throw new Error("Напоминание можно отправить только по заявке на согласовании");
     }
-    await ctx.scheduler.runAfter(0, internal.emails.sendRequestSubmitted, {
+    await ctx.scheduler.runAfter(0, internal.emails.sendApprovalReminder, {
       requestId: args.requestId,
+      remindedByEmail: email,
+      remindedByName: roleRecord.fullName ?? undefined,
     });
     await logTimelineEvent(ctx, {
       requestId: args.requestId,
@@ -395,6 +527,7 @@ export const adminApproveAsRole = mutation({
   args: {
     requestId: v.id("requests"),
     role: roleEnum,
+    department: v.optional(v.string()),
     comment: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -420,11 +553,15 @@ export const adminApproveAsRole = mutation({
     if (!request.requiredRoles.includes(args.role)) {
       throw new Error("Role not required for this request");
     }
-    const approval = await ctx.db
+    const approvalsBefore = await ctx.db
       .query("approvals")
       .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
-      .filter((q) => q.eq(q.field("role"), args.role))
-      .first();
+      .collect();
+    const approval = approvalsBefore.find(
+      (item) =>
+        item.role === args.role &&
+        (args.role !== "HOD" || (item.department ?? "") === (args.department?.trim() ?? "")),
+    );
     if (!approval) {
       throw new Error("Approval entry not found");
     }
@@ -444,13 +581,12 @@ export const adminApproveAsRole = mutation({
       .query("approvals")
       .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
       .collect();
-
-    let status: "pending" | "approved" | "rejected" = "pending";
-    if (approvals.some((item) => item.status === "rejected")) {
-      status = "rejected";
-    } else if (approvals.every((item) => item.status === "approved")) {
-      status = "approved";
-    }
+    const status = getRequestApprovalStatus({
+      category: request.category,
+      specialists: request.specialists,
+      requiredHodDepartments: request.requiredHodDepartments,
+      approvals,
+    });
 
     await ctx.db.patch(request._id, {
       status,
@@ -495,11 +631,11 @@ export const adminApproveAsRole = mutation({
     await logTimelineEvent(ctx, {
       requestId: args.requestId,
       type: "admin_approval_override",
-      title: `Админ согласовал как ${args.role}`,
+      title: `Админ согласовал как ${args.role}${args.department ? ` · ${args.department}` : ""}`,
       description: args.comment?.trim() || undefined,
       actorEmail: email,
       actorName: roleRecord.fullName ?? undefined,
-      metadata: { role: args.role },
+      metadata: { role: args.role, department: args.department?.trim() || undefined },
     });
 
     await ctx.scheduler.runAfter(0, internal.emails.sendDecision, {

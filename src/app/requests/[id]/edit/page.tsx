@@ -24,9 +24,11 @@ import {
   DEFAULT_REQUIRED_ROLES,
   EXPENSE_CATEGORIES,
   FUNDING_SOURCES,
+  HOD_DEPARTMENTS,
   ROLE_OPTIONS,
   type RoleOption,
 } from "@/lib/constants";
+import { getRoleLabel } from "@/lib/roleLabels";
 import {
   calculateIncomingRatio,
   formatIncomingRatio,
@@ -45,6 +47,7 @@ import {
   isAiToolsFundingSource,
   isAiToolsRequestCategory,
   isFundingSourceAllowedForCategory,
+  isHodSelectableCategory,
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
@@ -133,6 +136,7 @@ export default function NewRequestPage() {
   const [neededBy, setNeededBy] = useState(defaultDeadline);
   const [paidBy, setPaidBy] = useState("");
   const [requiredRoles, setRequiredRoles] = useState<RoleOption[]>([...DEFAULT_REQUIRED_ROLES]);
+  const [requiredHodDepartments, setRequiredHodDepartments] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fundingError, setFundingError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -214,11 +218,7 @@ export default function NewRequestPage() {
     const request = data.request;
     const normalizedFundingSource = normalizeFundingSource(request.fundingSource);
     const normalizedStoredCategory = normalizeRequestCategory(request.category);
-    const normalizedCategory =
-      normalizedStoredCategory === SERVICE_PURCHASE_CATEGORY && isAiToolsFundingSource(request.fundingSource)
-        ? AI_TOOLS_REQUEST_CATEGORY
-        : normalizedStoredCategory;
-    setCategory(normalizedCategory);
+    setCategory(normalizedStoredCategory);
     setTitle(request.title ?? "");
     setAmount(String(request.amount ?? ""));
     setAmountWithVat(request.amountWithVat !== undefined ? String(request.amountWithVat) : "");
@@ -284,6 +284,7 @@ export default function NewRequestPage() {
     );
     setPaidBy(request.paidBy ? new Date(request.paidBy).toISOString().slice(0, 10) : "");
     setRequiredRoles((request.requiredRoles as RoleOption[]) ?? [...DEFAULT_REQUIRED_ROLES]);
+    setRequiredHodDepartments(request.requiredHodDepartments ?? []);
   }, [data?.request?._id, defaultDeadline]);
 
   const contactsList = useMemo(
@@ -350,6 +351,23 @@ export default function NewRequestPage() {
     () =>
       specialistsPayload.reduce((sum, item) => sum + (item.directCost ?? 0), 0),
     [specialistsPayload],
+  );
+  const autoRequiredHodDepartments = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          category === "Конкурсное задание"
+            ? specialistsPayload
+                .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
+                .map((item) => item.department as string)
+            : [],
+        ),
+      ),
+    [category, specialistsPayload],
+  );
+  const effectiveRequiredHodDepartments = useMemo(
+    () => Array.from(new Set([...requiredHodDepartments, ...autoRequiredHodDepartments])),
+    [autoRequiredHodDepartments, requiredHodDepartments],
   );
   const effectiveAmountWithoutVatInput = useMemo(
     () =>
@@ -418,8 +436,17 @@ export default function NewRequestPage() {
   const investmentReturnInvalid =
     showValidationErrors && category === "Welcome-бонус" && !investmentReturn.trim();
   const financeLinksInvalid = showValidationErrors && financeLinksRequired && financeLinksList.length === 0;
+  const incomingAmountsInvalid =
+    showValidationErrors &&
+    showTransitFields &&
+    (!resolvedIncomingAmountsPreview.amountWithoutVat || !resolvedIncomingAmountsPreview.amountWithVat);
   const approvalDeadlineInvalid = showValidationErrors && !approvalDeadline;
   const neededByInvalid = showValidationErrors && !neededBy;
+  const hodDepartmentsInvalid =
+    showValidationErrors &&
+    requiredRoles.includes("HOD") &&
+    isHodSelectableCategory(category) &&
+    effectiveRequiredHodDepartments.length === 0;
   const hasBlockingValidationErrors =
     !title.trim() ||
     !clientName.trim() ||
@@ -432,6 +459,12 @@ export default function NewRequestPage() {
     !justification.trim() ||
     (category === "Welcome-бонус" && !investmentReturn.trim()) ||
     (financeLinksRequired && financeLinksList.length === 0) ||
+    (showTransitFields &&
+      (!resolvedIncomingAmountsPreview.amountWithoutVat ||
+        !resolvedIncomingAmountsPreview.amountWithVat)) ||
+    (requiredRoles.includes("HOD") &&
+      isHodSelectableCategory(category) &&
+      effectiveRequiredHodDepartments.length === 0) ||
     !approvalDeadline ||
     !neededBy ||
     Boolean(fundingError) ||
@@ -488,6 +521,13 @@ export default function NewRequestPage() {
     }
   }, [amountWithVat, contestHasSpecialists, effectiveAmountWithoutVatInput, vatInputSource, vatRate]);
 
+  useEffect(() => {
+    if (autoRequiredHodDepartments.length === 0) {
+      return;
+    }
+    setRequiredRoles((current) => (current.includes("HOD") ? current : [...current, "HOD"]));
+  }, [autoRequiredHodDepartments]);
+
   function handleCategoryChange(nextCategory: string) {
     setCategory(nextCategory);
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
@@ -496,6 +536,10 @@ export default function NewRequestPage() {
     }
     if (nextCategory === "Welcome-бонус") {
       setPaymentMethod("");
+    }
+    if (!isHodSelectableCategory(nextCategory)) {
+      setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
+      setRequiredHodDepartments([]);
     }
   }
 
@@ -527,11 +571,13 @@ export default function NewRequestPage() {
     if (enforcedRoles.has(role)) {
       return;
     }
-    setRequiredRoles((current) =>
-      current.includes(role)
-        ? current.filter((item) => item !== role)
-        : [...current, role],
-    );
+    setRequiredRoles((current) => {
+      const isRemoving = current.includes(role);
+      if (role === "HOD" && isRemoving) {
+        setRequiredHodDepartments([]);
+      }
+      return isRemoving ? current.filter((item) => item !== role) : [...current, role];
+    });
   }
 
   async function uploadFiles(files: File[]) {
@@ -684,6 +730,8 @@ export default function NewRequestPage() {
             ? new Date(paidBy).getTime()
             : undefined,
         requiredRoles,
+        requiredHodDepartments:
+          effectiveRequiredHodDepartments.length ? effectiveRequiredHodDepartments : undefined,
         submit,
         confirmWorkflowReset,
       } as any);
@@ -1052,10 +1100,13 @@ export default function NewRequestPage() {
 
               {showTransitFields ? (
                 <div className="space-y-4">
-                  <p className="text-xs text-muted-foreground">Сколько платят нам</p>
+                  <div className="space-y-1">
+                    <FieldLabel required>Сколько платят нам</FieldLabel>
+                    <p className="text-xs text-muted-foreground">Сумма отгрузки</p>
+                  </div>
                   <div className="grid gap-x-4 gap-y-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.38fr)]">
                     <div className="space-y-2">
-                      <FieldLabel htmlFor="incomingAmount">
+                      <FieldLabel htmlFor="incomingAmount" required>
                         Сумма отгрузки без НДС
                       </FieldLabel>
                       <Input
@@ -1063,6 +1114,7 @@ export default function NewRequestPage() {
                         type="text"
                         inputMode="decimal"
                         value={incomingAmount}
+                        aria-invalid={incomingAmountsInvalid ? true : undefined}
                         onChange={(event) => {
                           const nextIncomingAmount = sanitizeNumericInput(event.target.value);
                           setIncomingVatInputSource("without");
@@ -1078,7 +1130,7 @@ export default function NewRequestPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <FieldLabel htmlFor="incomingAmountWithVat">
+                      <FieldLabel htmlFor="incomingAmountWithVat" required>
                         Сумма отгрузки с НДС
                       </FieldLabel>
                       <Input
@@ -1086,6 +1138,7 @@ export default function NewRequestPage() {
                         type="text"
                         inputMode="decimal"
                         value={incomingAmountWithVat}
+                        aria-invalid={incomingAmountsInvalid ? true : undefined}
                         onChange={(event) => {
                           const nextIncomingAmountWithVat = sanitizeNumericInput(event.target.value);
                           setIncomingVatInputSource("with");
@@ -1347,10 +1400,48 @@ export default function NewRequestPage() {
                         onCheckedChange={() => toggleRole(role)}
                         disabled={enforcedRoles.has(role)}
                       />
-                      {role}
+                      {getRoleLabel(role)}
                     </label>
                   ))}
                 </div>
+                {requiredRoles.includes("HOD") && isHodSelectableCategory(category) ? (
+                  <div className="space-y-2 rounded-lg border border-border p-3">
+                    <Label>Какой руководитель цеха согласует заявку</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Для конкурсного задания цеха внутренних специалистов добавляются автоматически.
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {HOD_DEPARTMENTS.map((department) => {
+                        const isAutoRequired = autoRequiredHodDepartments.includes(department);
+                        const checked = effectiveRequiredHodDepartments.includes(department);
+                        return (
+                          <label key={department} className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                              checked={checked}
+                              disabled={isAutoRequired}
+                              onCheckedChange={() =>
+                                setRequiredHodDepartments((current) =>
+                                  current.includes(department)
+                                    ? current.filter((item) => item !== department)
+                                    : [...current, department],
+                                )
+                              }
+                            />
+                            <span>
+                              {department}
+                              {isAutoRequired ? " · обязателен по специалистам" : ""}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {hodDepartmentsInvalid ? (
+                      <p className="text-xs text-destructive">
+                        Выберите хотя бы один цех для руководителя цеха
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               {error && (

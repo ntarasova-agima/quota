@@ -4,7 +4,7 @@ import {
   SERVICE_PURCHASE_CATEGORY,
 } from "./requestRules";
 
-export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "CFD"] as const;
+export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "CFD", "HOD"] as const;
 export const DEFAULT_REQUIRED_ROLES = ["NBD", "COO", "CFD"] as const;
 export const ALL_ROLES = ["AD", "NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"] as const;
 export const ALL_ROLES_WITH_HOD = [
@@ -46,6 +46,9 @@ export const HOD_DEPARTMENTS = [
   "Python/Node.js",
   "Продуктовая аналитика",
   "Маркетинг",
+  "PR",
+  "HR",
+  "Юр. отдел",
 ] as const;
 
 export const CURRENCIES = ["RUB", "USD"] as const;

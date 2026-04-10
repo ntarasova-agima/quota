@@ -135,6 +135,7 @@ export const listActiveContacts = query({
     return roles
       .filter((role) => role.active)
       .map((role) => ({
+        key: String(role._id),
         email: role.email,
         fullName: role.fullName ?? null,
         creatorTitle: role.creatorTitle ?? null,

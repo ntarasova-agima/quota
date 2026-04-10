@@ -43,7 +43,7 @@ export default function AppHeader({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <Link
-            href={isBuh || isHod ? "/approvals" : "/requests"}
+            href={isBuh || isHod || isCfd ? "/approvals" : "/requests"}
             className="inline-flex items-center gap-3 rounded-[50px] border-2 border-emerald-500 px-4 py-2 text-2xl font-semibold uppercase tracking-[0.2em] text-amber-500"
           >
             Aurum
@@ -105,7 +105,7 @@ export default function AppHeader({
             <Link href="/coo-quota">Квоты</Link>
           </Button>
         )}
-        {(showAdmin || isAdmin) && (
+        {(showAdmin || isAdmin || pathname.startsWith("/admin")) && (
           <Button asChild variant={pathname === "/admin/roles" ? "default" : "outline"}>
             <Link href="/admin/roles">Роли</Link>
           </Button>

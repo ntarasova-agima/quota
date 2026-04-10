@@ -15,6 +15,16 @@ import {
 } from "./requestAccessHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
 import {
+  buildApprovalTargets,
+  canCategoryUseHodApproval,
+  getApprovalIdentity,
+  getEffectiveRequiredHodDepartments,
+  getEffectiveRequiredRoles,
+  getRequestApprovalStatus,
+  getRequiredContestHodDepartments,
+  normalizeDepartmentList,
+} from "./requestWorkflow";
+import {
   AI_TOOLS_REQUEST_CATEGORY,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
   COMPANY_PROFIT_FUNDING_SOURCE,
@@ -23,6 +33,7 @@ import {
   SERVICE_PURCHASE_CATEGORY,
   getFundingOwnerRoles,
   isFundingSourceAllowedForCategory,
+  isHodSelectableCategory,
   isServiceRecipientCategory,
   normalizeRequestCategory,
 } from "../src/lib/requestRules";
@@ -30,11 +41,13 @@ import {
   calculateIncomingRatio,
   formatMonthKeyLabel,
   getPaymentMethodOptions,
+  isPaidByDateAllowed,
   isContestSpecialistValidated,
   isPaidByTimestampAllowed,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
 } from "../src/lib/requestFields";
+import { isAgimaEmail, normalizeEmail } from "../src/lib/authRules";
 import {
   getAmountWithVat,
   normalizeVatRate,
@@ -764,6 +777,7 @@ const requestPayloadValidator = {
   incomingAmountWithVat: v.optional(v.number()),
   shipmentDate: v.optional(v.number()),
   shipmentMonth: v.optional(v.string()),
+  requiredHodDepartments: v.optional(v.array(v.string())),
   specialists: v.optional(v.array(specialistValidator)),
   approvalDeadline: v.optional(v.number()),
   neededBy: v.optional(v.number()),
@@ -795,6 +809,7 @@ const requestFieldLabels: Record<string, string> = {
   incomingRatio: "Коэффициент транзита",
   shipmentDate: "Дата отгрузки",
   shipmentMonth: "Дата отгрузки",
+  requiredHodDepartments: "Руководители цехов",
   specialists: "Участники конкурсного задания",
   approvalDeadline: "Дедлайн согласования",
   neededBy: "Когда нужно оплатить",
@@ -909,6 +924,7 @@ function diffRequestFields(previous: any, next: any) {
     "incomingRatio",
     "shipmentDate",
     "shipmentMonth",
+    "requiredHodDepartments",
     "specialists",
     "approvalDeadline",
     "neededBy",
@@ -1051,6 +1067,15 @@ function getApprovalStatusFromEntries(approvals: any[]) {
 
 function validateRequestPayload(args: any) {
   const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
+  const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
+    category: args.category,
+    requiredHodDepartments: args.requiredHodDepartments,
+    specialists: normalizedSpecialists,
+  });
+  const effectiveRequiredRoles = getEffectiveRequiredRoles({
+    requiredRoles: args.requiredRoles as any,
+    requiredHodDepartments: effectiveRequiredHodDepartments,
+  });
   const contestWithSpecialists =
     args.category === "Конкурсное задание" && hasContestSpecialists(normalizedSpecialists);
   const allowedPaymentMethods = getPaymentMethodOptions(args.category);
@@ -1183,24 +1208,46 @@ function validateRequestPayload(args: any) {
   ) {
     throw new Error("Финплан обязателен для отгрузок проекта");
   }
-  if (args.fundingSource === PRESALES_FUNDING_SOURCE && !args.requiredRoles.includes("NBD")) {
+  if (
+    args.fundingSource === "Отгрузки проекта" &&
+    (incomingAmounts.amountWithoutVat === undefined || incomingAmounts.amountWithVat === undefined)
+  ) {
+    throw new Error("Укажите сумму отгрузки");
+  }
+  if (effectiveRequiredHodDepartments.length > 0 && !canCategoryUseHodApproval(args.category)) {
+    throw new Error("Так не бывает");
+  }
+  if (
+    effectiveRequiredRoles.includes("HOD") &&
+    !effectiveRequiredHodDepartments.length &&
+    isHodSelectableCategory(args.category)
+  ) {
+    throw new Error("Укажите цех для руководителя");
+  }
+  if (
+    args.requiredRoles.includes("HOD") &&
+    !isHodSelectableCategory(args.category)
+  ) {
+    throw new Error("Так не бывает");
+  }
+  if (args.fundingSource === PRESALES_FUNDING_SOURCE && !effectiveRequiredRoles.includes("NBD")) {
     throw new Error("Для квот NBD обязателен NBD");
   }
   if (
     args.fundingSource === "Квоты на AI-инструменты" &&
-    !args.requiredRoles.includes("AI-BOSS")
+    !effectiveRequiredRoles.includes("AI-BOSS")
   ) {
     throw new Error("Для квот на AI-инструменты обязателен AI-BOSS");
   }
   if (
     args.fundingSource === INTERNAL_COSTS_FUNDING_SOURCE &&
-    !args.requiredRoles.includes("COO")
+    !effectiveRequiredRoles.includes("COO")
   ) {
     throw new Error("Для квоты на внутренние затраты обязателен COO");
   }
   if (
     args.fundingSource === COMPANY_PROFIT_FUNDING_SOURCE &&
-    (!args.requiredRoles.includes("COO") || !args.requiredRoles.includes("CFD"))
+    (!effectiveRequiredRoles.includes("COO") || !effectiveRequiredRoles.includes("CFD"))
   ) {
     throw new Error("Для прибыли компании обязательны COO и CFD");
   }
@@ -1234,26 +1281,34 @@ async function createApprovalsForRequest(
   params: {
     requestId: any;
     requiredRoles: string[];
+    requiredHodDepartments?: string[];
     autoApprovedRoles: string[];
     now: number;
     userId: any;
     email: string;
   },
 ) {
-  for (const role of params.requiredRoles) {
+  const targets = buildApprovalTargets({
+    requiredRoles: params.requiredRoles,
+    requiredHodDepartments: params.requiredHodDepartments,
+  });
+  for (const target of targets) {
+    const isAutoApproved =
+      target.role !== "HOD" && params.autoApprovedRoles.includes(target.role);
     await ctx.db.insert("approvals", {
       requestId: params.requestId,
-      role,
-      status: params.autoApprovedRoles.includes(role) ? "approved" : "pending",
-      decidedAt: params.autoApprovedRoles.includes(role) ? params.now : undefined,
-      reviewerId: params.autoApprovedRoles.includes(role) ? params.userId : undefined,
-      reviewerEmail: params.autoApprovedRoles.includes(role) ? params.email : undefined,
+      role: target.role as any,
+      department: target.department,
+      status: isAutoApproved ? "approved" : "pending",
+      decidedAt: isAutoApproved ? params.now : undefined,
+      reviewerId: isAutoApproved ? params.userId : undefined,
+      reviewerEmail: isAutoApproved ? params.email : undefined,
     });
   }
-  const pendingRoles = params.requiredRoles.filter(
-    (role) => !params.autoApprovedRoles.includes(role),
+  const pendingTargets = targets.filter(
+    (target) => target.role === "HOD" || !params.autoApprovedRoles.includes(target.role),
   );
-  return pendingRoles.length === 0 ? "approved" : "pending";
+  return pendingTargets.length === 0 ? "approved" : "pending";
 }
 
 export const listMyRequests = query({
@@ -1674,6 +1729,7 @@ export const grantViewerAccess = mutation({
   args: {
     id: v.id("requests"),
     targetEmail: v.string(),
+    targetName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1697,17 +1753,17 @@ export const grantViewerAccess = mutation({
     if (!targetEmail) {
       throw new Error("Укажите почту");
     }
-    const targetRecord = await getRoleRecord(ctx, targetEmail);
-    if (!targetRecord?.active) {
-      throw new Error("Такого активного пользователя нет");
+    if (!isAgimaEmail(targetEmail)) {
+      throw new Error("Можно выдавать доступ только на почту @agima.ru");
     }
+    const targetRecord = await getRoleRecord(ctx, targetEmail);
     if (targetEmail === request.createdByEmail.trim().toLowerCase()) {
       throw new Error("Автор уже имеет доступ к заявке");
     }
 
     const { created, viewerAccess } = upsertViewerAccessEntry(request, {
       email: targetEmail,
-      fullName: targetRecord.fullName,
+      fullName: (targetRecord?.fullName ?? args.targetName?.trim()) || undefined,
       grantedByEmail: email,
       grantedByName: roleRecord?.fullName,
       source: "share",
@@ -1725,7 +1781,7 @@ export const grantViewerAccess = mutation({
       requestId: request._id,
       type: "viewer_access_granted",
       title: "Выдан доступ к заявке",
-      description: `${targetRecord.fullName ? `${targetRecord.fullName} · ` : ""}${targetEmail}`,
+      description: `${targetRecord?.fullName || args.targetName?.trim() ? `${targetRecord?.fullName || args.targetName?.trim()} · ` : ""}${targetEmail}`,
       actorEmail: email,
       actorName: roleRecord?.fullName ?? undefined,
       metadata: {
@@ -1740,6 +1796,52 @@ export const grantViewerAccess = mutation({
       grantedByName: roleRecord?.fullName ?? undefined,
     });
     return { created: true };
+  },
+});
+
+export const revokeViewerAccess = mutation({
+  args: {
+    id: v.id("requests"),
+    targetEmail: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    const isCreator = request.createdBy === userId || request.createdByEmail === email;
+    if (!canManageViewerAccess({ isCreator, roleRecord })) {
+      throw new Error("Not authorized");
+    }
+    const targetEmail = normalizeEmail(args.targetEmail);
+    const nextViewerAccess = (request.viewerAccess ?? []).filter(
+      (item: any) => normalizeEmail(item.email) !== targetEmail,
+    );
+    if (nextViewerAccess.length === (request.viewerAccess ?? []).length) {
+      return { removed: false };
+    }
+    await ctx.db.patch(request._id, {
+      viewerAccess: nextViewerAccess.length ? nextViewerAccess : undefined,
+      updatedAt: Date.now(),
+    });
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "viewer_access_revoked",
+      title: "Доступ к заявке отозван",
+      description: targetEmail,
+      actorEmail: email,
+      actorName: roleRecord?.fullName ?? undefined,
+    });
+    return { removed: true };
   },
 });
 
@@ -1769,6 +1871,15 @@ export const previewEditImpact = query({
     }
 
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
+    const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
+      category: args.category,
+      requiredHodDepartments: args.requiredHodDepartments,
+      specialists: normalizedSpecialists,
+    });
+    const effectiveRequiredRoles = getEffectiveRequiredRoles({
+      requiredRoles: args.requiredRoles as any,
+      requiredHodDepartments: effectiveRequiredHodDepartments,
+    });
     const effectiveAmounts = resolveRequestAmounts(
       {
         category: args.category,
@@ -1813,11 +1924,13 @@ export const previewEditImpact = query({
       }),
       shipmentDate: args.shipmentDate,
       shipmentMonth: args.shipmentMonth,
+      requiredHodDepartments:
+        effectiveRequiredHodDepartments.length ? effectiveRequiredHodDepartments : undefined,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       approvalDeadline: args.approvalDeadline,
       neededBy: args.neededBy,
       paidBy: args.paidBy,
-      requiredRoles: args.requiredRoles,
+      requiredRoles: effectiveRequiredRoles as any,
     };
     const approvals = await ctx.db
       .query("approvals")
@@ -1859,6 +1972,15 @@ export const editRequest = mutation({
     const actorName = roleRecord?.fullName ?? identity?.name ?? undefined;
     const creatorRoles = roleRecord?.roles ?? [];
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
+    const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
+      category: args.category,
+      requiredHodDepartments: args.requiredHodDepartments,
+      specialists: normalizedSpecialists,
+    });
+    const effectiveRequiredRoles = getEffectiveRequiredRoles({
+      requiredRoles: args.requiredRoles as any,
+      requiredHodDepartments: effectiveRequiredHodDepartments,
+    });
     const effectiveAmounts = resolveRequestAmounts(
       {
         category: args.category,
@@ -1876,7 +1998,7 @@ export const editRequest = mutation({
     });
     const contestNeedsHodValidation =
       args.category === "Конкурсное задание" &&
-      hasContestDepartments(normalizedSpecialists) &&
+      getRequiredContestHodDepartments(normalizedSpecialists).length > 0 &&
       !areContestDepartmentsValidated(normalizedSpecialists);
     const now = Date.now();
 
@@ -1908,11 +2030,13 @@ export const editRequest = mutation({
       }),
       shipmentDate: args.shipmentDate,
       shipmentMonth: args.shipmentMonth,
+      requiredHodDepartments:
+        effectiveRequiredHodDepartments.length ? effectiveRequiredHodDepartments : undefined,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       approvalDeadline: args.approvalDeadline,
       neededBy: args.neededBy,
       paidBy: args.paidBy,
-      requiredRoles: args.requiredRoles,
+      requiredRoles: effectiveRequiredRoles as any,
     };
 
     const approvals = await ctx.db
@@ -1920,6 +2044,15 @@ export const editRequest = mutation({
       .withIndex("by_request", (q) => q.eq("requestId", args.id))
       .collect();
     const editImpact = buildEditImpact(request, nextBase, approvals);
+    const previousHodDepartments = normalizeDepartmentList(request.requiredHodDepartments ?? []);
+    const hodDepartmentsChanged =
+      JSON.stringify(previousHodDepartments) !== JSON.stringify(effectiveRequiredHodDepartments);
+    if (hodDepartmentsChanged) {
+      editImpact.triggerRepeatApproval = true;
+      editImpact.routeChanged = true;
+      editImpact.shouldAskForConfirmation = true;
+      editImpact.confirmationLines.push("Изменение цехов для руководителя цеха обновит маршрут согласования.");
+    }
     const submitDraft = request.status === "draft" && args.submit;
     const shouldResubmit = request.status !== "draft" && editImpact.triggerRepeatApproval;
 
@@ -1939,114 +2072,44 @@ export const editRequest = mutation({
 
     let nextStatus = request.status;
     let updatedApprovals: any[] = [...approvals];
-    const autoApprovedRoles = args.requiredRoles.filter((role) => creatorRoles.includes(role));
-    const pendingRoles = args.requiredRoles.filter((role) => !creatorRoles.includes(role));
+    const autoApprovedRoles = effectiveRequiredRoles.filter((role) => creatorRoles.includes(role));
+    const pendingRoles = effectiveRequiredRoles.filter((role) => !creatorRoles.includes(role));
 
-    if (submitDraft) {
-      nextStatus = contestNeedsHodValidation
-        ? "hod_pending"
-        : pendingRoles.length === 0
-          ? "approved"
-          : "pending";
-      for (const approval of approvals) {
-        await ctx.db.delete(approval._id);
-      }
-      updatedApprovals = [];
-      if (!contestNeedsHodValidation) {
-        for (const role of args.requiredRoles) {
-          const entry = {
-            requestId: args.id,
-            role,
-            status: autoApprovedRoles.includes(role)
-              ? ("approved" as const)
-              : ("pending" as const),
-            decidedAt: autoApprovedRoles.includes(role) ? now : undefined,
-            reviewerId: autoApprovedRoles.includes(role) ? userId : undefined,
-            reviewerEmail: autoApprovedRoles.includes(role) ? email : undefined,
-          };
-          const approvalId = await ctx.db.insert("approvals", entry);
-          updatedApprovals.push({ _id: approvalId, ...entry });
-        }
-      }
-    } else if (request.status !== "draft") {
-      if (contestNeedsHodValidation) {
+    if (submitDraft || request.status !== "draft") {
+      const shouldRecreateApprovals =
+        submitDraft || shouldResubmit || hodDepartmentsChanged || request.status !== "draft";
+      if (shouldRecreateApprovals) {
         for (const approval of approvals) {
           await ctx.db.delete(approval._id);
         }
         updatedApprovals = [];
-        nextStatus = "hod_pending";
-      } else {
-        const existingByRole = new Map(updatedApprovals.map((approval) => [approval.role, approval]));
-
-        for (const role of editImpact.removedRoles) {
-          const existing = existingByRole.get(role);
-          if (existing) {
-            await ctx.db.delete(existing._id);
-            updatedApprovals = updatedApprovals.filter((approval) => approval._id !== existing._id);
-            existingByRole.delete(role);
-          }
-        }
-
-        for (const role of editImpact.rolesToReset) {
-          if (!args.requiredRoles.includes(role as any)) {
-            continue;
-          }
-          const existing = existingByRole.get(role);
-          const nextApprovalPatch = autoApprovedRoles.includes(role as any)
-            ? {
-                status: "approved" as const,
-                comment: undefined,
-                decidedAt: now,
-                reviewerId: userId,
-                reviewerEmail: email,
-              }
-            : {
-                status: "pending" as const,
-                comment: undefined,
-                decidedAt: undefined,
-                reviewerId: undefined,
-                reviewerEmail: undefined,
-              };
-          if (existing) {
-            await ctx.db.patch(existing._id, nextApprovalPatch);
-            updatedApprovals = updatedApprovals.map((approval) =>
-              approval._id === existing._id ? { ...approval, ...nextApprovalPatch } : approval,
-            );
-          } else {
-            const entry = {
-              requestId: args.id,
-              role: role as any,
-              ...nextApprovalPatch,
-            };
-            const approvalId = await ctx.db.insert("approvals", entry);
-            updatedApprovals.push({ _id: approvalId, ...entry });
-            existingByRole.set(role, { _id: approvalId, ...entry });
-          }
-        }
-
-        for (const role of editImpact.addedRoles) {
-          if (existingByRole.has(role)) {
-            continue;
-          }
-          const entry = {
+        if (args.submit || request.status !== "draft") {
+          await createApprovalsForRequest(ctx, {
             requestId: args.id,
-            role: role as any,
-            status: autoApprovedRoles.includes(role as any) ? ("approved" as const) : ("pending" as const),
-            comment: undefined,
-            decidedAt: autoApprovedRoles.includes(role as any) ? now : undefined,
-            reviewerId: autoApprovedRoles.includes(role as any) ? userId : undefined,
-            reviewerEmail: autoApprovedRoles.includes(role as any) ? email : undefined,
-          };
-          const approvalId = await ctx.db.insert("approvals", entry);
-          updatedApprovals.push({ _id: approvalId, ...entry });
-          existingByRole.set(role, { _id: approvalId, ...entry });
+            requiredRoles: effectiveRequiredRoles as any,
+            requiredHodDepartments: effectiveRequiredHodDepartments,
+            autoApprovedRoles,
+            now,
+            userId,
+            email,
+          });
+          updatedApprovals = await ctx.db
+            .query("approvals")
+            .withIndex("by_request", (q) => q.eq("requestId", args.id))
+            .collect();
         }
-
-        updatedApprovals = updatedApprovals.filter((approval) => args.requiredRoles.includes(approval.role));
-        nextStatus = getApprovalStatusFromEntries(updatedApprovals);
-        if (nextStatus === "draft") {
-          nextStatus = "pending";
-        }
+        nextStatus =
+          request.status === "draft" && !args.submit
+            ? "draft"
+            : getRequestApprovalStatus({
+                category: args.category,
+                specialists: normalizedSpecialists,
+                requiredHodDepartments: effectiveRequiredHodDepartments,
+                approvals: updatedApprovals,
+              });
+      }
+      if (request.status === "draft" && args.submit && pendingRoles.length === 0 && !contestNeedsHodValidation) {
+        nextStatus = "approved";
       }
     }
 
@@ -2261,18 +2324,39 @@ export const createRequest = mutation({
     const now = Date.now();
     const requestCode = await getNextRequestCode(ctx, args.category, args.fundingSource);
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
-    const autoApprovedRoles = args.requiredRoles.filter((role) => creatorRoles.includes(role));
+    const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
+      category: args.category,
+      requiredHodDepartments: args.requiredHodDepartments,
+      specialists: normalizedSpecialists,
+    });
+    const effectiveRequiredRoles = getEffectiveRequiredRoles({
+      requiredRoles: args.requiredRoles as any,
+      requiredHodDepartments: effectiveRequiredHodDepartments,
+    });
+    const autoApprovedRoles = effectiveRequiredRoles.filter((role) => creatorRoles.includes(role));
     const contestNeedsHodValidation =
       args.category === "Конкурсное задание" &&
-      hasContestDepartments(normalizedSpecialists) &&
+      getRequiredContestHodDepartments(normalizedSpecialists).length > 0 &&
       !areContestDepartmentsValidated(normalizedSpecialists);
+    const approvalTargets = buildApprovalTargets({
+      requiredRoles: effectiveRequiredRoles as any,
+      requiredHodDepartments: effectiveRequiredHodDepartments,
+    });
     const status = !args.submit
       ? "draft"
-      : contestNeedsHodValidation
-        ? "hod_pending"
-        : args.requiredRoles.some((role) => !creatorRoles.includes(role))
-          ? "pending"
-          : "approved";
+      : getRequestApprovalStatus({
+          category: args.category,
+          specialists: normalizedSpecialists,
+          requiredHodDepartments: effectiveRequiredHodDepartments,
+          approvals: approvalTargets.map((target) => ({
+            role: target.role,
+            department: target.department,
+            status:
+              target.role !== "HOD" && autoApprovedRoles.includes(target.role)
+                ? ("approved" as const)
+                : ("pending" as const),
+          })),
+        });
     const effectiveAmounts = resolveRequestAmounts(
       {
         category: args.category,
@@ -2324,8 +2408,10 @@ export const createRequest = mutation({
       }),
       shipmentDate: args.shipmentDate,
       shipmentMonth: args.shipmentMonth,
+      requiredHodDepartments:
+        effectiveRequiredHodDepartments.length ? effectiveRequiredHodDepartments : undefined,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
-      requiredRoles: args.requiredRoles,
+      requiredRoles: effectiveRequiredRoles as any,
       status,
       isCanceled: false,
       approvalDeadline: args.approvalDeadline,
@@ -2344,10 +2430,11 @@ export const createRequest = mutation({
       actorName: roleRecord?.fullName ?? identity?.name ?? undefined,
     });
 
-    if (args.submit && args.requiredRoles.length > 0 && !contestNeedsHodValidation) {
+    if (args.submit && approvalTargets.length > 0) {
       await createApprovalsForRequest(ctx, {
         requestId,
-        requiredRoles: args.requiredRoles,
+        requiredRoles: effectiveRequiredRoles as any,
+        requiredHodDepartments: effectiveRequiredHodDepartments,
         autoApprovedRoles,
         now,
         userId,
@@ -2366,11 +2453,6 @@ export const createRequest = mutation({
           },
         );
       }
-    }
-    if (args.submit && contestNeedsHodValidation) {
-      await ctx.scheduler.runAfter(0, internal.emails.sendHodValidationRequest, {
-        requestId,
-      });
     }
 
     return requestId;
@@ -2446,37 +2528,23 @@ export const updateContestSpecialist = mutation({
     specialists[index] = nextSpecialist;
     const nextAmount = calculateContestAmount("Конкурсное задание", specialists, request.amount);
     const nextAmountWithVat = getAmountWithVat(nextAmount, undefined, request.vatRate);
-    const shouldReleaseToApprovals =
-      request.status === "hod_pending" && areContestDepartmentsValidated(specialists);
-    let nextStatus = request.status;
-    if (shouldReleaseToApprovals) {
-      const creatorRoles = (
-        await getRoleRecord(ctx, request.createdByEmail)
-      )?.roles ?? [];
-      const autoApprovedRoles = request.requiredRoles.filter((role: string) =>
-        creatorRoles.includes(role),
-      );
-      for (const approval of await ctx.db
-        .query("approvals")
-        .withIndex("by_request", (q) => q.eq("requestId", request._id))
-        .collect()) {
-        await ctx.db.delete(approval._id);
-      }
-      nextStatus = await createApprovalsForRequest(ctx, {
-        requestId: request._id,
-        requiredRoles: request.requiredRoles,
-        autoApprovedRoles,
-        now: Date.now(),
-        userId: request.createdBy,
-        email: request.createdByEmail,
-      });
-    }
+    const updatedApprovals = await ctx.db
+      .query("approvals")
+      .withIndex("by_request", (q) => q.eq("requestId", request._id))
+      .collect();
+    const nextStatus = getRequestApprovalStatus({
+      category: request.category,
+      specialists,
+      requiredHodDepartments: request.requiredHodDepartments,
+      approvals: updatedApprovals,
+    });
+    const releasedFromHodPending = request.status === "hod_pending" && nextStatus !== "hod_pending";
     await ctx.db.patch(request._id, {
       specialists,
       amount: nextAmount,
       amountWithVat: nextAmountWithVat,
       status: nextStatus,
-      submittedAt: shouldReleaseToApprovals ? Date.now() : request.submittedAt,
+      submittedAt: releasedFromHodPending ? Date.now() : request.submittedAt,
       updatedAt: Date.now(),
     });
     const specialistChanges = diffRequestFields(
@@ -2498,25 +2566,10 @@ export const updateContestSpecialist = mutation({
       title: "Обновлены специалисты",
       actorEmail: email,
       actorName: roleRecord?.fullName ?? undefined,
-      description: shouldReleaseToApprovals
+      description: releasedFromHodPending
         ? "Все нужные цеха провалидировали прямые затраты. Заявка отправлена на согласование."
         : undefined,
     });
-    if (shouldReleaseToApprovals) {
-      await ctx.scheduler.runAfter(0, internal.emails.sendRequestSubmitted, {
-        requestId: request._id,
-      });
-      if (request.approvalDeadline) {
-        await ctx.scheduler.runAfter(
-          Math.max(0, addDays(request.approvalDeadline, 1) - Date.now()),
-          internal.emails.sendApprovalDeadlineReminder,
-          {
-            requestId: request._id,
-            approvalDeadline: request.approvalDeadline,
-          },
-        );
-      }
-    }
     return { updated: true };
   },
 });
@@ -2695,11 +2748,12 @@ export const updatePaymentStatus = mutation({
     const actorName = record.fullName?.trim() || undefined;
     const now = Date.now();
     const isCreator = request.createdBy === userId || request.createdByEmail === email;
+    const canManagePayments = record.roles.some((role: string) => ["BUH", "CFD"].includes(role));
 
     const canBuhReturnPaid =
       args.status === "awaiting_payment" &&
       request.status === "paid" &&
-      record.roles.includes("BUH");
+      canManagePayments;
 
     if (
       args.status === "awaiting_payment" &&
@@ -2709,14 +2763,14 @@ export const updatePaymentStatus = mutation({
     ) {
       throw new Error("Передать в оплату может только автор заявки");
     }
-    if (args.status === "payment_planned" && !record.roles.includes("BUH")) {
-      throw new Error("Только BUH может запланировать оплату");
+    if (args.status === "payment_planned" && !canManagePayments) {
+      throw new Error("Только финотдел может запланировать оплату");
     }
-    if (args.status === "partially_paid" && !record.roles.includes("BUH")) {
-      throw new Error("Только BUH может отметить частичную оплату");
+    if (args.status === "partially_paid" && !canManagePayments) {
+      throw new Error("Только финотдел может отметить частичную оплату");
     }
-    if (args.status === "paid" && !record.roles.includes("BUH")) {
-      throw new Error("Только BUH может перевести в статус Оплачено");
+    if (args.status === "paid" && !canManagePayments) {
+      throw new Error("Только финотдел может перевести в статус Оплачено");
     }
     if ((args.status === "closed" || args.status === "reopen") && !isCreator && !record.roles.includes("ADMIN")) {
       throw new Error("Изменить статус закрытой заявки может только автор");
@@ -3268,7 +3322,7 @@ export const cancelPaymentEntry = mutation({
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
-    if (!record || !record.roles.some((role: string) => role === "BUH" || role === "ADMIN")) {
+    if (!record || !record.roles.some((role: string) => ["BUH", "CFD", "ADMIN"].includes(role))) {
       throw new Error("Not authorized");
     }
     const request = await ctx.db.get(args.id);
@@ -3396,6 +3450,52 @@ export const cancelPaymentEntry = mutation({
       actorName,
     });
     return { canceled: true };
+  },
+});
+
+export const remindPayment = mutation({
+  args: {
+    requestId: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const request = await ctx.db.get(args.requestId);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    const isCreator = request.createdBy === userId || request.createdByEmail === email;
+    const canRemind =
+      isCreator ||
+      roleRecord?.roles?.includes("ADMIN") ||
+      roleRecord?.roles?.includes("CFD") ||
+      roleRecord?.roles?.includes("BUH");
+    if (!canRemind) {
+      throw new Error("Not authorized");
+    }
+    if (!["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)) {
+      throw new Error("Напоминание об оплате можно отправить только по заявке в оплате");
+    }
+    await ctx.scheduler.runAfter(0, internal.emails.sendManualPaymentReminder, {
+      requestId: args.requestId,
+      remindedByEmail: email,
+      remindedByName: roleRecord?.fullName ?? undefined,
+    });
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "payment_reminder_sent",
+      title: "Отправлено напоминание об оплате",
+      actorEmail: email,
+      actorName: roleRecord?.fullName ?? undefined,
+    });
+    return { reminded: true };
   },
 });
 

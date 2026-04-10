@@ -107,7 +107,10 @@ export default function RequestsPage() {
     () => myRoles?.some((role) => ["CFD", "NBD", "COO", "BUH", "ADMIN"].includes(role)) ?? false,
     [myRoles],
   );
-  const isBuh = useMemo(() => myRoles?.includes("BUH") ?? false, [myRoles]);
+  const isFinanceRole = useMemo(
+    () => myRoles?.some((role) => ["BUH", "CFD"].includes(role)) ?? false,
+    [myRoles],
+  );
   const rawView = searchParams.get("view") ?? "my";
   const activeView = rawView === "all" && canUseAllRequestsView ? "all" : "my";
   const adContacts = useQuery(api.roles.listAdContacts, isAuthenticated && isApprover ? {} : "skip");
@@ -156,11 +159,11 @@ export default function RequestsPage() {
   );
 
   useEffect(() => {
-    if (isBuh && !buhDefaultApplied) {
+    if (isFinanceRole && !buhDefaultApplied) {
       setStatusFilter("awaiting_payment");
       setBuhDefaultApplied(true);
     }
-  }, [isBuh, buhDefaultApplied]);
+  }, [isFinanceRole, buhDefaultApplied]);
 
   useEffect(() => {
     if (!isAuthenticated || archiveSweepDone) {
@@ -287,7 +290,7 @@ export default function RequestsPage() {
                 {myRequestItems.length ? (
                   myRequestItems.map(({ request, approvals }) => {
                     const baseStatusSummary =
-                      isBuh && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                      isFinanceRole && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
                         ? getBuhPaymentStatusSummary(request)
                         : getRequestStatusSummary(request, approvals);
                     const isActionableForViewer =
@@ -515,13 +518,13 @@ export default function RequestsPage() {
               <CardHeader className="flex flex-col gap-3">
                 <div>
                   <CardTitle>
-                    {isBuh ? "Согласования и заявки, ожидающие оплаты" : "Все заявки"}
+                    {isFinanceRole ? "Согласования и заявки, ожидающие оплаты" : "Все заявки"}
                   </CardTitle>
                   <CardDescription>
-                    {isBuh ? "Список задач для оплаты и контроля сроков." : "Полный список заявок."}
+                    {isFinanceRole ? "Список задач для оплаты и контроля сроков." : "Полный список заявок."}
                   </CardDescription>
                 </div>
-                {isBuh ? (
+                {isFinanceRole ? (
                   <div className="flex flex-wrap gap-2">
                     <Button
                       type="button"
@@ -656,7 +659,7 @@ export default function RequestsPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {isBuh && paymentDueFilter !== "all" ? (
+                {isFinanceRole && paymentDueFilter !== "all" ? (
                   <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                     Показываем заявки с остатком к оплате, включая частично оплаченные.
                   </div>
@@ -665,7 +668,7 @@ export default function RequestsPage() {
                   {allRequestItems.length ? (
                     allRequestItems.map(({ request, approvals }) => {
                       const baseStatusSummary =
-                        isBuh && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                        isFinanceRole && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
                           ? getBuhPaymentStatusSummary(request)
                           : getRequestStatusSummary(request, approvals);
                       const isActionableForViewer =

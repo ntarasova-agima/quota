@@ -7,10 +7,12 @@ export const COMPANY_PROFIT_FUNDING_SOURCE = "Прибыль компании";
 export const UNKNOWN_FUNDING_SOURCE = "Я не знаю";
 export const LEGACY_SERVICE_PURCHASE_CATEGORY = "Закупка сервисов";
 export const LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI-инструментов)";
-export const SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI)";
+export const LEGACY_SHORT_SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI)";
+export const SERVICE_PURCHASE_CATEGORY = "Внутренние закупки (кроме AI)";
 export const LEGACY_AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент\\подписка";
 export const AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент/подписка";
-export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Сервисы/транзиты для клиентов";
+export const LEGACY_CLIENT_SERVICES_TRANSIT_CATEGORY = "Сервисы/транзиты для клиентов";
+export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Транзиты для проектов";
 
 export const SERVICE_PURCHASE_FUNDING_SOURCES = [
   INTERNAL_COSTS_FUNDING_SOURCE,
@@ -34,11 +36,20 @@ export function normalizeFundingSource(fundingSource: string) {
 }
 
 export function normalizeRequestCategory(category: string) {
-  if ([LEGACY_SERVICE_PURCHASE_CATEGORY, LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY].includes(category)) {
+  if (
+    [
+      LEGACY_SERVICE_PURCHASE_CATEGORY,
+      LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY,
+      LEGACY_SHORT_SERVICE_PURCHASE_CATEGORY,
+    ].includes(category)
+  ) {
     return SERVICE_PURCHASE_CATEGORY;
   }
   if (category === LEGACY_AI_TOOLS_REQUEST_CATEGORY) {
     return AI_TOOLS_REQUEST_CATEGORY;
+  }
+  if (category === LEGACY_CLIENT_SERVICES_TRANSIT_CATEGORY) {
+    return CLIENT_SERVICES_TRANSIT_CATEGORY;
   }
   return category;
 }
@@ -55,6 +66,15 @@ export function isServiceRecipientCategory(category: string) {
   return [SERVICE_PURCHASE_CATEGORY, AI_TOOLS_REQUEST_CATEGORY].includes(
     normalizeRequestCategory(category) as typeof SERVICE_PURCHASE_CATEGORY | typeof AI_TOOLS_REQUEST_CATEGORY,
   );
+}
+
+export function isHodSelectableCategory(category: string) {
+  const normalizedCategory = normalizeRequestCategory(category);
+  return [
+    "Конкурсное задание",
+    CLIENT_SERVICES_TRANSIT_CATEGORY,
+    SERVICE_PURCHASE_CATEGORY,
+  ].includes(normalizedCategory);
 }
 
 export function getDefaultFundingSourceForCategory(category: string) {

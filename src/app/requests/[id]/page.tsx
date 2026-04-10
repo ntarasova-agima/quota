@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
@@ -37,6 +38,7 @@ import {
   normalizeFundingSource,
   normalizeRequestCategory,
 } from "@/lib/requestRules";
+import { isAgimaEmail, normalizeEmail } from "@/lib/authRules";
 import {
   DEFAULT_VAT_RATE,
   calculateAmountWithVat,
@@ -75,14 +77,26 @@ type PaymentTimelineRow = {
 };
 
 type MentionEntry = {
+  key: string;
   email: string;
   name: string;
+  token: string;
 };
 
 type ActiveContact = {
+  key: string;
   email: string;
   fullName: string | null;
   creatorTitle: string | null;
+};
+
+type MentionCandidate = {
+  key: string;
+  email: string;
+  name: string;
+  token: string;
+  creatorTitle?: string | null;
+  isManual?: boolean;
 };
 
 const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "HOD"] as const;
@@ -148,7 +162,7 @@ function getPersonDisplayName(person: ActiveContact | MentionEntry) {
 
 function findMentionDraft(text: string, cursor: number) {
   const prefix = text.slice(0, cursor);
-  const match = prefix.match(/(^|\s)@([^\s@]{0,50})$/);
+  const match = prefix.match(/(^|\s)@([^\s]{0,100})$/);
   if (!match) {
     return null;
   }
@@ -158,16 +172,22 @@ function findMentionDraft(text: string, cursor: number) {
   };
 }
 
-function insertMention(text: string, cursor: number, mentionDraft: { start: number }, person: ActiveContact) {
-  const name = getPersonDisplayName(person);
-  const token = `@${name}`;
+function insertMention(
+  text: string,
+  cursor: number,
+  mentionDraft: { start: number },
+  person: MentionCandidate,
+) {
+  const token = `@${person.token}`;
   const nextValue = `${text.slice(0, mentionDraft.start)}${token} ${text.slice(cursor)}`;
   return {
     nextValue,
     nextCursor: mentionDraft.start + token.length + 1,
     mention: {
+      key: person.key,
       email: person.email,
-      name,
+      name: person.name,
+      token: person.token,
     },
   };
 }
@@ -176,8 +196,8 @@ function getVisibleMentions(body: string, mentions: MentionEntry[] = []) {
   return Array.from(
     new Map(
       mentions
-        .filter((item) => item.email && item.name && body.includes(`@${item.name}`))
-        .map((item) => [`${item.email}::${item.name}`, item]),
+        .filter((item) => item.email && item.token && body.includes(`@${item.token}`))
+        .map((item) => [`${item.key}::${item.token}`, item]),
     ).values(),
   );
 }
@@ -198,7 +218,7 @@ function renderCommentBody(body: string, mentions: MentionEntry[] = []): ReactNo
         }
       | null = null;
     for (const mention of visibleMentions) {
-      const token = `@${mention.name}`;
+      const token = `@${mention.token}`;
       const index = body.indexOf(token, cursor);
       if (index === -1) {
         continue;
@@ -271,6 +291,45 @@ function formatMonthLabel(monthKey: string) {
     month: "long",
     year: "numeric",
   });
+}
+
+function getApprovalIdentity(approval: { _id?: string; role: string; department?: string }) {
+  return approval._id ?? (approval.role === "HOD" ? `${approval.role}:${approval.department ?? ""}` : approval.role);
+}
+
+function toMentionCandidate(contact: ActiveContact): MentionCandidate {
+  const name = getPersonDisplayName(contact);
+  return {
+    key: contact.key,
+    email: contact.email,
+    name,
+    token: name,
+    creatorTitle: contact.creatorTitle,
+  };
+}
+
+function createManualMentionCandidate(email: string): MentionCandidate {
+  const normalized = normalizeEmail(email);
+  const token = normalized;
+  const localPart = normalized.split("@")[0] || normalized;
+  return {
+    key: normalized,
+    email: normalized,
+    name: localPart,
+    token,
+    isManual: true,
+  };
+}
+
+function normalizeCommentMentions(mentions: Array<Partial<MentionEntry>> = []): MentionEntry[] {
+  return mentions
+    .map((item) => ({
+      key: item.key?.trim() || item.email?.trim().toLowerCase() || "",
+      email: item.email?.trim().toLowerCase() || "",
+      name: item.name?.trim() || item.email?.trim().toLowerCase() || "",
+      token: item.token?.trim() || item.name?.trim() || item.email?.trim().toLowerCase() || "",
+    }))
+    .filter((item) => item.key && item.email && item.name && item.token);
 }
 
 function sumPaymentSplitAmounts(paymentSplits: Array<{ amountWithoutVat?: number }>) {
@@ -493,9 +552,12 @@ export default function RequestDetailPage() {
   const addComment = useMutation(api.comments.addComment);
   const editComment = useMutation(api.comments.editComment);
   const grantViewerAccess = useMutation(api.requests.grantViewerAccess);
+  const revokeViewerAccess = useMutation(api.requests.revokeViewerAccess);
+  const remindPayment = useMutation(api.requests.remindPayment);
   const [commentByRole, setCommentByRole] = useState<Record<string, string>>({});
   const [adminCommentByRole, setAdminCommentByRole] = useState<Record<string, string>>({});
-  const [forwardRoleByApproval, setForwardRoleByApproval] = useState<Record<string, string>>({});
+  const [forwardRolesByApproval, setForwardRolesByApproval] = useState<Record<string, string[]>>({});
+  const [forwardHodDepartmentsByApproval, setForwardHodDepartmentsByApproval] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [paymentActionError, setPaymentActionError] = useState<string | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
@@ -507,8 +569,10 @@ export default function RequestDetailPage() {
   const [replyTo, setReplyTo] = useState<Id<"comments"> | null>(null);
   const [editingId, setEditingId] = useState<Id<"comments"> | null>(null);
   const [editingBody, setEditingBody] = useState("");
+  const [editingMentions, setEditingMentions] = useState<MentionEntry[]>([]);
+  const [editingCursor, setEditingCursor] = useState(0);
   const [viewerAccessQuery, setViewerAccessQuery] = useState("");
-  const [selectedViewerAccessEmail, setSelectedViewerAccessEmail] = useState<string | null>(null);
+  const [selectedViewerAccess, setSelectedViewerAccess] = useState<{ email: string; name?: string } | null>(null);
   const [grantingViewerAccess, setGrantingViewerAccess] = useState(false);
   const [selectedTag, setSelectedTag] = useState("");
   const [customTagName, setCustomTagName] = useState("");
@@ -532,11 +596,18 @@ export default function RequestDetailPage() {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [previewAttachmentId, setPreviewAttachmentId] = useState<Id<"requestAttachments"> | null>(null);
+  const [approvalReminderSent, setApprovalReminderSent] = useState(false);
+  const [paymentReminderSent, setPaymentReminderSent] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const newCommentRef = useRef<HTMLTextAreaElement | null>(null);
   const todayDate = useMemo(() => formatDateInputFromTimestamp(Date.now()), []);
 
   const canDecide = useMemo(() => new Set(myRoles), [myRoles]);
+  const canCurrentUserDecideApproval = (approval: { role: string; department?: string }): boolean =>
+    approval.role === "HOD"
+      ? myRoles.includes("HOD") &&
+        Boolean(approval.department && (data?.hodDepartments ?? []).includes(approval.department))
+      : canDecide.has(approval.role);
   const isAdmin = useMemo(() => myRoles.includes("ADMIN"), [myRoles]);
   const isNbd = useMemo(() => myRoles.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles.includes("AI-BOSS"), [myRoles]);
@@ -554,8 +625,12 @@ export default function RequestDetailPage() {
   const showStandaloneTagEditor = canSetCfdTag && !myRoles.includes("BUH");
   const cfdTags = useQuery(api.cfdTags.list, isAuthenticated && canSetCfdTag ? {} : "skip");
   const canSetAwaitingPayment = useMemo(() => data?.isCreator || myRoles.includes("ADMIN"), [data?.isCreator, myRoles]);
-  const canSetPaymentPlanned = useMemo(() => myRoles.includes("BUH"), [myRoles]);
-  const canSetPaid = useMemo(() => myRoles.includes("BUH"), [myRoles]);
+  const canManagePayments = useMemo(
+    () => myRoles.includes("BUH") || myRoles.includes("CFD"),
+    [myRoles],
+  );
+  const canSetPaymentPlanned = canManagePayments;
+  const canSetPaid = canManagePayments;
   const canClose = useMemo(() => data?.isCreator || myRoles.includes("ADMIN"), [data?.isCreator, myRoles]);
   const canEditRequest = useMemo(
     () => data?.isCreator || myRoles.includes("ADMIN"),
@@ -764,9 +839,15 @@ export default function RequestDetailPage() {
   }, [data?.request?._id, data?.request?.updatedAt]);
   useEffect(() => {
     setNewCommentMentions((current) =>
-      current.filter((item) => newComment.includes(`@${item.name}`)),
+      current.filter((item) => newComment.includes(`@${item.token}`)),
     );
   }, [newComment]);
+
+  useEffect(() => {
+    setEditingMentions((current) =>
+      current.filter((item) => editingBody.includes(`@${item.token}`)),
+    );
+  }, [editingBody]);
 
   if (data === null) {
     return (
@@ -848,23 +929,60 @@ export default function RequestDetailPage() {
   const viewerAccessEmails = new Set(
     viewerAccessEntries.map((item) => item.email.trim().toLowerCase()),
   );
-  const availableForwardRoles = (approvalRole: string) =>
-    ADDITIONAL_APPROVAL_ROLES.filter(
-      (role) => role !== approvalRole && !approvals.some((item) => item.role === role),
-    );
-  const mentionDraft = findMentionDraft(newComment, commentCursor);
-  const mentionSuggestions =
-    !mentionDraft || !(activeContacts ?? []).length
-      ? []
-      : (activeContacts ?? [])
-          .filter((item) => {
-            if (!mentionDraft.query) {
-              return true;
-            }
-            const label = getPersonDisplayName(item).toLowerCase();
-            return label.includes(mentionDraft.query) || item.email.toLowerCase().includes(mentionDraft.query);
-          })
-          .slice(0, 6);
+  const getForwardableHodDepartments = (approval: { role: string; department?: string }) => {
+    const existingDepartments = approvals
+      .filter((item) => item.role === "HOD")
+      .map((item) => item.department)
+      .filter(Boolean) as string[];
+    return HOD_DEPARTMENTS.filter((department) => {
+      if (existingDepartments.includes(department)) {
+        return false;
+      }
+      if (approval.role === "HOD" && approval.department === department) {
+        return false;
+      }
+      if (myRoles.includes("HOD") && (data.hodDepartments ?? []).includes(department)) {
+        return false;
+      }
+      return true;
+    });
+  };
+  const availableForwardRoles = (approval: { role: string; department?: string }) =>
+    ADDITIONAL_APPROVAL_ROLES.filter((role) => {
+      if (role === approval.role && role !== "HOD") {
+        return false;
+      }
+      if (role !== "HOD" && myRoles.includes(role)) {
+        return false;
+      }
+      if (role === "HOD") {
+        return getForwardableHodDepartments(approval).length > 0;
+      }
+      return !approvals.some((item) => item.role === role);
+    });
+  const newCommentMentionDraft = findMentionDraft(newComment, commentCursor);
+  const editingMentionDraft = editingId ? findMentionDraft(editingBody, editingCursor) : null;
+  const buildMentionSuggestions = (draft: { query: string } | null) => {
+    if (!draft) {
+      return [] as MentionCandidate[];
+    }
+    const suggestions = (activeContacts ?? [])
+      .filter((item) => {
+        if (!draft.query) {
+          return true;
+        }
+        const label = getPersonDisplayName(item).toLowerCase();
+        return label.includes(draft.query) || item.email.toLowerCase().includes(draft.query);
+      })
+      .slice(0, 6)
+      .map(toMentionCandidate);
+    if (!suggestions.length && isAgimaEmail(draft.query)) {
+      suggestions.push(createManualMentionCandidate(draft.query));
+    }
+    return suggestions;
+  };
+  const newCommentMentionSuggestions = buildMentionSuggestions(newCommentMentionDraft);
+  const editingMentionSuggestions = buildMentionSuggestions(editingMentionDraft);
   const viewerAccessSuggestions = !viewerAccessQuery.trim()
     ? []
     : (activeContacts ?? [])
@@ -876,13 +994,16 @@ export default function RequestDetailPage() {
           return label.includes(query) || item.email.toLowerCase().includes(query);
         })
         .slice(0, 8);
+  const manualViewerAccessEmail = isAgimaEmail(viewerAccessQuery.trim())
+    ? normalizeEmail(viewerAccessQuery.trim())
+    : null;
   const baseStatusSummary =
     canSetPaymentPlanned && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
       ? getBuhPaymentStatusSummary(request)
       : getRequestStatusSummary(request, approvals);
   const isActionableForViewer =
     request.status === "pending" &&
-    approvals.some((approval) => approval.status === "pending" && canDecide.has(approval.role));
+    approvals.some((approval) => approval.status === "pending" && canCurrentUserDecideApproval(approval));
   const statusSummary =
     request.status === "pending" && !baseStatusSummary.label.startsWith("Частично согласовано")
       ? getPendingStatusPresentation(isActionableForViewer)
@@ -1191,27 +1312,60 @@ export default function RequestDetailPage() {
   }
 
   async function handleDecision(
-    role: string,
+    approval: { _id: Id<"approvals">; role: string; department?: string },
     decision: "approved" | "rejected",
-    additionalRole?: string,
+    options?: {
+      additionalRoles?: string[];
+      additionalHodDepartments?: string[];
+      forwardMode?: "approve" | "defer";
+    },
   ) {
     setError(null);
-    if (decision === "rejected" && !commentByRole[role]?.trim()) {
+    const approvalKey = getApprovalIdentity({
+      _id: approval._id,
+      role: approval.role,
+      department: approval.department,
+    });
+    if (decision === "rejected" && !commentByRole[approvalKey]?.trim()) {
       setError("Комментарий обязателен для отказа");
       return;
     }
-    setSubmittingRole(role);
+    if (options?.forwardMode && !(options.additionalRoles?.length ?? 0)) {
+      setError("Выберите хотя бы одну роль для дополнительного согласования");
+      return;
+    }
+    if (
+      options?.additionalRoles?.includes("HOD") &&
+      !(options.additionalHodDepartments?.length ?? 0)
+    ) {
+      setError("Выберите хотя бы один цех для руководителя цеха");
+      return;
+    }
+    setSubmittingRole(approvalKey);
     try {
       await decide({
         requestId: request._id,
-        role: role as any,
+        role: approval.role as any,
+        department: approval.department,
         decision,
-        comment: commentByRole[role],
-        additionalRole: decision === "approved" && additionalRole ? (additionalRole as any) : undefined,
+        comment: commentByRole[approvalKey],
+        additionalRoles:
+          decision === "approved" && options?.additionalRoles?.length
+            ? (options.additionalRoles as any)
+            : undefined,
+        additionalHodDepartments:
+          decision === "approved" && options?.additionalRoles?.includes("HOD")
+            ? options.additionalHodDepartments
+            : undefined,
+        forwardMode: decision === "approved" ? options?.forwardMode : undefined,
       });
-      setForwardRoleByApproval((current) => ({
+      setForwardRolesByApproval((current) => ({
         ...current,
-        [role]: "",
+        [approvalKey]: [],
+      }));
+      setForwardHodDepartmentsByApproval((current) => ({
+        ...current,
+        [approvalKey]: [],
       }));
       router.refresh();
     } catch (err) {
@@ -1252,26 +1406,38 @@ export default function RequestDetailPage() {
     }
     setError(null);
     try {
-      await editComment({ id: editingId, body: editingBody });
+      await editComment({ id: editingId, body: editingBody, mentions: editingMentions });
       setEditingId(null);
       setEditingBody("");
+      setEditingMentions([]);
+      setEditingCursor(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось изменить комментарий");
     }
   }
 
-  function handleMentionSelect(person: ActiveContact) {
-    if (!mentionDraft) {
+  function handleMentionSelect(person: MentionCandidate, mode: "new" | "edit") {
+    const draft = mode === "new" ? newCommentMentionDraft : editingMentionDraft;
+    if (!draft) {
       return;
     }
-    const textarea = newCommentRef.current;
-    const cursor = textarea?.selectionStart ?? commentCursor;
-    const { nextValue, nextCursor, mention } = insertMention(newComment, cursor, mentionDraft, person);
-    setNewComment(nextValue);
-    setNewCommentMentions((current) =>
-      Array.from(new Map([...current, mention].map((item) => [item.email, item])).values()),
-    );
-    setCommentCursor(nextCursor);
+    const textarea = mode === "new" ? newCommentRef.current : null;
+    const cursor = mode === "new" ? (textarea?.selectionStart ?? commentCursor) : editingCursor;
+    const currentBody = mode === "new" ? newComment : editingBody;
+    const { nextValue, nextCursor, mention } = insertMention(currentBody, cursor, draft, person);
+    if (mode === "new") {
+      setNewComment(nextValue);
+      setNewCommentMentions((current) =>
+        Array.from(new Map([...current, mention].map((item) => [item.email, item])).values()),
+      );
+      setCommentCursor(nextCursor);
+    } else {
+      setEditingBody(nextValue);
+      setEditingMentions((current) =>
+        Array.from(new Map([...current, mention].map((item) => [item.email, item])).values()),
+      );
+      setEditingCursor(nextCursor);
+    }
     requestAnimationFrame(() => {
       textarea?.focus();
       textarea?.setSelectionRange(nextCursor, nextCursor);
@@ -1279,8 +1445,9 @@ export default function RequestDetailPage() {
   }
 
   async function handleGrantViewerAccess() {
-    if (!selectedViewerAccessEmail) {
-      setViewerAccessError("Выберите человека, которому нужно дать доступ");
+    const targetEmail = selectedViewerAccess?.email ?? manualViewerAccessEmail;
+    if (!targetEmail) {
+      setViewerAccessError("Выберите человека или укажите корпоративную почту");
       return;
     }
     setViewerAccessError(null);
@@ -1288,13 +1455,30 @@ export default function RequestDetailPage() {
     try {
       await grantViewerAccess({
         id: request._id,
-        targetEmail: selectedViewerAccessEmail,
+        targetEmail,
+        targetName: selectedViewerAccess?.name,
       });
       setViewerAccessQuery("");
-      setSelectedViewerAccessEmail(null);
+      setSelectedViewerAccess(null);
       router.refresh();
     } catch (err) {
       setViewerAccessError(err instanceof Error ? err.message : "Не удалось выдать доступ");
+    } finally {
+      setGrantingViewerAccess(false);
+    }
+  }
+
+  async function handleRevokeViewerAccess(targetEmail: string) {
+    setViewerAccessError(null);
+    setGrantingViewerAccess(true);
+    try {
+      await revokeViewerAccess({
+        id: request._id,
+        targetEmail,
+      });
+      router.refresh();
+    } catch (err) {
+      setViewerAccessError(err instanceof Error ? err.message : "Не удалось отозвать доступ");
     } finally {
       setGrantingViewerAccess(false);
     }
@@ -1342,17 +1526,18 @@ export default function RequestDetailPage() {
               <Button
                 type="button"
                 variant="outline"
+                disabled={approvalReminderSent}
                 onClick={async () => {
                   setError(null);
                   try {
                     await remindApproval({ requestId: request._id });
-                    router.refresh();
+                    setApprovalReminderSent(true);
                   } catch (err) {
                     setError(err instanceof Error ? err.message : "Не удалось отправить напоминание");
                   }
                 }}
               >
-                Напомнить о согласовании
+                {approvalReminderSent ? "✓ Напоминание отправлено!" : "Напомнить о согласовании"}
               </Button>
             ) : null}
           </div>
@@ -1832,15 +2017,43 @@ export default function RequestDetailPage() {
                       {(canSetPaymentPlanned || canSetPaid) ? (
                         <div className="space-y-3 rounded-lg border border-border/70 p-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-medium">Платежи</div>
-                            <p className="text-xs text-muted-foreground">
-                              Нераспределенная сумма к оплате: {formatAmountPair({
-                                amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
-                                amountWithVat: unallocatedPaymentAmounts.amountWithVat,
-                                currency: request.currency,
-                                vatRate: request.vatRate,
-                              })}
-                            </p>
+                            <div className="space-y-1">
+                              <div className="text-sm font-medium">Платежи</div>
+                              <p className="text-xs text-muted-foreground">
+                                Нераспределенная сумма к оплате: {formatAmountPair({
+                                  amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
+                                  amountWithVat: unallocatedPaymentAmounts.amountWithVat,
+                                  currency: request.currency,
+                                  vatRate: request.vatRate,
+                                })}
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <p className="text-xs text-muted-foreground max-w-sm text-right">
+                                В день оплаты финотдел получит автоматическое уведомление. Нажмите, если хотите напомнить дополнительно
+                              </p>
+                              <div className="flex justify-end">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={paymentReminderSent}
+                                  onClick={async () => {
+                                    setPaymentActionError(null);
+                                    try {
+                                      await remindPayment({ requestId: request._id });
+                                      setPaymentReminderSent(true);
+                                    } catch (err) {
+                                      setPaymentActionError(
+                                        err instanceof Error ? err.message : "Не удалось отправить напоминание об оплате",
+                                      );
+                                    }
+                                  }}
+                                >
+                                  {paymentReminderSent ? "✓ Напоминание отправлено!" : "Напомнить об оплате"}
+                                </Button>
+                              </div>
+                            </div>
                           </div>
 
                           {paymentTimelineRows.length ? (
@@ -2169,18 +2382,32 @@ export default function RequestDetailPage() {
                         .map((item) => (
                           <div
                             key={`${item.email}-${item.source}`}
-                            className="rounded-lg border border-border px-3 py-2 text-sm"
+                            className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm"
                           >
-                            <div className="font-medium">
-                              {item.fullName ? `${item.fullName} · ` : ""}
-                              {item.email}
+                            <div>
+                              <div className="font-medium">
+                                {item.fullName ? `${item.fullName} · ` : ""}
+                                {item.email}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {item.source === "mention" ? "Доступ через @" : "Доступ выдан вручную"}
+                                {item.grantedByName || item.grantedByEmail
+                                  ? ` · ${item.grantedByName ? `${item.grantedByName} · ` : ""}${item.grantedByEmail}`
+                                  : ""}
+                              </div>
                             </div>
-                            <div className="text-xs text-muted-foreground">
-                              {item.source === "mention" ? "Доступ через @" : "Доступ выдан вручную"}
-                              {item.grantedByName || item.grantedByEmail
-                                ? ` · ${item.grantedByName ? `${item.grantedByName} · ` : ""}${item.grantedByEmail}`
-                                : ""}
-                            </div>
+                            {canManageViewerAccess ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="border-rose-300 text-rose-700 hover:bg-rose-50"
+                                disabled={grantingViewerAccess}
+                                onClick={() => handleRevokeViewerAccess(item.email)}
+                              >
+                                Убрать доступ
+                              </Button>
+                            ) : null}
                           </div>
                         ))}
                     </div>
@@ -2195,7 +2422,7 @@ export default function RequestDetailPage() {
                         value={viewerAccessQuery}
                         onChange={(event) => {
                           setViewerAccessQuery(event.target.value);
-                          setSelectedViewerAccessEmail(null);
+                          setSelectedViewerAccess(null);
                           setViewerAccessError(null);
                         }}
                         placeholder="Начните вводить имя или почту"
@@ -2208,7 +2435,10 @@ export default function RequestDetailPage() {
                               type="button"
                               className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
                               onClick={() => {
-                                setSelectedViewerAccessEmail(item.email);
+                                setSelectedViewerAccess({
+                                  email: item.email,
+                                  name: getPersonDisplayName(item),
+                                });
                                 setViewerAccessQuery(getPersonDisplayName(item));
                                 setViewerAccessError(null);
                               }}
@@ -2219,11 +2449,17 @@ export default function RequestDetailPage() {
                           ))}
                         </div>
                       ) : null}
+                      {!viewerAccessSuggestions.length && manualViewerAccessEmail ? (
+                        <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-sm">
+                          Почта не найдена в сервисе. Можно выдать доступ вручную на{" "}
+                          <span className="font-medium">{manualViewerAccessEmail}</span>.
+                        </div>
+                      ) : null}
                       <div className="flex justify-end">
                         <Button
                           type="button"
                           onClick={handleGrantViewerAccess}
-                          disabled={grantingViewerAccess || !selectedViewerAccessEmail}
+                          disabled={grantingViewerAccess || (!selectedViewerAccess && !manualViewerAccessEmail)}
                         >
                           Дать доступ
                         </Button>
@@ -2533,7 +2769,8 @@ export default function RequestDetailPage() {
               ) : null}
               {request.incomingAmount !== undefined || request.incomingAmountWithVat !== undefined ? (
                 <div>
-                  <div className="text-muted-foreground">Сколько платят нам (сумма отгрузки)</div>
+                  <div className="text-muted-foreground">Сумма отгрузки</div>
+                  <p className="mt-1 text-xs text-muted-foreground">Сколько платят нам</p>
                   <p className="mt-1">
                     {formatAmountPair({
                       amountWithoutVat: request.incomingAmount,
@@ -2827,152 +3064,229 @@ export default function RequestDetailPage() {
               {approvals.length ? (
                 approvals.map((approval) => (
                   <div key={approval._id} className="rounded-lg border border-border p-4 text-sm">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="font-medium">{getRoleLabel(approval.role)}</div>
-                      <span
-                        className={`rounded-full border px-3 py-1 text-xs ${
-                          approval.status === "pending"
-                            ? canDecide.has(approval.role)
-                              ? "border-amber-200 bg-amber-100 text-amber-800"
-                              : "border-amber-200 bg-amber-50 text-amber-700"
-                            : getApprovalStatusClass(approval.status)
-                        }`}
-                      >
-                        {approval.status === "approved"
-                          ? "Согласовано"
-                          : approval.status === "rejected"
-                            ? "Не согласовано"
-                            : "Ожидает согласования"}
-                      </span>
-                    </div>
-                    {approval.comment && (
-                      <p className="mt-2 text-muted-foreground">Комментарий: {approval.comment}</p>
-                    )}
-                    {approval.requestedByRole ? (
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        Дополнительное согласование после {getRoleLabel(approval.requestedByRole)}
-                        {approval.requestedByName || approval.requestedByEmail
-                          ? ` · ${approval.requestedByName ? `${approval.requestedByName} · ` : ""}${approval.requestedByEmail ?? ""}`
-                          : ""}
-                      </p>
-                    ) : null}
+                    {(() => {
+                      const approvalKey = getApprovalIdentity({
+                        _id: String(approval._id),
+                        role: approval.role,
+                        department: approval.department,
+                      });
+                      const availableRoles = availableForwardRoles(approval);
+                      const selectedForwardRoles = forwardRolesByApproval[approvalKey] ?? [];
+                      const selectedForwardHodDepartments =
+                        forwardHodDepartmentsByApproval[approvalKey] ?? [];
+                      const forwardableHodDepartments = getForwardableHodDepartments(approval);
 
-                    {approval.status === "pending" && canDecide.has(approval.role) && (
-                      <div className="mt-4 space-y-3">
-                        <div className="space-y-2">
-                          <Label htmlFor={`comment-${approval.role}`}>Комментарий</Label>
-                          <Textarea
-                            id={`comment-${approval.role}`}
-                            value={commentByRole[approval.role] ?? ""}
-                            onChange={(event) =>
-                              setCommentByRole((current) => ({
-                                ...current,
-                                [approval.role]: event.target.value,
-                              }))
-                            }
-                            rows={3}
-                            placeholder="Обязателен для отказа"
-                          />
-                        </div>
-                        {availableForwardRoles(approval.role).length ? (
-                          <div className="space-y-2">
-                            <Label htmlFor={`forward-role-${approval.role}`}>Дополнительное согласование после вас</Label>
-                            <Select
-                              value={forwardRoleByApproval[approval.role] ?? ""}
-                              onValueChange={(value) =>
-                                setForwardRoleByApproval((current) => ({
-                                  ...current,
-                                  [approval.role]: value,
-                                }))
-                              }
+                      return (
+                        <>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="font-medium">
+                              {getRoleLabel(approval.role)}
+                              {approval.role === "HOD" && approval.department
+                                ? ` · ${approval.department}`
+                                : ""}
+                            </div>
+                            <span
+                              className={`rounded-full border px-3 py-1 text-xs ${
+                                approval.status === "pending"
+                                  ? canCurrentUserDecideApproval(approval)
+                                    ? "border-amber-200 bg-amber-100 text-amber-800"
+                                    : "border-amber-200 bg-amber-50 text-amber-700"
+                                  : getApprovalStatusClass(approval.status)
+                              }`}
                             >
-                              <SelectTrigger id={`forward-role-${approval.role}`}>
-                                <SelectValue placeholder="Выберите роль" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {availableForwardRoles(approval.role).map((role) => (
-                                  <SelectItem key={role} value={role}>
-                                    {getRoleLabel(role)}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                              {approval.status === "approved"
+                                ? "Согласовано"
+                                : approval.status === "rejected"
+                                  ? "Не согласовано"
+                                  : "Ожидает согласования"}
+                            </span>
                           </div>
-                        ) : null}
-                        <div className="flex gap-3">
-                          <Button
-                            type="button"
-                            onClick={() => handleDecision(approval.role, "approved")}
-                            disabled={submittingRole === approval.role}
-                          >
-                            Согласовать
-                          </Button>
-                          {availableForwardRoles(approval.role).length ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() => {
-                                const nextRole = forwardRoleByApproval[approval.role];
-                                if (!nextRole) {
-                                  setError("Выберите роль, чтобы отправить заявку на дополнительное согласование");
-                                  return;
-                                }
-                                void handleDecision(approval.role, "approved", nextRole);
-                              }}
-                              disabled={submittingRole === approval.role}
-                            >
-                              Согласовать и отправить дальше
-                            </Button>
+                          {approval.comment ? (
+                            <p className="mt-2 text-muted-foreground">Комментарий: {approval.comment}</p>
                           ) : null}
-                          <Button
-                            type="button"
-                            variant="destructive"
-                            onClick={() => handleDecision(approval.role, "rejected")}
-                            disabled={submittingRole === approval.role}
-                          >
-                            Отклонить
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                    {approval.status === "pending" && isAdmin && !canDecide.has(approval.role) ? (
-                      <div className="mt-4 space-y-3">
-                        <div className="space-y-2">
-                          <Label htmlFor={`admin-comment-${approval.role}`}>Комментарий админа</Label>
-                          <Textarea
-                            id={`admin-comment-${approval.role}`}
-                            value={adminCommentByRole[approval.role] ?? ""}
-                            onChange={(event) =>
-                              setAdminCommentByRole((current) => ({
-                                ...current,
-                                [approval.role]: event.target.value,
-                              }))
-                            }
-                            rows={2}
-                            placeholder={`Например, согласовано как ${getRoleLabel(approval.role)}`}
-                          />
-                        </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={async () => {
-                            setError(null);
-                            try {
-                              await adminApproveAsRole({
-                                requestId: request._id,
-                                role: approval.role,
-                                comment: adminCommentByRole[approval.role],
-                              });
-                              router.refresh();
-                            } catch (err) {
-                              setError(err instanceof Error ? err.message : "Не удалось согласовать как роль");
-                            }
-                          }}
-                        >
-                          Согласовать как {getRoleLabel(approval.role)}
-                        </Button>
-                      </div>
-                    ) : null}
+                          {approval.requestedByRole ? (
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              Дополнительное согласование после {getRoleLabel(approval.requestedByRole)}
+                              {approval.requestedByName || approval.requestedByEmail
+                                ? ` · ${approval.requestedByName ? `${approval.requestedByName} · ` : ""}${approval.requestedByEmail ?? ""}`
+                                : ""}
+                            </p>
+                          ) : null}
+
+                          {approval.status === "pending" && canCurrentUserDecideApproval(approval) ? (
+                            <div className="mt-4 space-y-3">
+                              <div className="space-y-2">
+                                <Label htmlFor={`comment-${approvalKey}`}>Комментарий</Label>
+                                <Textarea
+                                  id={`comment-${approvalKey}`}
+                                  value={commentByRole[approvalKey] ?? ""}
+                                  onChange={(event) =>
+                                    setCommentByRole((current) => ({
+                                      ...current,
+                                      [approvalKey]: event.target.value,
+                                    }))
+                                  }
+                                  rows={3}
+                                  placeholder="Обязателен для отказа"
+                                />
+                              </div>
+                              {availableRoles.length ? (
+                                <div className="space-y-3 rounded-lg border border-border p-3">
+                                  <div className="space-y-1">
+                                    <Label>Дополнительное согласование после вас</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                      Можно выбрать несколько ролей.
+                                    </p>
+                                  </div>
+                                  <div className="grid gap-2 sm:grid-cols-2">
+                                    {availableRoles.map((role) => (
+                                      <label key={role} className="flex items-center gap-2 text-sm">
+                                        <Checkbox
+                                          checked={selectedForwardRoles.includes(role)}
+                                          onCheckedChange={() =>
+                                            setForwardRolesByApproval((current) => {
+                                              const currentRoles = current[approvalKey] ?? [];
+                                              const nextRoles = currentRoles.includes(role)
+                                                ? currentRoles.filter((item) => item !== role)
+                                                : [...currentRoles, role];
+                                              if (role === "HOD" && currentRoles.includes(role)) {
+                                                setForwardHodDepartmentsByApproval((departments) => ({
+                                                  ...departments,
+                                                  [approvalKey]: [],
+                                                }));
+                                              }
+                                              return {
+                                                ...current,
+                                                [approvalKey]: nextRoles,
+                                              };
+                                            })
+                                          }
+                                        />
+                                        {getRoleLabel(role)}
+                                      </label>
+                                    ))}
+                                  </div>
+                                  {selectedForwardRoles.includes("HOD") ? (
+                                    <div className="space-y-2">
+                                      <Label>Какие цеха нужны руководителю цеха</Label>
+                                      <div className="grid gap-2 sm:grid-cols-2">
+                                        {forwardableHodDepartments.map((department) => (
+                                          <label key={department} className="flex items-center gap-2 text-sm">
+                                            <Checkbox
+                                              checked={selectedForwardHodDepartments.includes(department)}
+                                              onCheckedChange={() =>
+                                                setForwardHodDepartmentsByApproval((current) => {
+                                                  const currentDepartments = current[approvalKey] ?? [];
+                                                  return {
+                                                    ...current,
+                                                    [approvalKey]: currentDepartments.includes(department)
+                                                      ? currentDepartments.filter((item) => item !== department)
+                                                      : [...currentDepartments, department],
+                                                  };
+                                                })
+                                              }
+                                            />
+                                            {department}
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                              <div className="flex flex-wrap gap-3">
+                                <Button
+                                  type="button"
+                                  onClick={() => handleDecision(approval, "approved")}
+                                  disabled={submittingRole === approvalKey}
+                                >
+                                  Согласовать
+                                </Button>
+                                {availableRoles.length ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() =>
+                                      handleDecision(approval, "approved", {
+                                        additionalRoles: selectedForwardRoles,
+                                        additionalHodDepartments: selectedForwardHodDepartments,
+                                        forwardMode: "approve",
+                                      })
+                                    }
+                                    disabled={submittingRole === approvalKey}
+                                  >
+                                    Согласовать и отправить дальше
+                                  </Button>
+                                ) : null}
+                                {availableRoles.length ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() =>
+                                      handleDecision(approval, "approved", {
+                                        additionalRoles: selectedForwardRoles,
+                                        additionalHodDepartments: selectedForwardHodDepartments,
+                                        forwardMode: "defer",
+                                      })
+                                    }
+                                    disabled={submittingRole === approvalKey}
+                                  >
+                                    Отложить согласование и отправить дальше
+                                  </Button>
+                                ) : null}
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  onClick={() => handleDecision(approval, "rejected")}
+                                  disabled={submittingRole === approvalKey}
+                                >
+                                  Отклонить
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                          {approval.status === "pending" && isAdmin && !canCurrentUserDecideApproval(approval) ? (
+                            <div className="mt-4 space-y-3">
+                              <div className="space-y-2">
+                                <Label htmlFor={`admin-comment-${approvalKey}`}>Комментарий админа</Label>
+                                <Textarea
+                                  id={`admin-comment-${approvalKey}`}
+                                  value={adminCommentByRole[approvalKey] ?? ""}
+                                  onChange={(event) =>
+                                    setAdminCommentByRole((current) => ({
+                                      ...current,
+                                      [approvalKey]: event.target.value,
+                                    }))
+                                  }
+                                  rows={2}
+                                  placeholder={`Например, согласовано как ${getRoleLabel(approval.role)}`}
+                                />
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={async () => {
+                                  setError(null);
+                                  try {
+                                    await adminApproveAsRole({
+                                      requestId: request._id,
+                                      role: approval.role,
+                                      department: approval.department,
+                                      comment: adminCommentByRole[approvalKey],
+                                    });
+                                    router.refresh();
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : "Не удалось согласовать как роль");
+                                  }
+                                }}
+                              >
+                                Согласовать как {getRoleLabel(approval.role)}
+                              </Button>
+                            </div>
+                          ) : null}
+                        </>
+                      );
+                    })()}
                   </div>
                 ))
               ) : (
@@ -3015,10 +3329,37 @@ export default function RequestDetailPage() {
                           <form className="mt-2 space-y-2" onSubmit={handleEditComment}>
                             <Textarea
                               value={editingBody}
-                              onChange={(event) => setEditingBody(event.target.value)}
+                              onChange={(event) => {
+                                setEditingBody(event.target.value);
+                                setEditingCursor(event.target.selectionStart ?? event.target.value.length);
+                              }}
+                              onClick={(event) => setEditingCursor(event.currentTarget.selectionStart ?? 0)}
+                              onKeyUp={(event) => setEditingCursor(event.currentTarget.selectionStart ?? 0)}
                               rows={3}
                               required
                             />
+                            {editingMentionDraft && editingMentionSuggestions.length ? (
+                              <div className="rounded-lg border border-border bg-background">
+                                {editingMentionSuggestions.map((person) => (
+                                  <button
+                                    key={person.key}
+                                    type="button"
+                                    className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
+                                    onClick={() => handleMentionSelect(person, "edit")}
+                                  >
+                                    <span className="font-medium">{person.name}</span>
+                                    <span className="text-xs text-muted-foreground">{person.email}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                            {editingMentionDraft && !editingMentionSuggestions.length ? (
+                              <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                                Не нашли человека? Введите корпоративную почту целиком, например
+                                {" "}
+                                <span className="font-medium">@name@agima.ru</span>.
+                              </div>
+                            ) : null}
                             <div className="flex gap-2">
                               <Button type="submit" size="sm">
                                 Сохранить
@@ -3030,6 +3371,8 @@ export default function RequestDetailPage() {
                                 onClick={() => {
                                   setEditingId(null);
                                   setEditingBody("");
+                                  setEditingMentions([]);
+                                  setEditingCursor(0);
                                 }}
                               >
                                 Отмена
@@ -3038,7 +3381,7 @@ export default function RequestDetailPage() {
                           </form>
                         ) : (
                           <p className="mt-2 whitespace-pre-wrap">
-                            {renderCommentBody(comment.body, comment.mentions)}
+                            {renderCommentBody(comment.body, normalizeCommentMentions(comment.mentions))}
                           </p>
                         )}
                         <div className="mt-2 flex gap-2 text-xs">
@@ -3058,6 +3401,8 @@ export default function RequestDetailPage() {
                               onClick={() => {
                                 setEditingId(comment._id);
                                 setEditingBody(comment.body);
+                                setEditingMentions(normalizeCommentMentions(comment.mentions));
+                                setEditingCursor(comment.body.length);
                               }}
                             >
                               Редактировать
@@ -3086,19 +3431,26 @@ export default function RequestDetailPage() {
                   placeholder="Напишите комментарий. Для упоминания введите @"
                   required
                 />
-                {mentionDraft && mentionSuggestions.length ? (
+                {newCommentMentionDraft && newCommentMentionSuggestions.length ? (
                   <div className="rounded-lg border border-border bg-background">
-                    {mentionSuggestions.map((person) => (
+                    {newCommentMentionSuggestions.map((person) => (
                       <button
-                        key={person.email}
+                        key={person.key}
                         type="button"
                         className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
-                        onClick={() => handleMentionSelect(person)}
+                        onClick={() => handleMentionSelect(person, "new")}
                       >
-                        <span className="font-medium">{getPersonDisplayName(person)}</span>
+                        <span className="font-medium">{person.name}</span>
                         <span className="text-xs text-muted-foreground">{person.email}</span>
                       </button>
                     ))}
+                  </div>
+                ) : null}
+                {newCommentMentionDraft && !newCommentMentionSuggestions.length ? (
+                  <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                    Не нашли человека? Введите корпоративную почту целиком, например
+                    {" "}
+                    <span className="font-medium">@name@agima.ru</span>.
                   </div>
                 ) : null}
                 {replyTo && (

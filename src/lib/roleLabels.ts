@@ -1,5 +1,6 @@
 const ROLE_LABELS: Record<string, string> = {
   AD: "Автор заявки",
+  HOD: "Руководитель цеха",
 };
 
 export function getRoleLabel(role: string) {

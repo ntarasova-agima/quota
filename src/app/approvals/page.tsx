@@ -25,6 +25,7 @@ function getRequestDisplayTitle(request: {
 export default function ApprovalsPage() {
   const items = useQuery(api.approvals.listPendingForMe);
   const myRoles = useQuery(api.roles.myRoles);
+  const [taskTypeFilter, setTaskTypeFilter] = useState<"all" | "approval" | "payment">("all");
   const [buhQuickFilter, setBuhQuickFilter] = useState<"all" | "today" | "overdue">("all");
   const todayStart = useMemo(() => {
     const value = new Date();
@@ -40,19 +41,27 @@ export default function ApprovalsPage() {
     if (!items?.length) {
       return items ?? [];
     }
-    if (!myRoles?.includes("BUH") || buhQuickFilter === "all") {
-      return items;
+    const isFinanceRole = myRoles?.some((role) => ["BUH", "CFD"].includes(role));
+    let filtered = items;
+    if (taskTypeFilter !== "all") {
+      filtered = filtered.filter(({ kind }) =>
+        taskTypeFilter === "payment" ? kind === "payment" : kind !== "payment",
+      );
     }
-    return items.filter(({ kind, request }) => {
+    if (!isFinanceRole || buhQuickFilter === "all") {
+      return filtered;
+    }
+    return filtered.filter(({ kind, request }) => {
       if (kind !== "payment" || !request.neededBy) {
-        return false;
+        return taskTypeFilter === "approval";
       }
       if (buhQuickFilter === "today") {
         return request.neededBy >= todayStart && request.neededBy < tomorrowStart;
       }
       return request.neededBy < todayStart;
     });
-  }, [buhQuickFilter, items, myRoles, todayStart, tomorrowStart]);
+  }, [buhQuickFilter, items, myRoles, taskTypeFilter, todayStart, tomorrowStart]);
+  const isFinanceRole = myRoles?.some((role) => ["BUH", "CFD"].includes(role));
 
   return (
     <RequireAuth>
@@ -64,14 +73,42 @@ export default function ApprovalsPage() {
             <CardHeader>
               <CardTitle>Требуют вашего действия</CardTitle>
               <CardDescription className="text-zinc-500">
-                {myRoles?.includes("BUH")
+                {isFinanceRole
                   ? "Согласования и заявки, ожидающие оплаты."
                   : myRoles?.includes("HOD")
                     ? "Заявки, где нужно провалидировать часы и прямые затраты по вашим цехам."
-                  : "Список заявок, где вы указаны как согласующий."}
+                    : "Список заявок, где вы указаны как согласующий."}
               </CardDescription>
-              {myRoles?.includes("BUH") ? (
-                <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2">
+                {(myRoles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "HOD", "ADMIN", "BUH"].includes(role))) ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant={taskTypeFilter === "all" ? "default" : "outline"}
+                      onClick={() => setTaskTypeFilter("all")}
+                    >
+                      Все действия
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={taskTypeFilter === "approval" ? "default" : "outline"}
+                      onClick={() => setTaskTypeFilter("approval")}
+                    >
+                      Нужно согласовать
+                    </Button>
+                    {isFinanceRole ? (
+                      <Button
+                        type="button"
+                        variant={taskTypeFilter === "payment" ? "default" : "outline"}
+                        onClick={() => setTaskTypeFilter("payment")}
+                      >
+                        Нужна оплата
+                      </Button>
+                    ) : null}
+                  </>
+                ) : null}
+                {isFinanceRole ? (
+                  <>
                   <Button
                     type="button"
                     variant={buhQuickFilter === "all" ? "default" : "outline"}
@@ -93,8 +130,9 @@ export default function ApprovalsPage() {
                   >
                     Просрочено
                   </Button>
-                </div>
-              ) : null}
+                  </>
+                ) : null}
+              </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
