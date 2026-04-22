@@ -32,7 +32,10 @@ import {
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
+  ACCOUNTING_REQUEST_AREA,
+  ADMINISTRATION_REQUEST_AREA,
   SERVICE_PURCHASE_CATEGORY,
+  getRequestAreaForCategory,
   isAiToolsFundingSource as isAiToolsFundingSourceValue,
   isServiceRecipientCategory,
   normalizeFundingSource,
@@ -59,6 +62,7 @@ type SpecialistView = {
   hours?: number;
   directCost?: number;
   hodConfirmed?: boolean;
+  buhConfirmed?: boolean;
   validationSkipped?: boolean;
 };
 
@@ -607,7 +611,7 @@ export default function RequestDetailPage() {
     approval.role === "HOD"
       ? myRoles.includes("HOD") &&
         Boolean(approval.department && (data?.hodDepartments ?? []).includes(approval.department))
-      : canDecide.has(approval.role);
+      : canDecide.has(approval.role) || (approval.role === "BUH" && myRoles.includes("CFD"));
   const isAdmin = useMemo(() => myRoles.includes("ADMIN"), [myRoles]);
   const isNbd = useMemo(() => myRoles.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles.includes("AI-BOSS"), [myRoles]);
@@ -622,8 +626,22 @@ export default function RequestDetailPage() {
       myRoles.includes("NBD"),
     [myRoles],
   );
-  const showStandaloneTagEditor = canSetCfdTag && !myRoles.includes("BUH");
-  const cfdTags = useQuery(api.cfdTags.list, isAuthenticated && canSetCfdTag ? {} : "skip");
+  const showStandaloneTagEditor = canSetCfdTag;
+  const requestTagArea = data?.request
+    ? ((data.request.requestArea ?? getRequestAreaForCategory(data.request.category)) as string)
+    : ACCOUNTING_REQUEST_AREA;
+  const cfdTags = useQuery(
+    api.cfdTags.list,
+    isAuthenticated && canSetCfdTag
+      ? {
+          requestArea: requestTagArea,
+          department:
+            requestTagArea === ADMINISTRATION_REQUEST_AREA
+              ? data?.request?.department
+              : undefined,
+        }
+      : "skip",
+  );
   const canSetAwaitingPayment = useMemo(() => data?.isCreator || myRoles.includes("ADMIN"), [data?.isCreator, myRoles]);
   const canManagePayments = useMemo(
     () => myRoles.includes("BUH") || myRoles.includes("CFD"),
@@ -758,13 +776,26 @@ export default function RequestDetailPage() {
       const targetAmounts = getPaymentTargetAmounts(data.request);
       const remainingAmounts = getPaymentRemainingAmounts(data.request);
       const activePlannedRow = buildPaymentTimelineRows(data.request).find((row) => row.status === "planned");
+      const shouldUsePrepaymentAsNext =
+        data.request.prepaymentRequired &&
+        !data.request.paymentPlannedAt &&
+        (data.request.plannedPaymentSplits?.length ?? 0) === 0 &&
+        (data.request.paymentSplits?.length ?? 0) === 0;
+      const nextPlannedAmount = shouldUsePrepaymentAsNext
+        ? data.request.prepaymentAmount
+        : data.request.plannedPaymentAmount ?? remainingAmounts.amountWithoutVat;
+      const nextPlannedAmountWithVat = shouldUsePrepaymentAsNext
+        ? data.request.prepaymentAmountWithVat
+        : data.request.plannedPaymentAmountWithVat ?? remainingAmounts.amountWithVat;
       setSelectedTag(data.request.cfdTag ?? "");
       setCustomTagName("");
       setFinplanCostIdsRaw((data.request.finplanCostIds ?? []).join(", "));
       setPaymentPlannedDate(
         data.request.paymentPlannedAt
           ? new Date(data.request.paymentPlannedAt).toISOString().slice(0, 10)
-          : "",
+          : shouldUsePrepaymentAsNext && data.request.prepaymentDate
+            ? new Date(data.request.prepaymentDate).toISOString().slice(0, 10)
+            : "",
       );
       setPaymentTargetAmount(
         targetAmounts.amountWithoutVat !== undefined ? String(targetAmounts.amountWithoutVat) : "",
@@ -773,18 +804,10 @@ export default function RequestDetailPage() {
         targetAmounts.amountWithVat !== undefined ? String(targetAmounts.amountWithVat) : "",
       );
       setPaymentPlannedAmount(
-        data.request.plannedPaymentAmount !== undefined
-          ? String(data.request.plannedPaymentAmount)
-          : remainingAmounts.amountWithoutVat !== undefined
-            ? String(remainingAmounts.amountWithoutVat)
-            : "",
+        nextPlannedAmount !== undefined ? String(nextPlannedAmount) : "",
       );
       setPaymentPlannedAmountWithVat(
-        data.request.plannedPaymentAmountWithVat !== undefined
-          ? String(data.request.plannedPaymentAmountWithVat)
-          : remainingAmounts.amountWithVat !== undefined
-            ? String(remainingAmounts.amountWithVat)
-            : "",
+        nextPlannedAmountWithVat !== undefined ? String(nextPlannedAmountWithVat) : "",
       );
       setPaymentExecutedAmount(
         activePlannedRow?.amountWithoutVat !== undefined
@@ -823,6 +846,10 @@ export default function RequestDetailPage() {
     data?.request?.paymentResidualAmount,
     data?.request?.paymentResidualAmountWithVat,
     data?.request?.paymentSplits,
+    data?.request?.prepaymentRequired,
+    data?.request?.prepaymentAmount,
+    data?.request?.prepaymentAmountWithVat,
+    data?.request?.prepaymentDate,
     data?.request?.amount,
     data?.request?.amountWithVat,
     data?.request?.paidAt,
@@ -1746,7 +1773,14 @@ export default function RequestDetailPage() {
                         try {
                           let nextTag = selectedTag || undefined;
                           if (customTagName.trim()) {
-                            await createTag({ name: customTagName.trim() });
+                            await createTag({
+                              name: customTagName.trim(),
+                              requestArea: requestTagArea,
+                              department:
+                                requestTagArea === ADMINISTRATION_REQUEST_AREA
+                                  ? request.department
+                                  : undefined,
+                            });
                             nextTag = customTagName.trim();
                             setSelectedTag(customTagName.trim());
                             setCustomTagName("");
@@ -1920,7 +1954,14 @@ export default function RequestDetailPage() {
                               try {
                                 let nextTag = selectedTag || undefined;
                                 if (customTagName.trim()) {
-                                  await createTag({ name: customTagName.trim() });
+                                  await createTag({
+                                    name: customTagName.trim(),
+                                    requestArea: requestTagArea,
+                                    department:
+                                      requestTagArea === ADMINISTRATION_REQUEST_AREA
+                                        ? request.department
+                                        : undefined,
+                                  });
                                   nextTag = customTagName.trim();
                                   setSelectedTag(customTagName.trim());
                                   setCustomTagName("");
@@ -2106,7 +2147,7 @@ export default function RequestDetailPage() {
                                           <Button
                                             type="button"
                                             variant="outline"
-                                            className="h-8 border-rose-300 text-rose-700 hover:bg-rose-50"
+                                            className="h-9 border-rose-300 text-rose-700 hover:bg-rose-50"
                                             disabled={updatingStatus}
                                             onClick={() => handleCancelPaymentRow(row)}
                                           >
@@ -2667,6 +2708,57 @@ export default function RequestDetailPage() {
               ) : null}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
+                  <div className="text-muted-foreground">Направление</div>
+                  <p className="mt-1">{request.requestArea ?? getRequestAreaForCategory(request.category)}</p>
+                </div>
+                {request.department ? (
+                  <div>
+                    <div className="text-muted-foreground">Цех</div>
+                    <p className="mt-1">{request.department}</p>
+                  </div>
+                ) : null}
+              </div>
+              {(request.contractLink || request.contractAttachmentCount) ? (
+                <div>
+                  <div className="text-muted-foreground">Договор с контрагентом</div>
+                  {request.contractLink ? (
+                    <p className="mt-1 break-all">{request.contractLink}</p>
+                  ) : null}
+                  {request.contractAttachmentCount ? (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Файлов договора: {request.contractAttachmentCount}
+                      {request.lastContractAttachmentName ? ` · ${request.lastContractAttachmentName}` : ""}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {request.dueDiligenceChecked || request.dueDiligenceJiraLink ? (
+                <div>
+                  <div className="text-muted-foreground">Должная осмотрительность</div>
+                  <p className="mt-1">
+                    {request.dueDiligenceChecked ? "Проведена" : "Не отмечена"}
+                    {request.dueDiligenceJiraLink ? ` · ${request.dueDiligenceJiraLink}` : ""}
+                  </p>
+                </div>
+              ) : null}
+              {request.prepaymentRequired ? (
+                <div>
+                  <div className="text-muted-foreground">Требуется предоплата</div>
+                  <p className="mt-1">
+                    {formatAmountPair({
+                      amountWithoutVat: request.prepaymentAmount,
+                      amountWithVat: request.prepaymentAmountWithVat,
+                      currency: request.currency,
+                      vatRate: request.vatRate,
+                    })}
+                    {request.prepaymentDate
+                      ? ` · ${new Date(request.prepaymentDate).toLocaleDateString("ru-RU")}`
+                      : ""}
+                  </p>
+                </div>
+              ) : null}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
                   <div className="text-muted-foreground">Дедлайн согласования</div>
                   <p className="mt-1">
                     <HoverHint label="Дата, до которой нужно принять решение по заявке">
@@ -2679,7 +2771,7 @@ export default function RequestDetailPage() {
                   </p>
                 </div>
                 <div>
-                  <div className="text-muted-foreground">Когда нужно оплатить</div>
+                  <div className="text-muted-foreground">Ожидание затраты</div>
                   <p className="mt-1">
                     <HoverHint label="Дата, к которой заявку нужно оплатить">
                       <span>
@@ -2811,16 +2903,20 @@ export default function RequestDetailPage() {
                       {section.items.length ? (
                         section.items.map((item) => {
                           const draft = specialistDrafts[item.id] ?? item;
-                          const canEditThis =
+                          const canBuhValidateThis = !item.validationSkipped && (myRoles.includes("BUH") || isAdmin);
+                          const canHodValidateThis =
                             !item.validationSkipped &&
                             data.canHodEditSpecialists &&
                             (item.department
                               ? (data.hodDepartments ?? []).includes(item.department)
                               : true);
+                          const canEditThis =
+                            !item.validationSkipped &&
+                            (canHodValidateThis || canBuhValidateThis);
                           return (
                             <div
                               key={item.id}
-                              className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.8fr)]"
+                              className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]"
                             >
                               <Input
                                 className="min-w-0"
@@ -2922,6 +3018,7 @@ export default function RequestDetailPage() {
                                           hours: draft.hours,
                                           directCost: draft.directCost,
                                           hodConfirmed: checked,
+                                          buhConfirmed: draft.buhConfirmed,
                                         });
                                         router.refresh();
                                       } catch (err) {
@@ -2934,17 +3031,60 @@ export default function RequestDetailPage() {
                                         setSavingSpecialistId(null);
                                       }
                                     }}
-                                    disabled={!canEditThis || savingSpecialistId === item.id}
+                                    disabled={!canHodValidateThis || savingSpecialistId === item.id}
                                   />
                                   Подтверждено цехом
                                 </label>
                               )}
-                              <div className="sm:col-span-5 text-xs text-muted-foreground">
+                              {!item.validationSkipped ? (
+                                <label className="flex items-center gap-2 text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(draft.buhConfirmed)}
+                                    onChange={async (event) => {
+                                      const checked = event.target.checked;
+                                      setSpecialistDrafts((current) => ({
+                                        ...current,
+                                        [item.id]: { ...draft, buhConfirmed: checked },
+                                      }));
+                                      if (!canBuhValidateThis) {
+                                        return;
+                                      }
+                                      setSavingSpecialistId(item.id);
+                                      setError(null);
+                                      try {
+                                        await updateContestSpecialist({
+                                          requestId: request._id,
+                                          specialistId: item.id,
+                                          name: draft.name,
+                                          department: draft.department,
+                                          hours: draft.hours,
+                                          directCost: draft.directCost,
+                                          hodConfirmed: draft.hodConfirmed,
+                                          buhConfirmed: checked,
+                                        });
+                                        router.refresh();
+                                      } catch (err) {
+                                        setError(
+                                          err instanceof Error
+                                            ? err.message
+                                            : "Не удалось обновить специалиста",
+                                        );
+                                      } finally {
+                                        setSavingSpecialistId(null);
+                                      }
+                                    }}
+                                    disabled={!canBuhValidateThis || savingSpecialistId === item.id}
+                                  />
+                                  Подтверждено BUH
+                                </label>
+                              ) : null}
+                              <div className="sm:col-span-6 text-xs text-muted-foreground">
                                 {item.validationSkipped
                                   ? "Цех не получает задачу на валидацию по этой записи."
-                                  : item.hodConfirmed
-                                    ? "Прямые затраты подтверждены руководителем цеха."
-                                    : "Ждет валидации руководителя цеха."}
+                                  : item.hodConfirmed || item.buhConfirmed
+                                    ? `Прямые затраты подтверждены${item.hodConfirmed ? " руководителем цеха" : ""}${item.hodConfirmed && item.buhConfirmed ? " и" : ""}${item.buhConfirmed ? " BUH" : ""}.`
+                                    : "Ждет валидации руководителя цеха или BUH."}
                               </div>
                             </div>
                           );

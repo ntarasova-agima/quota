@@ -19,6 +19,7 @@ import type * as http from "../http.js";
 import type * as quotaUsage from "../quotaUsage.js";
 import type * as quotas from "../quotas.js";
 import type * as requestAccessHelpers from "../requestAccessHelpers.js";
+import type * as requestWorkflow from "../requestWorkflow.js";
 import type * as requests from "../requests.js";
 import type * as roles from "../roles.js";
 import type * as timeline from "../timeline.js";
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   quotaUsage: typeof quotaUsage;
   quotas: typeof quotas;
   requestAccessHelpers: typeof requestAccessHelpers;
+  requestWorkflow: typeof requestWorkflow;
   requests: typeof requests;
   roles: typeof roles;
   timeline: typeof timeline;

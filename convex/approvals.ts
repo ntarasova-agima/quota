@@ -69,10 +69,14 @@ export const listPendingForMe = query({
     }
 
     const approvals: any[] = [];
-    for (const role of roles) {
+    const approvalRoles = Array.from(new Set([
+      ...roles,
+      ...(roles.includes("CFD") ? ["BUH"] : []),
+    ]));
+    for (const role of approvalRoles) {
       let items = await ctx.db
         .query("approvals")
-        .withIndex("by_role", (q) => q.eq("role", role))
+        .withIndex("by_role", (q) => q.eq("role", role as any))
         .filter((q) => q.eq(q.field("status"), "pending"))
         .collect();
       if (role === "HOD") {
@@ -99,7 +103,7 @@ export const listPendingForMe = query({
           category: request.category,
           specialists: request.specialists,
           requiredHodDepartments: request.requiredHodDepartments,
-        }).some((department) => (roleRecord.hodDepartments ?? []).includes(department))
+        }).some((department) => Boolean(department && (roleRecord.hodDepartments ?? []).includes(department)))
           ? "hod"
           : "approval";
       results.push({ approval, request, kind });
@@ -139,7 +143,7 @@ export const listPendingForMe = query({
           category: request.category,
           specialists: request.specialists,
           requiredHodDepartments: request.requiredHodDepartments,
-        }).filter((department) => departments.includes(department));
+        }).filter((department) => Boolean(department && departments.includes(department)));
         if (!pendingDepartments.length) {
           continue;
         }
@@ -205,7 +209,10 @@ export const decide = mutation({
       .query("roles")
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
-    if (!roleRecord || !roleRecord.active || !roleRecord.roles.includes(args.role)) {
+    const canActAsRole =
+      roleRecord?.roles.includes(args.role) ||
+      (args.role === "BUH" && roleRecord?.roles.includes("CFD"));
+    if (!roleRecord || !roleRecord.active || !canActAsRole) {
       throw new Error("Not authorized for this role");
     }
     if (

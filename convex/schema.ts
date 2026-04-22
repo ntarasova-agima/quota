@@ -51,10 +51,10 @@ const viewerAccessValidator = v.object({
 });
 
 const commentMentionValidator = v.object({
-  key: v.string(),
+  key: v.optional(v.string()),
   email: v.string(),
   name: v.string(),
-  token: v.string(),
+  token: v.optional(v.string()),
 });
 
 const schema = defineSchema({
@@ -83,6 +83,8 @@ const schema = defineSchema({
     originalCreatedByName: v.optional(v.string()),
     archivedAuthorTransferredAt: v.optional(v.number()),
     archivedAt: v.optional(v.number()),
+    requestArea: v.optional(v.string()),
+    department: v.optional(v.string()),
     category: v.string(),
     amount: v.number(),
     amountWithVat: v.optional(v.number()),
@@ -92,6 +94,15 @@ const schema = defineSchema({
     counterparty: v.optional(v.string()),
     paymentMethod: v.optional(v.string()),
     cfdTag: v.optional(v.string()),
+    contractLink: v.optional(v.string()),
+    contractAttachmentCount: v.optional(v.number()),
+    lastContractAttachmentName: v.optional(v.string()),
+    dueDiligenceChecked: v.optional(v.boolean()),
+    dueDiligenceJiraLink: v.optional(v.string()),
+    prepaymentRequired: v.optional(v.boolean()),
+    prepaymentAmount: v.optional(v.number()),
+    prepaymentAmountWithVat: v.optional(v.number()),
+    prepaymentDate: v.optional(v.number()),
     justification: v.string(),
     details: v.optional(v.string()),
     investmentReturn: v.optional(v.string()),
@@ -119,6 +130,7 @@ const schema = defineSchema({
           hours: v.optional(v.number()),
           directCost: v.optional(v.number()),
           hodConfirmed: v.optional(v.boolean()),
+          buhConfirmed: v.optional(v.boolean()),
           validationSkipped: v.optional(v.boolean()),
         }),
       ),
@@ -215,6 +227,7 @@ const schema = defineSchema({
     fileName: v.string(),
     fileSize: v.optional(v.number()),
     contentType: v.optional(v.string()),
+    attachmentType: v.optional(v.union(v.literal("general"), v.literal("contract"))),
     uploadedByEmail: v.string(),
     uploadedByName: v.optional(v.string()),
     createdAt: v.number(),
@@ -278,10 +291,31 @@ const schema = defineSchema({
   }).index("by_monthKey", ["monthKey"]),
   cfdTags: defineTable({
     name: v.string(),
+    requestArea: v.optional(v.string()),
+    department: v.optional(v.string()),
     active: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_name", ["name"]),
+  })
+    .index("by_name", ["name"])
+    .index("by_area_department", ["requestArea", "department"]),
+  administrationQuotas: defineTable({
+    monthKey: v.string(),
+    departmentKey: v.string(),
+    departmentName: v.optional(v.string()),
+    year: v.number(),
+    month: v.number(),
+    quota: v.number(),
+    quotaWithVat: v.optional(v.number()),
+    adjustedQuota: v.optional(v.number()),
+    adjustedQuotaWithVat: v.optional(v.number()),
+    vatRate: v.optional(v.number()),
+    spent: v.number(),
+    spentWithVat: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_monthKey", ["monthKey"])
+    .index("by_month_department", ["monthKey", "departmentKey"]),
   cfdQuotas: defineTable({
     monthKey: v.string(),
     year: v.number(),

@@ -1,11 +1,14 @@
 import {
   AI_TOOLS_REQUEST_CATEGORY,
+  ACCOUNTING_REQUEST_CATEGORIES,
+  ADMINISTRATION_REQUEST_CATEGORIES,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
 } from "./requestRules";
+import { HOD_DEPARTMENTS, type HodDepartment } from "./departments";
 
-export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "CFD", "HOD"] as const;
-export const DEFAULT_REQUIRED_ROLES = ["NBD", "COO", "CFD"] as const;
+export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD"] as const;
+export const DEFAULT_REQUIRED_ROLES = ["NBD", "COO", "CFD", "BUH"] as const;
 export const ALL_ROLES = ["AD", "NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"] as const;
 export const ALL_ROLES_WITH_HOD = [
   "AD",
@@ -38,18 +41,11 @@ export const EXPENSE_CATEGORIES = [
   "Совместный мерч",
 ] as const;
 
-export const HOD_DEPARTMENTS = [
-  "Проектирование и дизайн",
-  "PHP",
-  "Frontend",
-  "Mobile",
-  "Python/Node.js",
-  "Продуктовая аналитика",
-  "Маркетинг",
-  "PR",
-  "HR",
-  "Юр. отдел",
-] as const;
+export const REQUEST_AREAS = ["Аккаунтинг", "Администрация"] as const;
+export const REQUEST_CATEGORIES_BY_AREA = {
+  Аккаунтинг: ACCOUNTING_REQUEST_CATEGORIES,
+  Администрация: ADMINISTRATION_REQUEST_CATEGORIES,
+} as const;
 
 export const CURRENCIES = ["RUB", "USD"] as const;
 
@@ -74,4 +70,5 @@ export const FUNDING_SOURCE_CODES: Record<string, string> = {
 };
 
 export type RoleOption = (typeof ALL_ROLES_WITH_HOD)[number];
-export type HodDepartment = (typeof HOD_DEPARTMENTS)[number];
+export { HOD_DEPARTMENTS, type HodDepartment };
+export type RequestArea = (typeof REQUEST_AREAS)[number];

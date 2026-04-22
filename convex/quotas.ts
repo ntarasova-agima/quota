@@ -5,11 +5,16 @@ import { getCurrentEmail } from "./authHelpers";
 import { sumQuotaUsageByMonth, sumQuotaUsageByMonthAndTag } from "./quotaUsage";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
+  ADMINISTRATION_REQUEST_AREA,
   SERVICE_PURCHASE_CATEGORY,
+  isAdministrationRequestCategory,
   isAiToolsFundingSource,
   normalizeRequestCategory,
 } from "../src/lib/requestRules";
+import { HOD_DEPARTMENTS, normalizeHodDepartment } from "../src/lib/departments";
 import { DEFAULT_VAT_RATE, getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
+
+const ADMINISTRATION_TOTAL_KEY = "__total__";
 
 function monthKeyFromDate(date: Date) {
   const year = date.getFullYear();
@@ -45,7 +50,7 @@ function getSpentPair(
 
 async function ensureAnyRole(
   ctx: any,
-  roles: Array<"NBD" | "AI-BOSS" | "CFD" | "COO">,
+  roles: Array<"NBD" | "AI-BOSS" | "CFD" | "COO" | "BUH" | "ADMIN" | "HOD">,
 ) {
   const userId = await getAuthUserId(ctx);
   if (!userId) {
@@ -66,7 +71,7 @@ async function ensureAnyRole(
   if (!hasRole) {
     throw new Error("Not authorized");
   }
-  return { email };
+  return { email, record };
 }
 
 async function ensureNbd(ctx: any) {
@@ -83,6 +88,103 @@ async function ensureCfd(ctx: any) {
 
 async function ensureCoo(ctx: any) {
   return await ensureAnyRole(ctx, ["COO"]);
+}
+
+async function ensureAdministrationQuotaViewer(ctx: any) {
+  return await ensureAnyRole(ctx, ["CFD", "COO", "BUH", "ADMIN", "HOD"]);
+}
+
+async function ensureAdministrationQuotaEditor(ctx: any) {
+  return await ensureAnyRole(ctx, ["CFD", "BUH", "ADMIN"]);
+}
+
+function isAdministrationQuotaRequest(request: any) {
+  return (
+    (request.requestArea ?? undefined) === ADMINISTRATION_REQUEST_AREA ||
+    isAdministrationRequestCategory(request.category)
+  );
+}
+
+function effectiveQuotaAmount(row?: { quota?: number; adjustedQuota?: number }) {
+  return row?.adjustedQuota ?? row?.quota ?? 0;
+}
+
+function effectiveQuotaAmountWithVat(row?: {
+  quota?: number;
+  quotaWithVat?: number;
+  adjustedQuota?: number;
+  adjustedQuotaWithVat?: number;
+  vatRate?: number;
+}) {
+  if (!row) {
+    return 0;
+  }
+  if (row.adjustedQuota !== undefined) {
+    return getQuotaWithVat(row.adjustedQuota, row.adjustedQuotaWithVat, row.vatRate);
+  }
+  return getQuotaWithVat(row.quota ?? 0, row.quotaWithVat, row.vatRate);
+}
+
+function emptyUsage() {
+  return { amountWithoutVat: 0, amountWithVat: 0 };
+}
+
+function addUsage(
+  current: { amountWithoutVat: number; amountWithVat: number },
+  amount: { amountWithoutVat: number; amountWithVat: number },
+) {
+  current.amountWithoutVat += amount.amountWithoutVat;
+  current.amountWithVat += amount.amountWithVat;
+}
+
+function getAdministrationUsage(
+  requests: any[],
+  options: { tag?: string; department?: string } = {},
+) {
+  const byMonth = new Map<string, {
+    total: { amountWithoutVat: number; amountWithVat: number };
+    departments: Map<string, { amountWithoutVat: number; amountWithVat: number }>;
+    tags: Map<string, { amountWithoutVat: number; amountWithVat: number }>;
+  }>();
+  const normalizedDepartment = normalizeHodDepartment(options.department);
+  for (const request of requests) {
+    if (!isAdministrationQuotaRequest(request)) {
+      continue;
+    }
+    const requestDepartment = normalizeHodDepartment(request.department);
+    if (normalizedDepartment && requestDepartment !== normalizedDepartment) {
+      continue;
+    }
+    const tag = request.cfdTag?.trim() || "Без тега";
+    if (options.tag !== undefined) {
+      if (options.tag === "" && request.cfdTag) {
+        continue;
+      }
+      if (options.tag !== "" && tag !== options.tag) {
+        continue;
+      }
+    }
+    for (const allocation of sumQuotaUsageByMonth([request], () => true).entries()) {
+      const [monthKey, amount] = allocation;
+      if (!byMonth.has(monthKey)) {
+        byMonth.set(monthKey, {
+          total: emptyUsage(),
+          departments: new Map(),
+          tags: new Map(),
+        });
+      }
+      const month = byMonth.get(monthKey)!;
+      addUsage(month.total, amount);
+      const departmentKey = requestDepartment ?? "Без цеха";
+      const departmentUsage = month.departments.get(departmentKey) ?? emptyUsage();
+      addUsage(departmentUsage, amount);
+      month.departments.set(departmentKey, departmentUsage);
+      const tagUsage = month.tags.get(tag) ?? emptyUsage();
+      addUsage(tagUsage, amount);
+      month.tags.set(tag, tagUsage);
+    }
+  }
+  return byMonth;
 }
 
 export const listByMonthKeys = query({
@@ -520,6 +622,180 @@ export const updateCooQuota = mutation({
       spentWithVat: spent.amountWithVat,
       updatedAt: Date.now(),
     });
+  },
+});
+
+export const listAdministrationByMonthKeys = query({
+  args: {
+    monthKeys: v.array(v.string()),
+    department: v.optional(v.string()),
+    tag: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const access = await ensureAdministrationQuotaViewer(ctx);
+    const roleRecord = access.record;
+    const isWideViewer = roleRecord?.roles?.some((role: string) =>
+      ["CFD", "COO", "BUH", "ADMIN"].includes(role),
+    );
+    const hodDepartments = (roleRecord?.hodDepartments ?? []).map((department: string) =>
+      normalizeHodDepartment(department),
+    );
+    const requestedDepartment = normalizeHodDepartment(args.department);
+    const visibleDepartments = isWideViewer
+      ? HOD_DEPARTMENTS
+      : HOD_DEPARTMENTS.filter((department) => hodDepartments.includes(department));
+    const departmentFilter = requestedDepartment && visibleDepartments.includes(requestedDepartment as any)
+      ? requestedDepartment
+      : !isWideViewer && visibleDepartments.length === 1
+        ? visibleDepartments[0]
+        : undefined;
+
+    const quotaRows = await ctx.db.query("administrationQuotas").collect();
+    const requests = await ctx.db.query("requests").collect();
+    const usageByMonth = getAdministrationUsage(requests, {
+      department: departmentFilter,
+      tag: args.tag,
+    });
+    const rowMap = new Map(
+      quotaRows.map((row: any) => [`${row.monthKey}:${row.departmentKey}`, row]),
+    );
+
+    return args.monthKeys.map((key) => {
+      const { year, month } = monthInfoFromKey(key);
+      const totalRow = rowMap.get(`${key}:${ADMINISTRATION_TOTAL_KEY}`);
+      const monthUsage = usageByMonth.get(key);
+      const totalSpent = monthUsage?.total ?? emptyUsage();
+      const departmentRows = visibleDepartments
+        .filter((department) => !departmentFilter || department === departmentFilter)
+        .map((department) => {
+          const row = rowMap.get(`${key}:${department}`);
+          const spent = monthUsage?.departments.get(department) ?? emptyUsage();
+          return {
+            monthKey: key,
+            year,
+            month,
+            departmentKey: department,
+            departmentName: department,
+            quota: row?.quota ?? 0,
+            quotaWithVat: row ? getQuotaWithVat(row.quota, row.quotaWithVat, row.vatRate) : 0,
+            adjustedQuota: row?.adjustedQuota,
+            adjustedQuotaWithVat:
+              row?.adjustedQuota !== undefined
+                ? getQuotaWithVat(row.adjustedQuota, row.adjustedQuotaWithVat, row.vatRate)
+                : undefined,
+            vatRate: normalizeVatRate(row?.vatRate),
+            spent: spent.amountWithoutVat,
+            spentWithVat: spent.amountWithVat,
+            remaining: effectiveQuotaAmount(row) - spent.amountWithoutVat,
+            remainingWithVat: effectiveQuotaAmountWithVat(row) - spent.amountWithVat,
+            updatedAt: row?.updatedAt ?? 0,
+          };
+        });
+      const distributed = departmentRows.reduce((sum, row) => sum + effectiveQuotaAmount(row), 0);
+      const distributedWithVat = departmentRows.reduce((sum, row) => sum + effectiveQuotaAmountWithVat(row), 0);
+      const totalQuota = totalRow?.quota ?? 0;
+      const totalQuotaWithVat = totalRow ? getQuotaWithVat(totalRow.quota, totalRow.quotaWithVat, totalRow.vatRate) : 0;
+      const totalAdjustedQuota = totalRow?.adjustedQuota;
+      const totalAdjustedQuotaWithVat =
+        totalRow?.adjustedQuota !== undefined
+          ? getQuotaWithVat(totalRow.adjustedQuota, totalRow.adjustedQuotaWithVat, totalRow.vatRate)
+          : undefined;
+      const effectiveTotal = totalAdjustedQuota ?? totalQuota;
+      const effectiveTotalWithVat = totalAdjustedQuotaWithVat ?? totalQuotaWithVat;
+      const tagBreakdown = Array.from(monthUsage?.tags.entries() ?? [])
+        .sort((a, b) => b[1].amountWithVat - a[1].amountWithVat)
+        .map(([tag, amount]) => ({ tag, ...amount }));
+      return {
+        monthKey: key,
+        year,
+        month,
+        total: {
+          departmentKey: ADMINISTRATION_TOTAL_KEY,
+          quota: totalQuota,
+          quotaWithVat: totalQuotaWithVat,
+          adjustedQuota: totalAdjustedQuota,
+          adjustedQuotaWithVat: totalAdjustedQuotaWithVat,
+          vatRate: normalizeVatRate(totalRow?.vatRate),
+          spent: totalSpent.amountWithoutVat,
+          spentWithVat: totalSpent.amountWithVat,
+          remaining: effectiveTotal - totalSpent.amountWithoutVat,
+          remainingWithVat: effectiveTotalWithVat - totalSpent.amountWithVat,
+          distributed,
+          distributedWithVat,
+          unallocated: effectiveTotal - distributed,
+          unallocatedWithVat: effectiveTotalWithVat - distributedWithVat,
+          updatedAt: totalRow?.updatedAt ?? 0,
+        },
+        departments: departmentRows,
+        tagBreakdown,
+        canEdit: roleRecord?.roles?.some((role: string) => ["CFD", "BUH", "ADMIN"].includes(role)) ?? false,
+      };
+    });
+  },
+});
+
+export const updateAdministrationQuota = mutation({
+  args: {
+    monthKey: v.string(),
+    departmentKey: v.string(),
+    quota: v.number(),
+    quotaWithVat: v.optional(v.number()),
+    adjustedQuota: v.optional(v.number()),
+    adjustedQuotaWithVat: v.optional(v.number()),
+    vatRate: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await ensureAdministrationQuotaEditor(ctx);
+    const { year, month } = monthInfoFromKey(args.monthKey);
+    const departmentKey =
+      args.departmentKey === ADMINISTRATION_TOTAL_KEY
+        ? ADMINISTRATION_TOTAL_KEY
+        : normalizeHodDepartment(args.departmentKey);
+    if (!departmentKey) {
+      throw new Error("Укажите цех");
+    }
+    if (
+      departmentKey !== ADMINISTRATION_TOTAL_KEY &&
+      !HOD_DEPARTMENTS.includes(departmentKey as any)
+    ) {
+      throw new Error("Так не бывает");
+    }
+    const requests = await ctx.db.query("requests").collect();
+    const spent = getAdministrationUsage(requests, {
+      department: departmentKey === ADMINISTRATION_TOTAL_KEY ? undefined : departmentKey,
+    }).get(args.monthKey)?.total ?? emptyUsage();
+    const vatRate = normalizeVatRate(args.vatRate);
+    const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
+    const adjustedQuotaWithVat =
+      args.adjustedQuota !== undefined
+        ? getQuotaWithVat(args.adjustedQuota, args.adjustedQuotaWithVat, vatRate)
+        : undefined;
+    const existing = await ctx.db
+      .query("administrationQuotas")
+      .withIndex("by_month_department", (q: any) =>
+        q.eq("monthKey", args.monthKey).eq("departmentKey", departmentKey),
+      )
+      .first();
+    const patch = {
+      monthKey: args.monthKey,
+      departmentKey,
+      departmentName: departmentKey === ADMINISTRATION_TOTAL_KEY ? undefined : departmentKey,
+      year,
+      month,
+      quota: args.quota,
+      quotaWithVat,
+      adjustedQuota: args.adjustedQuota,
+      adjustedQuotaWithVat,
+      vatRate,
+      spent: spent.amountWithoutVat,
+      spentWithVat: spent.amountWithVat,
+      updatedAt: Date.now(),
+    };
+    if (existing) {
+      await ctx.db.patch(existing._id, patch);
+      return existing._id;
+    }
+    return await ctx.db.insert("administrationQuotas", patch);
   },
 });
 

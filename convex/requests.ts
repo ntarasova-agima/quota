@@ -31,12 +31,18 @@ import {
   INTERNAL_COSTS_FUNDING_SOURCE,
   PRESALES_FUNDING_SOURCE,
   SERVICE_PURCHASE_CATEGORY,
+  getRequestAreaForCategory,
   getFundingOwnerRoles,
+  isAdministrationRequestCategory,
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
   normalizeRequestCategory,
 } from "../src/lib/requestRules";
+import {
+  isKnownHodDepartment,
+  normalizeHodDepartment,
+} from "../src/lib/departments";
 import {
   calculateIncomingRatio,
   formatMonthKeyLabel,
@@ -129,6 +135,19 @@ function isSameMonth(left?: number, right?: number) {
   return getMonthKey(left) === getMonthKey(right);
 }
 
+function startOfDate(timestamp: number) {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function isBeforeDate(left?: number, right?: number) {
+  if (left === undefined || right === undefined) {
+    return false;
+  }
+  return startOfDate(left) < startOfDate(right);
+}
+
 function normalizeSpecialists(
   specialists: Array<{
     id: string;
@@ -138,6 +157,7 @@ function normalizeSpecialists(
     hours?: number;
     directCost?: number;
     hodConfirmed?: boolean;
+    buhConfirmed?: boolean;
     validationSkipped?: boolean;
   }>,
 ) {
@@ -146,7 +166,7 @@ function normalizeSpecialists(
       id: item.id,
       name: item.name?.trim() ?? "",
       sourceType: normalizeContestSpecialistSource(item.sourceType),
-      department: item.department?.trim() || undefined,
+      department: normalizeHodDepartment(item.department),
       hours:
         typeof item.hours === "number" && Number.isFinite(item.hours)
           ? item.hours
@@ -156,6 +176,7 @@ function normalizeSpecialists(
           ? item.directCost
           : undefined,
       hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
+      buhConfirmed: item.validationSkipped ? true : item.buhConfirmed ?? false,
       validationSkipped: item.validationSkipped ?? false,
     }))
     .filter(
@@ -189,6 +210,7 @@ function isDepartmentSpecialistReady(
     department?: string;
     directCost?: number;
     hodConfirmed?: boolean;
+    buhConfirmed?: boolean;
     validationSkipped?: boolean;
   },
 ) {
@@ -200,6 +222,7 @@ function areContestDepartmentsValidated(
     department?: string;
     directCost?: number;
     hodConfirmed?: boolean;
+    buhConfirmed?: boolean;
     validationSkipped?: boolean;
   }>,
 ) {
@@ -750,12 +773,15 @@ const specialistValidator = v.object({
   hours: v.optional(v.number()),
   directCost: v.optional(v.number()),
   hodConfirmed: v.optional(v.boolean()),
+  buhConfirmed: v.optional(v.boolean()),
   validationSkipped: v.optional(v.boolean()),
 });
 
 const paymentDueFilterEnum = v.union(v.literal("today"), v.literal("overdue"));
 
 const requestPayloadValidator = {
+  requestArea: v.optional(v.string()),
+  department: v.optional(v.string()),
   title: v.string(),
   category: v.string(),
   amount: v.number(),
@@ -765,6 +791,14 @@ const requestPayloadValidator = {
   fundingSource: v.string(),
   counterparty: v.string(),
   paymentMethod: v.optional(v.string()),
+  contractLink: v.optional(v.string()),
+  pendingContractFileCount: v.optional(v.number()),
+  dueDiligenceChecked: v.optional(v.boolean()),
+  dueDiligenceJiraLink: v.optional(v.string()),
+  prepaymentRequired: v.optional(v.boolean()),
+  prepaymentAmount: v.optional(v.number()),
+  prepaymentAmountWithVat: v.optional(v.number()),
+  prepaymentDate: v.optional(v.number()),
   justification: v.string(),
   details: v.optional(v.string()),
   investmentReturn: v.optional(v.string()),
@@ -796,6 +830,15 @@ const requestFieldLabels: Record<string, string> = {
   fundingSource: "Источник финансирования",
   counterparty: "Кому платим мы",
   paymentMethod: "Способ оплаты",
+  requestArea: "Тип направления",
+  department: "Цех",
+  contractLink: "Ссылка на договор",
+  dueDiligenceChecked: "Проведена должная осмотрительность",
+  dueDiligenceJiraLink: "Ссылка на задачу в Jira",
+  prepaymentRequired: "Требуется предоплата",
+  prepaymentAmount: "Предоплата без НДС",
+  prepaymentAmountWithVat: "Предоплата с НДС",
+  prepaymentDate: "Дата предоплаты",
   justification: "Обоснование",
   details: "Детали заявки",
   investmentReturn: "Как будем возвращать инвестиции",
@@ -812,7 +855,7 @@ const requestFieldLabels: Record<string, string> = {
   requiredHodDepartments: "Руководители цехов",
   specialists: "Участники конкурсного задания",
   approvalDeadline: "Дедлайн согласования",
-  neededBy: "Когда нужно оплатить",
+  neededBy: "Ожидание затраты",
   paidBy: "Когда платят нам",
   requiredRoles: "Обязательные согласующие",
   status: "Статус заявки",
@@ -827,7 +870,8 @@ function formatValueForHistory(field: string, value: unknown) {
       field === "approvalDeadline" ||
       field === "neededBy" ||
       field === "paidBy" ||
-      field === "shipmentDate"
+      field === "shipmentDate" ||
+      field === "prepaymentDate"
     ) {
       return new Date(value).toLocaleDateString("ru-RU");
     }
@@ -858,6 +902,7 @@ function formatValueForHistory(field: string, value: unknown) {
             specialist.directCost !== undefined ? `${specialist.directCost}` : undefined,
             specialist.validationSkipped ? "валидация не требуется" : undefined,
             specialist.hodConfirmed ? "подтверждено HoD" : undefined,
+            specialist.buhConfirmed ? "подтверждено BUH" : undefined,
           ].filter(Boolean);
           return parts.join(" / ");
         }
@@ -904,6 +949,8 @@ function diffRequestFields(previous: any, next: any) {
   const fields = [
     "title",
     "category",
+    "requestArea",
+    "department",
     "amount",
     "amountWithVat",
     "vatRate",
@@ -911,6 +958,13 @@ function diffRequestFields(previous: any, next: any) {
     "fundingSource",
     "counterparty",
     "paymentMethod",
+    "contractLink",
+    "dueDiligenceChecked",
+    "dueDiligenceJiraLink",
+    "prepaymentRequired",
+    "prepaymentAmount",
+    "prepaymentAmountWithVat",
+    "prepaymentDate",
     "justification",
     "details",
     "investmentReturn",
@@ -1066,6 +1120,9 @@ function getApprovalStatusFromEntries(approvals: any[]) {
 }
 
 function validateRequestPayload(args: any) {
+  const normalizedCategory = normalizeRequestCategory(args.category);
+  const requestArea = getRequestAreaForCategory(normalizedCategory);
+  const normalizedDepartment = normalizeHodDepartment(args.department);
   const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
   const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
     category: args.category,
@@ -1083,6 +1140,8 @@ function validateRequestPayload(args: any) {
   validateOptionalMoney(args.amount, "Сумма без НДС");
   validateOptionalMoney(args.amountWithVat, "Сумма с НДС");
   validateOptionalMoney(args.incomingAmount, "Сумма отгрузки без НДС");
+  validateOptionalMoney(args.prepaymentAmount, "Предоплата без НДС");
+  validateOptionalMoney(args.prepaymentAmountWithVat, "Предоплата с НДС");
   validateOptionalMoney(
     args.incomingAmountWithVat,
     "Сумма отгрузки с НДС",
@@ -1093,9 +1152,15 @@ function validateRequestPayload(args: any) {
     vatRate: args.vatRate,
     autoCalculateAmountWithVat: true,
   });
+  const prepaymentAmounts = resolveVatAmounts({
+    amountWithoutVat: args.prepaymentAmount,
+    amountWithVat: args.prepaymentAmountWithVat,
+    vatRate: args.vatRate,
+    autoCalculateAmountWithVat: true,
+  });
   const effectiveAmounts = resolveRequestAmounts(
     {
-      category: args.category,
+      category: normalizedCategory,
       amount: args.amount,
       amountWithVat: args.amountWithVat,
       vatRate: args.vatRate,
@@ -1137,6 +1202,17 @@ function validateRequestPayload(args: any) {
   if (!args.title.trim()) {
     throw new Error("Название заявки обязательно");
   }
+  if (args.requestArea && args.requestArea !== requestArea) {
+    throw new Error("Так не бывает");
+  }
+  if (isAdministrationRequestCategory(normalizedCategory)) {
+    if (!normalizedDepartment) {
+      throw new Error("Укажите цех");
+    }
+    if (!isKnownHodDepartment(normalizedDepartment)) {
+      throw new Error("Так не бывает");
+    }
+  }
   if (
     args.category !== "Welcome-бонус" &&
     args.category !== "Конкурсное задание" &&
@@ -1157,7 +1233,7 @@ function validateRequestPayload(args: any) {
     throw new Error("Укажите дедлайн согласования");
   }
   if (!args.neededBy) {
-    throw new Error("Укажите, когда нужно оплатить");
+    throw new Error("Укажите ожидание затраты");
   }
   if (!isFundingSourceAllowedForCategory(args.category, args.fundingSource)) {
     throw new Error("Так не бывает");
@@ -1177,16 +1253,27 @@ function validateRequestPayload(args: any) {
       throw new Error("Дедлайн согласования должен быть не раньше завтрашнего дня");
     }
   }
-  if (args.neededBy !== undefined) {
-    const tomorrow = new Date();
-    tomorrow.setHours(0, 0, 0, 0);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    if (args.neededBy < tomorrow.getTime()) {
-      throw new Error("Дата оплаты должна быть не раньше завтрашнего дня");
-    }
-  }
   if (args.paidBy !== undefined && !isPaidByTimestampAllowed(args.paidBy)) {
     throw new Error("AGIMA тогда еще не было");
+  }
+  if (
+    args.prepaymentRequired &&
+    (
+      prepaymentAmounts.amountWithoutVat === undefined ||
+      prepaymentAmounts.amountWithVat === undefined ||
+      prepaymentAmounts.amountWithoutVat <= 0 ||
+      prepaymentAmounts.amountWithVat <= 0 ||
+      args.prepaymentDate === undefined
+    )
+  ) {
+    throw new Error("Укажите сумму и дату предоплаты");
+  }
+  if (
+    prepaymentAmounts.amountWithoutVat !== undefined &&
+    prepaymentAmounts.amountWithVat !== undefined &&
+    prepaymentAmounts.amountWithVat < prepaymentAmounts.amountWithoutVat
+  ) {
+    throw new Error("Предоплата с НДС не может быть меньше суммы без НДС");
   }
   if (
     args.shipmentDate !== undefined &&
@@ -1233,6 +1320,9 @@ function validateRequestPayload(args: any) {
   if (args.fundingSource === PRESALES_FUNDING_SOURCE && !effectiveRequiredRoles.includes("NBD")) {
     throw new Error("Для квот NBD обязателен NBD");
   }
+  if (!effectiveRequiredRoles.includes("BUH")) {
+    throw new Error("Для всех заявок обязателен BUH");
+  }
   if (
     args.fundingSource === "Квоты на AI-инструменты" &&
     !effectiveRequiredRoles.includes("AI-BOSS")
@@ -1256,6 +1346,23 @@ function validateRequestPayload(args: any) {
   }
   if (isServiceRecipientCategory(args.category) && (!args.clientName || !args.clientName.trim())) {
     throw new Error("Укажите получателя сервиса");
+  }
+  if (
+    effectiveAmount > 100_000 &&
+    normalizedCategory !== "Welcome-бонус" &&
+    normalizedCategory !== "Конкурсное задание" &&
+    !args.contractLink?.trim() &&
+    (args.pendingContractFileCount ?? args.existingContractAttachmentCount ?? 0) <= 0
+  ) {
+    throw new Error("Для суммы больше 100 000 нужен договор с контрагентом");
+  }
+  if (
+    effectiveAmount > 500_000 &&
+    normalizedCategory !== "Welcome-бонус" &&
+    normalizedCategory !== "Конкурсное задание" &&
+    (!args.dueDiligenceChecked || !args.dueDiligenceJiraLink?.trim())
+  ) {
+    throw new Error("Проведите должную осмотрительность и укажите ссылку на Jira");
   }
 }
 
@@ -1871,8 +1978,11 @@ export const previewEditImpact = query({
     }
 
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
+    const normalizedCategory = normalizeRequestCategory(args.category);
+    const normalizedDepartment = normalizeHodDepartment(args.department);
+    const requestArea = getRequestAreaForCategory(normalizedCategory);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
-      category: args.category,
+      category: normalizedCategory,
       requiredHodDepartments: args.requiredHodDepartments,
       specialists: normalizedSpecialists,
     });
@@ -1882,7 +1992,7 @@ export const previewEditImpact = query({
     });
     const effectiveAmounts = resolveRequestAmounts(
       {
-        category: args.category,
+        category: normalizedCategory,
         amount: args.amount,
         amountWithVat: args.amountWithVat,
         vatRate: args.vatRate,
@@ -1895,10 +2005,18 @@ export const previewEditImpact = query({
       vatRate: args.vatRate,
       autoCalculateAmountWithVat: true,
     });
+    const prepaymentAmounts = resolveVatAmounts({
+      amountWithoutVat: args.prepaymentAmount,
+      amountWithVat: args.prepaymentAmountWithVat,
+      vatRate: args.vatRate,
+      autoCalculateAmountWithVat: true,
+    });
     const nextBase = {
       ...request,
+      requestArea,
+      department: requestArea === "Администрация" ? normalizedDepartment : undefined,
       title: args.title.trim(),
-      category: args.category,
+      category: normalizedCategory,
       amount: effectiveAmounts.amount,
       amountWithVat: effectiveAmounts.amountWithVat,
       vatRate: effectiveAmounts.vatRate,
@@ -1906,6 +2024,13 @@ export const previewEditImpact = query({
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
       paymentMethod: args.paymentMethod,
+      contractLink: args.contractLink?.trim() || undefined,
+      dueDiligenceChecked: args.dueDiligenceChecked ?? false,
+      dueDiligenceJiraLink: args.dueDiligenceJiraLink?.trim() || undefined,
+      prepaymentRequired: args.prepaymentRequired ?? false,
+      prepaymentAmount: args.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
+      prepaymentAmountWithVat: args.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
+      prepaymentDate: args.prepaymentRequired ? args.prepaymentDate : undefined,
       justification: args.justification,
       details: args.details?.trim() || undefined,
       investmentReturn: args.investmentReturn?.trim() || undefined,
@@ -1966,14 +2091,26 @@ export const editRequest = mutation({
       throw new Error("Not authorized");
     }
 
-    validateRequestPayload(args);
+    validateRequestPayload({
+      ...args,
+      existingContractAttachmentCount: request.contractAttachmentCount ?? 0,
+    });
+    if (isBeforeDate(args.neededBy, request.createdAt)) {
+      throw new Error("Ожидание затраты не может быть раньше даты создания заявки");
+    }
+    if (args.prepaymentRequired && isBeforeDate(args.prepaymentDate, request.createdAt)) {
+      throw new Error("Дата предоплаты не может быть раньше даты создания заявки");
+    }
 
     const identity = await ctx.auth.getUserIdentity();
     const actorName = roleRecord?.fullName ?? identity?.name ?? undefined;
     const creatorRoles = roleRecord?.roles ?? [];
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
+    const normalizedCategory = normalizeRequestCategory(args.category);
+    const normalizedDepartment = normalizeHodDepartment(args.department);
+    const requestArea = getRequestAreaForCategory(normalizedCategory);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
-      category: args.category,
+      category: normalizedCategory,
       requiredHodDepartments: args.requiredHodDepartments,
       specialists: normalizedSpecialists,
     });
@@ -1983,7 +2120,7 @@ export const editRequest = mutation({
     });
     const effectiveAmounts = resolveRequestAmounts(
       {
-        category: args.category,
+        category: normalizedCategory,
         amount: args.amount,
         amountWithVat: args.amountWithVat,
         vatRate: args.vatRate,
@@ -1996,15 +2133,23 @@ export const editRequest = mutation({
       vatRate: args.vatRate,
       autoCalculateAmountWithVat: true,
     });
+    const prepaymentAmounts = resolveVatAmounts({
+      amountWithoutVat: args.prepaymentAmount,
+      amountWithVat: args.prepaymentAmountWithVat,
+      vatRate: args.vatRate,
+      autoCalculateAmountWithVat: true,
+    });
     const contestNeedsHodValidation =
-      args.category === "Конкурсное задание" &&
+      normalizedCategory === "Конкурсное задание" &&
       getRequiredContestHodDepartments(normalizedSpecialists).length > 0 &&
       !areContestDepartmentsValidated(normalizedSpecialists);
     const now = Date.now();
 
     const nextBase = {
+      requestArea,
+      department: requestArea === "Администрация" ? normalizedDepartment : undefined,
       title: args.title.trim(),
-      category: args.category,
+      category: normalizedCategory,
       amount: effectiveAmounts.amount,
       amountWithVat: effectiveAmounts.amountWithVat,
       vatRate: effectiveAmounts.vatRate,
@@ -2012,6 +2157,13 @@ export const editRequest = mutation({
       fundingSource: args.fundingSource,
       counterparty: args.counterparty,
       paymentMethod: args.paymentMethod,
+      contractLink: args.contractLink?.trim() || undefined,
+      dueDiligenceChecked: args.dueDiligenceChecked ?? false,
+      dueDiligenceJiraLink: args.dueDiligenceJiraLink?.trim() || undefined,
+      prepaymentRequired: args.prepaymentRequired ?? false,
+      prepaymentAmount: args.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
+      prepaymentAmountWithVat: args.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
+      prepaymentDate: args.prepaymentRequired ? args.prepaymentDate : undefined,
       justification: args.justification,
       details: args.details?.trim() || undefined,
       investmentReturn: args.investmentReturn?.trim() || undefined,
@@ -2320,12 +2472,21 @@ export const createRequest = mutation({
     const identity = await ctx.auth.getUserIdentity();
     const roleRecord = await getRoleRecord(ctx, email);
     const creatorRoles = roleRecord?.roles ?? [];
-    validateRequestPayload(args);
     const now = Date.now();
-    const requestCode = await getNextRequestCode(ctx, args.category, args.fundingSource);
+    validateRequestPayload(args);
+    if (isBeforeDate(args.neededBy, now)) {
+      throw new Error("Ожидание затраты не может быть раньше даты создания заявки");
+    }
+    if (args.prepaymentRequired && isBeforeDate(args.prepaymentDate, now)) {
+      throw new Error("Дата предоплаты не может быть раньше даты создания заявки");
+    }
+    const normalizedCategory = normalizeRequestCategory(args.category);
+    const normalizedDepartment = normalizeHodDepartment(args.department);
+    const requestArea = getRequestAreaForCategory(normalizedCategory);
+    const requestCode = await getNextRequestCode(ctx, normalizedCategory, args.fundingSource);
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
-      category: args.category,
+      category: normalizedCategory,
       requiredHodDepartments: args.requiredHodDepartments,
       specialists: normalizedSpecialists,
     });
@@ -2335,7 +2496,7 @@ export const createRequest = mutation({
     });
     const autoApprovedRoles = effectiveRequiredRoles.filter((role) => creatorRoles.includes(role));
     const contestNeedsHodValidation =
-      args.category === "Конкурсное задание" &&
+      normalizedCategory === "Конкурсное задание" &&
       getRequiredContestHodDepartments(normalizedSpecialists).length > 0 &&
       !areContestDepartmentsValidated(normalizedSpecialists);
     const approvalTargets = buildApprovalTargets({
@@ -2345,7 +2506,7 @@ export const createRequest = mutation({
     const status = !args.submit
       ? "draft"
       : getRequestApprovalStatus({
-          category: args.category,
+          category: normalizedCategory,
           specialists: normalizedSpecialists,
           requiredHodDepartments: effectiveRequiredHodDepartments,
           approvals: approvalTargets.map((target) => ({
@@ -2359,7 +2520,7 @@ export const createRequest = mutation({
         });
     const effectiveAmounts = resolveRequestAmounts(
       {
-        category: args.category,
+        category: normalizedCategory,
         amount: args.amount,
         amountWithVat: args.amountWithVat,
         vatRate: args.vatRate,
@@ -2372,14 +2533,22 @@ export const createRequest = mutation({
       vatRate: args.vatRate,
       autoCalculateAmountWithVat: true,
     });
+    const prepaymentAmounts = resolveVatAmounts({
+      amountWithoutVat: args.prepaymentAmount,
+      amountWithVat: args.prepaymentAmountWithVat,
+      vatRate: args.vatRate,
+      autoCalculateAmountWithVat: true,
+    });
 
     const requestId = await ctx.db.insert("requests", {
       requestCode,
+      requestArea,
+      department: requestArea === "Администрация" ? normalizedDepartment : undefined,
       title: args.title.trim(),
       createdBy: userId,
       createdByEmail: email,
       createdByName: roleRecord?.fullName ?? identity?.name ?? undefined,
-      category: args.category,
+      category: normalizedCategory,
       amount: effectiveAmounts.amount,
       amountWithVat: effectiveAmounts.amountWithVat,
       vatRate: effectiveAmounts.vatRate,
@@ -2388,6 +2557,15 @@ export const createRequest = mutation({
       counterparty: args.counterparty,
       paymentMethod: args.paymentMethod,
       cfdTag: undefined,
+      contractLink: args.contractLink?.trim() || undefined,
+      contractAttachmentCount: 0,
+      lastContractAttachmentName: undefined,
+      dueDiligenceChecked: args.dueDiligenceChecked ?? false,
+      dueDiligenceJiraLink: args.dueDiligenceJiraLink?.trim() || undefined,
+      prepaymentRequired: args.prepaymentRequired ?? false,
+      prepaymentAmount: args.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
+      prepaymentAmountWithVat: args.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
+      prepaymentDate: args.prepaymentRequired ? args.prepaymentDate : undefined,
       justification: args.justification,
       details: args.details?.trim() || undefined,
       investmentReturn: args.investmentReturn?.trim() || undefined,
@@ -2425,7 +2603,7 @@ export const createRequest = mutation({
       requestId,
       type: "request_created",
       title: args.submit ? "Заявка создана и отправлена" : "Создан черновик",
-      description: `${args.category} · ${args.fundingSource}`,
+      description: `${normalizedCategory} · ${args.fundingSource}`,
       actorEmail: email,
       actorName: roleRecord?.fullName ?? identity?.name ?? undefined,
     });
@@ -2454,6 +2632,9 @@ export const createRequest = mutation({
         );
       }
     }
+    await ctx.scheduler.runAfter(0, internal.emails.sendRequestCreatedToBuh, {
+      requestId,
+    });
 
     return requestId;
   },
@@ -2468,6 +2649,7 @@ export const updateContestSpecialist = mutation({
     hours: v.optional(v.number()),
     directCost: v.optional(v.number()),
     hodConfirmed: v.optional(v.boolean()),
+    buhConfirmed: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -2486,7 +2668,8 @@ export const updateContestSpecialist = mutation({
     if (request.category !== "Конкурсное задание") {
       throw new Error("Редактирование специалистов доступно только для конкурсного задания");
     }
-    if (!hasHodAccessToRequest(roleRecord, request) && !roleRecord?.roles?.includes("ADMIN")) {
+    const isBuh = roleRecord?.roles?.includes("BUH");
+    if (!hasHodAccessToRequest(roleRecord, request) && !roleRecord?.roles?.includes("ADMIN") && !isBuh) {
       throw new Error("Not authorized");
     }
     const specialists = [...(request.specialists ?? [])];
@@ -2499,6 +2682,7 @@ export const updateContestSpecialist = mutation({
     const nextDepartment = args.department?.trim() || undefined;
     const allowedDepartment =
       roleRecord?.roles?.includes("ADMIN") ||
+      isBuh ||
       hodDepartments.includes(current.department ?? "") ||
       (current.department === undefined && nextDepartment && hodDepartments.includes(nextDepartment));
     if (!allowedDepartment) {
@@ -2507,6 +2691,7 @@ export const updateContestSpecialist = mutation({
     if (
       nextDepartment &&
       !roleRecord?.roles?.includes("ADMIN") &&
+      !isBuh &&
       !hodDepartments.includes(nextDepartment)
     ) {
       throw new Error("Можно выбирать только свои цеха");
@@ -2524,6 +2709,7 @@ export const updateContestSpecialist = mutation({
           ? args.directCost
           : undefined,
       hodConfirmed: args.hodConfirmed ?? current.hodConfirmed ?? false,
+      buhConfirmed: args.buhConfirmed ?? current.buhConfirmed ?? false,
     };
     specialists[index] = nextSpecialist;
     const nextAmount = calculateContestAmount("Конкурсное задание", specialists, request.amount);
@@ -2680,10 +2866,14 @@ export const assignCfdTag = mutation({
       throw new Error("NBD может назначать тег только после согласования");
     }
     if (args.tag?.trim()) {
-      const existingTag = await ctx.db
-        .query("cfdTags")
-        .withIndex("by_name", (q: any) => q.eq("name", args.tag!.trim()))
-        .first();
+      const requestArea = request.requestArea ?? getRequestAreaForCategory(request.category);
+      const existingTag = (await ctx.db.query("cfdTags").collect()).find(
+        (tag: any) =>
+          tag.name === args.tag!.trim() &&
+          tag.active &&
+          (tag.requestArea ?? "Аккаунтинг") === requestArea &&
+          (requestArea !== "Администрация" || (tag.department ?? "") === (request.department ?? "")),
+      );
       if (!existingTag || !existingTag.active) {
         throw new Error("Тег не найден");
       }
