@@ -51,10 +51,10 @@ const viewerAccessValidator = v.object({
 });
 
 const commentMentionValidator = v.object({
-  key: v.string(),
+  key: v.optional(v.string()),
   email: v.string(),
   name: v.string(),
-  token: v.string(),
+  token: v.optional(v.string()),
 });
 
 const schema = defineSchema({
