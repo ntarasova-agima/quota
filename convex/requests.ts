@@ -25,19 +25,25 @@ import {
   normalizeDepartmentList,
 } from "./requestWorkflow";
 import {
+  AGIMA_QUOTAS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
-  COMPANY_PROFIT_FUNDING_SOURCE,
-  INTERNAL_COSTS_FUNDING_SOURCE,
-  PRESALES_FUNDING_SOURCE,
+  PURCHASE_CATEGORY,
+  PROJECT_REVENUE_FUNDING_SOURCE,
   SERVICE_PURCHASE_CATEGORY,
-  getRequestAreaForCategory,
+  TRANSIT_TAG_NAME,
+  UNKNOWN_FUNDING_SOURCE,
+  CONTRACTOR_PAYMENT_CATEGORY,
+  getRequestAreaForDepartment,
   getFundingOwnerRoles,
-  isAdministrationRequestCategory,
+  isAgimaQuotaFundingSource,
+  isCategoryAllowedForDepartment,
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
+  normalizeFundingSource,
   normalizeRequestCategory,
+  shouldSkipQuotaByTag,
 } from "../src/lib/requestRules";
 import {
   isKnownHodDepartment,
@@ -89,6 +95,8 @@ const requestCategoryCodes: Record<string, string> = {
   "Подарки": "GI",
   "Конкурсное задание": "CT",
   [SERVICE_PURCHASE_CATEGORY]: "SV",
+  [PURCHASE_CATEGORY]: "PU",
+  [CONTRACTOR_PAYMENT_CATEGORY]: "CP",
   [CLIENT_SERVICES_TRANSIT_CATEGORY]: "TR",
   [AI_TOOLS_REQUEST_CATEGORY]: "AI",
   "Неформальное мероприятие": "EV",
@@ -96,12 +104,13 @@ const requestCategoryCodes: Record<string, string> = {
 };
 
 const fundingSourceCodes: Record<string, string> = {
-  "Отгрузки проекта": "RP",
+  [PROJECT_REVENUE_FUNDING_SOURCE]: "RP",
+  [AGIMA_QUOTAS_FUNDING_SOURCE]: "QA",
   "Прибыль компании": "PC",
   "Квота на пресейлы": "QS",
   "Квоты на AI-инструменты": "QT",
   "Квота на внутренние затраты": "QI",
-  "Я не знаю": "UN",
+  [UNKNOWN_FUNDING_SOURCE]: "UN",
 };
 
 function getMonthKey(timestamp?: number) {
@@ -1121,8 +1130,9 @@ function getApprovalStatusFromEntries(approvals: any[]) {
 
 function validateRequestPayload(args: any) {
   const normalizedCategory = normalizeRequestCategory(args.category);
-  const requestArea = getRequestAreaForCategory(normalizedCategory);
   const normalizedDepartment = normalizeHodDepartment(args.department);
+  const requestArea = getRequestAreaForDepartment(normalizedDepartment);
+  const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
   const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
   const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
     category: args.category,
@@ -1202,16 +1212,17 @@ function validateRequestPayload(args: any) {
   if (!args.title.trim()) {
     throw new Error("Название заявки обязательно");
   }
-  if (args.requestArea && args.requestArea !== requestArea) {
+  if (!normalizedDepartment) {
+    throw new Error("Укажите цех");
+  }
+  if (!isKnownHodDepartment(normalizedDepartment)) {
     throw new Error("Так не бывает");
   }
-  if (isAdministrationRequestCategory(normalizedCategory)) {
-    if (!normalizedDepartment) {
-      throw new Error("Укажите цех");
-    }
-    if (!isKnownHodDepartment(normalizedDepartment)) {
-      throw new Error("Так не бывает");
-    }
+  if (args.requestArea && args.requestArea !== requestArea && args.requestArea !== normalizedDepartment) {
+    throw new Error("Так не бывает");
+  }
+  if (!isCategoryAllowedForDepartment(normalizedCategory, normalizedDepartment)) {
+    throw new Error("Так не бывает");
   }
   if (
     args.category !== "Welcome-бонус" &&
@@ -1235,7 +1246,7 @@ function validateRequestPayload(args: any) {
   if (!args.neededBy) {
     throw new Error("Укажите ожидание затраты");
   }
-  if (!isFundingSourceAllowedForCategory(args.category, args.fundingSource)) {
+  if (!isFundingSourceAllowedForCategory(normalizedCategory, normalizedFundingSource)) {
     throw new Error("Так не бывает");
   }
   if (
@@ -1288,15 +1299,15 @@ function validateRequestPayload(args: any) {
     throw new Error("Укажите дату отгрузки");
   }
   if (
-    args.category !== "Конкурсное задание" &&
-    args.category !== "Welcome-бонус" &&
-    args.fundingSource === "Отгрузки проекта" &&
+    normalizedCategory !== "Конкурсное задание" &&
+    normalizedCategory !== "Welcome-бонус" &&
+    normalizedFundingSource === PROJECT_REVENUE_FUNDING_SOURCE &&
     (!args.financePlanLinks || args.financePlanLinks.length === 0)
   ) {
     throw new Error("Финплан обязателен для отгрузок проекта");
   }
   if (
-    args.fundingSource === "Отгрузки проекта" &&
+    normalizedFundingSource === PROJECT_REVENUE_FUNDING_SOURCE &&
     (incomingAmounts.amountWithoutVat === undefined || incomingAmounts.amountWithVat === undefined)
   ) {
     throw new Error("Укажите сумму отгрузки");
@@ -1317,29 +1328,8 @@ function validateRequestPayload(args: any) {
   ) {
     throw new Error("Так не бывает");
   }
-  if (args.fundingSource === PRESALES_FUNDING_SOURCE && !effectiveRequiredRoles.includes("NBD")) {
-    throw new Error("Для квот NBD обязателен NBD");
-  }
   if (!effectiveRequiredRoles.includes("BUH")) {
     throw new Error("Для всех заявок обязателен BUH");
-  }
-  if (
-    args.fundingSource === "Квоты на AI-инструменты" &&
-    !effectiveRequiredRoles.includes("AI-BOSS")
-  ) {
-    throw new Error("Для квот на AI-инструменты обязателен AI-BOSS");
-  }
-  if (
-    args.fundingSource === INTERNAL_COSTS_FUNDING_SOURCE &&
-    !effectiveRequiredRoles.includes("COO")
-  ) {
-    throw new Error("Для квоты на внутренние затраты обязателен COO");
-  }
-  if (
-    args.fundingSource === COMPANY_PROFIT_FUNDING_SOURCE &&
-    (!effectiveRequiredRoles.includes("COO") || !effectiveRequiredRoles.includes("CFD"))
-  ) {
-    throw new Error("Для прибыли компании обязательны COO и CFD");
   }
   if (args.category === "Welcome-бонус" && (!args.investmentReturn || !args.investmentReturn.trim())) {
     throw new Error("Укажите, как будем возвращать инвестиции");
@@ -1381,6 +1371,23 @@ function isOpenPaymentTask(request: { status: string; neededBy?: number; isCance
     request.neededBy !== undefined &&
     ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
   );
+}
+
+function validateQuotaResolutionBeforePayment(request: {
+  fundingSource: string;
+  cfdTag?: string;
+}) {
+  const fundingSource = normalizeFundingSource(request.fundingSource);
+  if (fundingSource === UNKNOWN_FUNDING_SOURCE) {
+    throw new Error("Укажите источник финансирования");
+  }
+  if (
+    isAgimaQuotaFundingSource(fundingSource) &&
+    !shouldSkipQuotaByTag(request.cfdTag) &&
+    !request.cfdTag?.trim()
+  ) {
+    throw new Error("Укажите тег квоты");
+  }
 }
 
 async function createApprovalsForRequest(
@@ -1524,6 +1531,7 @@ export const listMyRequests = query({
 export const listAllRequests = query({
   args: {
     status: v.optional(requestStatus),
+    statuses: v.optional(v.array(requestStatus)),
     createdByEmail: v.optional(v.string()),
     cfdTag: v.optional(v.string()),
     category: v.optional(v.string()),
@@ -1563,8 +1571,13 @@ export const listAllRequests = query({
       throw new Error("Not authorized");
     }
 
-    const requests = args.status
-      ? allRequests.filter((req: any) => req.status === args.status)
+    const statusSet = args.statuses?.length
+      ? new Set(args.statuses)
+      : args.status
+        ? new Set([args.status])
+        : undefined;
+    const requests = statusSet
+      ? allRequests.filter((req: any) => statusSet.has(req.status))
       : allRequests;
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const hasExplicitDateRange = args.createdFrom !== undefined || args.createdTo !== undefined;
@@ -1608,7 +1621,7 @@ export const listAllRequests = query({
           return false;
         }
       }
-      if (!hasExplicitDateRange && (req.archivedAt || req.createdAt < oneYearAgo)) {
+      if (!canViewAll && !hasExplicitDateRange && (req.archivedAt || req.createdAt < oneYearAgo)) {
         return false;
       }
       return true;
@@ -1980,7 +1993,8 @@ export const previewEditImpact = query({
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
     const normalizedCategory = normalizeRequestCategory(args.category);
     const normalizedDepartment = normalizeHodDepartment(args.department);
-    const requestArea = getRequestAreaForCategory(normalizedCategory);
+    const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
+    const requestArea = getRequestAreaForDepartment(normalizedDepartment);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
       category: normalizedCategory,
       requiredHodDepartments: args.requiredHodDepartments,
@@ -2014,14 +2028,14 @@ export const previewEditImpact = query({
     const nextBase = {
       ...request,
       requestArea,
-      department: requestArea === "Администрация" ? normalizedDepartment : undefined,
+      department: normalizedDepartment,
       title: args.title.trim(),
       category: normalizedCategory,
       amount: effectiveAmounts.amount,
       amountWithVat: effectiveAmounts.amountWithVat,
       vatRate: effectiveAmounts.vatRate,
       currency: args.currency,
-      fundingSource: args.fundingSource,
+      fundingSource: normalizedFundingSource,
       counterparty: args.counterparty,
       paymentMethod: args.paymentMethod,
       contractLink: args.contractLink?.trim() || undefined,
@@ -2108,7 +2122,8 @@ export const editRequest = mutation({
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
     const normalizedCategory = normalizeRequestCategory(args.category);
     const normalizedDepartment = normalizeHodDepartment(args.department);
-    const requestArea = getRequestAreaForCategory(normalizedCategory);
+    const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
+    const requestArea = getRequestAreaForDepartment(normalizedDepartment);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
       category: normalizedCategory,
       requiredHodDepartments: args.requiredHodDepartments,
@@ -2147,14 +2162,14 @@ export const editRequest = mutation({
 
     const nextBase = {
       requestArea,
-      department: requestArea === "Администрация" ? normalizedDepartment : undefined,
+      department: normalizedDepartment,
       title: args.title.trim(),
       category: normalizedCategory,
       amount: effectiveAmounts.amount,
       amountWithVat: effectiveAmounts.amountWithVat,
       vatRate: effectiveAmounts.vatRate,
       currency: args.currency,
-      fundingSource: args.fundingSource,
+      fundingSource: normalizedFundingSource,
       counterparty: args.counterparty,
       paymentMethod: args.paymentMethod,
       contractLink: args.contractLink?.trim() || undefined,
@@ -2482,8 +2497,9 @@ export const createRequest = mutation({
     }
     const normalizedCategory = normalizeRequestCategory(args.category);
     const normalizedDepartment = normalizeHodDepartment(args.department);
-    const requestArea = getRequestAreaForCategory(normalizedCategory);
-    const requestCode = await getNextRequestCode(ctx, normalizedCategory, args.fundingSource);
+    const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
+    const requestArea = getRequestAreaForDepartment(normalizedDepartment);
+    const requestCode = await getNextRequestCode(ctx, normalizedCategory, normalizedFundingSource);
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
       category: normalizedCategory,
@@ -2543,7 +2559,7 @@ export const createRequest = mutation({
     const requestId = await ctx.db.insert("requests", {
       requestCode,
       requestArea,
-      department: requestArea === "Администрация" ? normalizedDepartment : undefined,
+      department: normalizedDepartment,
       title: args.title.trim(),
       createdBy: userId,
       createdByEmail: email,
@@ -2553,7 +2569,7 @@ export const createRequest = mutation({
       amountWithVat: effectiveAmounts.amountWithVat,
       vatRate: effectiveAmounts.vatRate,
       currency: args.currency,
-      fundingSource: args.fundingSource,
+      fundingSource: normalizedFundingSource,
       counterparty: args.counterparty,
       paymentMethod: args.paymentMethod,
       cfdTag: undefined,
@@ -2603,7 +2619,7 @@ export const createRequest = mutation({
       requestId,
       type: "request_created",
       title: args.submit ? "Заявка создана и отправлена" : "Создан черновик",
-      description: `${normalizedCategory} · ${args.fundingSource}`,
+      description: `${normalizedCategory} · ${normalizedFundingSource}`,
       actorEmail: email,
       actorName: roleRecord?.fullName ?? identity?.name ?? undefined,
     });
@@ -2834,6 +2850,7 @@ export const assignCfdTag = mutation({
   args: {
     id: v.id("requests"),
     tag: v.optional(v.string()),
+    fundingSource: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -2848,8 +2865,7 @@ export const assignCfdTag = mutation({
     if (
       !record?.roles?.includes("CFD") &&
       !record?.roles?.includes("ADMIN") &&
-      !record?.roles?.includes("BUH") &&
-      !record?.roles?.includes("NBD")
+      !record?.roles?.includes("BUH")
     ) {
       throw new Error("Not authorized");
     }
@@ -2857,36 +2873,37 @@ export const assignCfdTag = mutation({
     if (!request) {
       throw new Error("Request not found");
     }
-    if (
-      record?.roles?.includes("NBD") &&
-      !["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid", "closed"].includes(
-        request.status,
-      )
-    ) {
-      throw new Error("NBD может назначать тег только после согласования");
+    const nextFundingSource = args.fundingSource
+      ? normalizeFundingSource(args.fundingSource)
+      : normalizeFundingSource(request.fundingSource);
+    if (!isFundingSourceAllowedForCategory(request.category, nextFundingSource)) {
+      throw new Error("Так не бывает");
     }
     if (args.tag?.trim()) {
-      const requestArea = request.requestArea ?? getRequestAreaForCategory(request.category);
+      const requestDepartment = normalizeHodDepartment(request.department);
+      const tagName = args.tag.trim();
       const existingTag = (await ctx.db.query("cfdTags").collect()).find(
         (tag: any) =>
-          tag.name === args.tag!.trim() &&
+          tag.name === tagName &&
           tag.active &&
-          (tag.requestArea ?? "Аккаунтинг") === requestArea &&
-          (requestArea !== "Администрация" || (tag.department ?? "") === (request.department ?? "")),
+          normalizeHodDepartment(tag.department) === requestDepartment,
       );
-      if (!existingTag || !existingTag.active) {
+      if ((!existingTag || !existingTag.active) && tagName !== TRANSIT_TAG_NAME) {
         throw new Error("Тег не найден");
       }
     }
     await ctx.db.patch(request._id, {
       cfdTag: args.tag?.trim() || undefined,
+      fundingSource: nextFundingSource,
       updatedAt: Date.now(),
     });
     await logTimelineEvent(ctx, {
       requestId: request._id,
       type: "cfd_tag_updated",
       title: "Изменен тег заявки",
-      description: args.tag?.trim() || "Тег снят",
+      description: args.tag?.trim()
+        ? `${nextFundingSource} · ${args.tag.trim()}`
+        : `${nextFundingSource} · тег снят`,
       actorEmail: email,
       actorName: record.fullName ?? undefined,
     });
@@ -2992,6 +3009,9 @@ export const updatePaymentStatus = mutation({
     }
     if (args.status === "reopen" && request.status !== "closed") {
       throw new Error("Открыть заново можно только закрытую заявку");
+    }
+    if (["payment_planned", "partially_paid", "paid"].includes(args.status)) {
+      validateQuotaResolutionBeforePayment(request);
     }
 
     const finplanCostIds = args.finplanCostIdsRaw

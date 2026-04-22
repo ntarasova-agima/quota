@@ -1,102 +1,106 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGIMA_QUOTAS_FUNDING_SOURCE,
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
-  COMPANY_PROFIT_FUNDING_SOURCE,
-  INTERNAL_COSTS_FUNDING_SOURCE,
+  CONTRACTOR_PAYMENT_CATEGORY,
   LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE,
   LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY,
+  LEGACY_PROJECT_TRANSIT_CATEGORY,
   LEGACY_SERVICE_PURCHASE_CATEGORY,
   PRESALES_FUNDING_SOURCE,
   PROJECT_REVENUE_FUNDING_SOURCE,
+  PURCHASE_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
-  getRequestAreaForCategory,
+  TRANSIT_TAG_NAME,
+  UNKNOWN_FUNDING_SOURCE,
+  getCategoriesForDepartment,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   getFundingOwnerRoles,
+  getRequestAreaForCategory,
+  getRequestAreaForDepartment,
   isAiToolsFundingSource,
   isAiToolsRequestCategory,
+  isCategoryAllowedForDepartment,
   isFundingSourceAllowedForCategory,
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
+  shouldSkipQuotaByTag,
 } from "./requestRules";
 
 describe("requestRules", () => {
-  it("normalizes legacy ai subscription funding source", () => {
-    expect(normalizeFundingSource(LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE)).toBe(AI_TOOLS_FUNDING_SOURCE);
+  it("normalizes legacy quota sources into AGIMA quotas", () => {
+    expect(normalizeFundingSource(LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE)).toBe(AGIMA_QUOTAS_FUNDING_SOURCE);
+    expect(normalizeFundingSource(AI_TOOLS_FUNDING_SOURCE)).toBe(AGIMA_QUOTAS_FUNDING_SOURCE);
+    expect(normalizeFundingSource(PRESALES_FUNDING_SOURCE)).toBe(AGIMA_QUOTAS_FUNDING_SOURCE);
     expect(isAiToolsFundingSource(LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE)).toBe(true);
   });
 
-  it("normalizes legacy service purchase category", () => {
-    expect(normalizeRequestCategory(LEGACY_SERVICE_PURCHASE_CATEGORY)).toBe(SERVICE_PURCHASE_CATEGORY);
-    expect(normalizeRequestCategory(LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY)).toBe(SERVICE_PURCHASE_CATEGORY);
+  it("normalizes legacy categories into the new department matrix", () => {
+    expect(normalizeRequestCategory(LEGACY_SERVICE_PURCHASE_CATEGORY)).toBe(PURCHASE_CATEGORY);
+    expect(normalizeRequestCategory(LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY)).toBe(PURCHASE_CATEGORY);
+    expect(normalizeRequestCategory(SERVICE_PURCHASE_CATEGORY)).toBe(PURCHASE_CATEGORY);
+    expect(normalizeRequestCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe(PURCHASE_CATEGORY);
+    expect(normalizeRequestCategory(LEGACY_PROJECT_TRANSIT_CATEGORY)).toBe(CLIENT_SERVICES_TRANSIT_CATEGORY);
   });
 
-  it("returns enforced roles for funding sources", () => {
-    expect(getEnforcedRolesForFundingSource(PRESALES_FUNDING_SOURCE)).toEqual(["NBD", "BUH"]);
-    expect(getEnforcedRolesForFundingSource(AI_TOOLS_FUNDING_SOURCE)).toEqual(["AI-BOSS", "BUH"]);
-    expect(getEnforcedRolesForFundingSource(INTERNAL_COSTS_FUNDING_SOURCE)).toEqual(["COO", "BUH"]);
-    expect(getEnforcedRolesForFundingSource(COMPANY_PROFIT_FUNDING_SOURCE)).toEqual(["COO", "CFD", "BUH"]);
+  it("keeps BUH as the only globally enforced role from funding", () => {
+    expect(getEnforcedRolesForFundingSource(AGIMA_QUOTAS_FUNDING_SOURCE)).toEqual(["BUH"]);
+    expect(getEnforcedRolesForFundingSource(PROJECT_REVENUE_FUNDING_SOURCE)).toEqual(["BUH"]);
+    expect(getFundingOwnerRoles(LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE)).toEqual([]);
   });
 
-  it("returns funding owner roles consistently", () => {
-    expect(getFundingOwnerRoles(LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE)).toEqual(["AI-BOSS"]);
+  it("returns categories by department", () => {
+    expect(getCategoriesForDepartment("Аккаунтинг")).toContain("Подарки");
+    expect(getCategoriesForDepartment("Аккаунтинг")).not.toContain(CLIENT_SERVICES_TRANSIT_CATEGORY);
+    expect(getCategoriesForDepartment("Транзит")).toEqual([CLIENT_SERVICES_TRANSIT_CATEGORY]);
+    expect(getCategoriesForDepartment("Разработка")).toEqual([PURCHASE_CATEGORY, CONTRACTOR_PAYMENT_CATEGORY]);
   });
 
-  it("splits categories into top-level request areas", () => {
-    expect(getRequestAreaForCategory(SERVICE_PURCHASE_CATEGORY)).toBe("Администрация");
-    expect(getRequestAreaForCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe("Администрация");
-    expect(getRequestAreaForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe("Аккаунтинг");
+  it("checks category availability by department", () => {
+    expect(isCategoryAllowedForDepartment("Подарки", "Аккаунтинг")).toBe(true);
+    expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Транзит")).toBe(true);
+    expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Аккаунтинг")).toBe(false);
+    expect(isCategoryAllowedForDepartment(PURCHASE_CATEGORY, "Разработка")).toBe(true);
+    expect(isCategoryAllowedForDepartment("Подарки", "Разработка")).toBe(false);
+  });
+
+  it("keeps request area helpers compatible with legacy consumers", () => {
+    expect(getRequestAreaForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe("Транзит");
     expect(getRequestAreaForCategory("Подарки")).toBe("Аккаунтинг");
+    expect(getRequestAreaForDepartment("Аккаунтинг")).toBe("Аккаунтинг");
+    expect(getRequestAreaForDepartment("Разработка")).toBe("Администрация");
   });
 
-  it("validates service purchase funding sources", () => {
-    expect(isFundingSourceAllowedForCategory(SERVICE_PURCHASE_CATEGORY, INTERNAL_COSTS_FUNDING_SOURCE)).toBe(true);
-    expect(isFundingSourceAllowedForCategory(SERVICE_PURCHASE_CATEGORY, AI_TOOLS_FUNDING_SOURCE)).toBe(false);
-    expect(isFundingSourceAllowedForCategory(SERVICE_PURCHASE_CATEGORY, PRESALES_FUNDING_SOURCE)).toBe(false);
-    expect(isFundingSourceAllowedForCategory(SERVICE_PURCHASE_CATEGORY, "Я не знаю")).toBe(true);
+  it("validates the new funding sources", () => {
+    expect(isFundingSourceAllowedForCategory(PURCHASE_CATEGORY, AGIMA_QUOTAS_FUNDING_SOURCE)).toBe(true);
+    expect(isFundingSourceAllowedForCategory(PURCHASE_CATEGORY, PROJECT_REVENUE_FUNDING_SOURCE)).toBe(true);
+    expect(isFundingSourceAllowedForCategory(PURCHASE_CATEGORY, UNKNOWN_FUNDING_SOURCE)).toBe(true);
+    expect(isFundingSourceAllowedForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY, PROJECT_REVENUE_FUNDING_SOURCE)).toBe(true);
+    expect(isFundingSourceAllowedForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY, AGIMA_QUOTAS_FUNDING_SOURCE)).toBe(false);
   });
 
-  it("validates ai tools request funding sources", () => {
-    expect(isFundingSourceAllowedForCategory(AI_TOOLS_REQUEST_CATEGORY, AI_TOOLS_FUNDING_SOURCE)).toBe(true);
-    expect(isFundingSourceAllowedForCategory(AI_TOOLS_REQUEST_CATEGORY, INTERNAL_COSTS_FUNDING_SOURCE)).toBe(false);
-    expect(isFundingSourceAllowedForCategory(AI_TOOLS_REQUEST_CATEGORY, "Я не знаю")).toBe(true);
-    expect(isFundingSourceAllowedForCategory("Подарки", AI_TOOLS_FUNDING_SOURCE)).toBe(false);
+  it("returns new default funding sources", () => {
+    expect(getDefaultFundingSourceForCategory("Welcome-бонус")).toBe(AGIMA_QUOTAS_FUNDING_SOURCE);
+    expect(getDefaultFundingSourceForCategory("Подарки")).toBe(AGIMA_QUOTAS_FUNDING_SOURCE);
+    expect(getDefaultFundingSourceForCategory(PURCHASE_CATEGORY)).toBe(AGIMA_QUOTAS_FUNDING_SOURCE);
+    expect(getDefaultFundingSourceForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(PROJECT_REVENUE_FUNDING_SOURCE);
   });
 
-  it("returns default funding sources for service categories", () => {
-    expect(getDefaultFundingSourceForCategory("Welcome-бонус")).toBe(PRESALES_FUNDING_SOURCE);
-    expect(getDefaultFundingSourceForCategory("Подарки")).toBe(COMPANY_PROFIT_FUNDING_SOURCE);
-    expect(getDefaultFundingSourceForCategory("Конкурсное задание")).toBe(PRESALES_FUNDING_SOURCE);
-    expect(getDefaultFundingSourceForCategory(SERVICE_PURCHASE_CATEGORY)).toBe(INTERNAL_COSTS_FUNDING_SOURCE);
-    expect(getDefaultFundingSourceForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(
-      PROJECT_REVENUE_FUNDING_SOURCE,
-    );
-    expect(getDefaultFundingSourceForCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe(AI_TOOLS_FUNDING_SOURCE);
-  });
-
-  it("recognizes service recipient categories", () => {
-    expect(isServiceRecipientCategory(SERVICE_PURCHASE_CATEGORY)).toBe(true);
-    expect(isServiceRecipientCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe(true);
+  it("recognizes service recipient and legacy AI categories", () => {
+    expect(isServiceRecipientCategory(PURCHASE_CATEGORY)).toBe(true);
+    expect(isServiceRecipientCategory(CONTRACTOR_PAYMENT_CATEGORY)).toBe(true);
     expect(isServiceRecipientCategory(LEGACY_SERVICE_PURCHASE_CATEGORY)).toBe(true);
     expect(isServiceRecipientCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(false);
-    expect(isServiceRecipientCategory("Подарки")).toBe(false);
     expect(isAiToolsRequestCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe(true);
-    expect(isAiToolsRequestCategory(SERVICE_PURCHASE_CATEGORY)).toBe(false);
+    expect(isAiToolsRequestCategory(PURCHASE_CATEGORY)).toBe(false);
   });
 
-  it("applies updated funding matrices", () => {
-    expect(isFundingSourceAllowedForCategory("Welcome-бонус", "Отгрузки проекта")).toBe(false);
-    expect(isFundingSourceAllowedForCategory("Конкурсное задание", "Отгрузки проекта")).toBe(false);
-    expect(isFundingSourceAllowedForCategory("Подарки", "Отгрузки проекта")).toBe(true);
-    expect(isFundingSourceAllowedForCategory("Подарки", COMPANY_PROFIT_FUNDING_SOURCE)).toBe(true);
-    expect(isFundingSourceAllowedForCategory("Подарки", PRESALES_FUNDING_SOURCE)).toBe(true);
-    expect(isFundingSourceAllowedForCategory("Неформальное мероприятие", PROJECT_REVENUE_FUNDING_SOURCE)).toBe(true);
-    expect(isFundingSourceAllowedForCategory("Неформальное мероприятие", COMPANY_PROFIT_FUNDING_SOURCE)).toBe(true);
-    expect(isFundingSourceAllowedForCategory("Неформальное мероприятие", PRESALES_FUNDING_SOURCE)).toBe(false);
-    expect(isFundingSourceAllowedForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY, PROJECT_REVENUE_FUNDING_SOURCE)).toBe(true);
-    expect(isFundingSourceAllowedForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY, COMPANY_PROFIT_FUNDING_SOURCE)).toBe(false);
+  it("skips quota usage for the Transit tag", () => {
+    expect(shouldSkipQuotaByTag(TRANSIT_TAG_NAME)).toBe(true);
+    expect(shouldSkipQuotaByTag("Тендер")).toBe(false);
   });
 });

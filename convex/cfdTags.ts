@@ -2,10 +2,11 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getCurrentEmail } from "./authHelpers";
-import { normalizeHodDepartment } from "../src/lib/departments";
+import { HOD_DEPARTMENTS, normalizeHodDepartment } from "../src/lib/departments";
 import {
   ACCOUNTING_REQUEST_AREA,
-  ADMINISTRATION_REQUEST_AREA,
+  TRANSIT_DEPARTMENT,
+  TRANSIT_TAG_NAME,
 } from "../src/lib/requestRules";
 
 async function ensureCfdOrAdmin(ctx: any) {
@@ -21,7 +22,7 @@ async function ensureCfdOrAdmin(ctx: any) {
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const canManage = record?.roles?.some((role: string) => ["CFD", "ADMIN", "BUH", "NBD"].includes(role));
+  const canManage = record?.roles?.some((role: string) => ["CFD", "ADMIN", "BUH"].includes(role));
   if (!canManage) {
     throw new Error("Not authorized");
   }
@@ -41,7 +42,7 @@ async function ensureCanViewTags(ctx: any) {
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
   const canView = record?.roles?.some((role: string) =>
-    ["CFD", "ADMIN", "NBD", "COO", "BUH"].includes(role),
+    ["CFD", "ADMIN", "COO", "BUH", "HOD"].includes(role),
   );
   if (!canView) {
     throw new Error("Not authorized");
@@ -57,18 +58,42 @@ export const list = query({
     await ensureCanViewTags(ctx);
     const normalizedDepartment = normalizeHodDepartment(args.department);
     const rows = await ctx.db.query("cfdTags").withIndex("by_name").collect();
-    return rows
+    const result: any[] = rows
       .filter((row) => row.active)
-      .filter((row) => !args.requestArea || (row.requestArea ?? ACCOUNTING_REQUEST_AREA) === args.requestArea)
       .filter((row) => {
-        if (args.requestArea === ADMINISTRATION_REQUEST_AREA) {
-          if (!normalizedDepartment) {
-            return true;
-          }
-          return (row.department ?? "") === (normalizedDepartment ?? "");
+        if (!normalizedDepartment) {
+          return true;
         }
-        return true;
+        return normalizeHodDepartment(row.department) === normalizedDepartment;
+      })
+      .map((row) => ({
+        ...row,
+        department: normalizeHodDepartment(row.department),
+      }));
+    const shouldIncludeTransit =
+      !normalizedDepartment || normalizedDepartment === TRANSIT_DEPARTMENT;
+    const hasTransit = result.some(
+      (row) =>
+        row.name === TRANSIT_TAG_NAME &&
+        normalizeHodDepartment(row.department) === TRANSIT_DEPARTMENT,
+    );
+    if (shouldIncludeTransit && !hasTransit) {
+      result.push({
+        _id: "system-transit-tag" as any,
+        _creationTime: 0,
+        name: TRANSIT_TAG_NAME,
+        requestArea: ACCOUNTING_REQUEST_AREA,
+        department: TRANSIT_DEPARTMENT,
+        active: true,
+        createdAt: 0,
+        updatedAt: 0,
+        isSystem: true,
       });
+    }
+    return result.sort((a, b) => {
+      const departmentCompare = (a.department ?? "").localeCompare(b.department ?? "", "ru");
+      return departmentCompare || a.name.localeCompare(b.name, "ru");
+    });
   },
 });
 
@@ -81,25 +106,19 @@ export const create = mutation({
   handler: async (ctx, args) => {
     await ensureCfdOrAdmin(ctx);
     const name = args.name.trim();
+    const department = normalizeHodDepartment(args.department);
     const requestArea = args.requestArea?.trim() || ACCOUNTING_REQUEST_AREA;
-    const department = requestArea === ADMINISTRATION_REQUEST_AREA
-      ? normalizeHodDepartment(args.department)
-      : undefined;
     if (!name) {
       throw new Error("Название тега обязательно");
     }
-    if (![ACCOUNTING_REQUEST_AREA, ADMINISTRATION_REQUEST_AREA].includes(requestArea as any)) {
-      throw new Error("Так не бывает");
-    }
-    if (requestArea === ADMINISTRATION_REQUEST_AREA && !department) {
+    if (!department || !HOD_DEPARTMENTS.includes(department as any)) {
       throw new Error("Укажите цех для тега");
     }
     const now = Date.now();
     const existing = (await ctx.db.query("cfdTags").collect()).find(
       (row: any) =>
         row.name === name &&
-        (row.requestArea ?? ACCOUNTING_REQUEST_AREA) === requestArea &&
-        (row.department ?? "") === (department ?? ""),
+        normalizeHodDepartment(row.department) === department,
     );
     if (existing) {
       await ctx.db.patch(existing._id, {

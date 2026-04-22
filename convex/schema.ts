@@ -303,6 +303,7 @@ const schema = defineSchema({
     monthKey: v.string(),
     departmentKey: v.string(),
     departmentName: v.optional(v.string()),
+    tagName: v.optional(v.string()),
     year: v.number(),
     month: v.number(),
     quota: v.number(),
@@ -315,7 +316,22 @@ const schema = defineSchema({
     updatedAt: v.number(),
   })
     .index("by_monthKey", ["monthKey"])
-    .index("by_month_department", ["monthKey", "departmentKey"]),
+    .index("by_month_department", ["monthKey", "departmentKey"])
+    .index("by_month_department_tag", ["monthKey", "departmentKey", "tagName"]),
+  quotaChangeLogs: defineTable({
+    monthKey: v.string(),
+    level: v.union(v.literal("total"), v.literal("department"), v.literal("tag")),
+    departmentKey: v.optional(v.string()),
+    tagName: v.optional(v.string()),
+    fromQuota: v.optional(v.number()),
+    toQuota: v.number(),
+    actorEmail: v.string(),
+    actorName: v.optional(v.string()),
+    requestId: v.optional(v.id("requests")),
+    createdAt: v.number(),
+  })
+    .index("by_monthKey", ["monthKey"])
+    .index("by_request", ["requestId"]),
   cfdQuotas: defineTable({
     monthKey: v.string(),
     year: v.number(),

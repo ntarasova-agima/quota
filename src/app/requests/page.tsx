@@ -69,7 +69,7 @@ function toEndOfDay(value: string) {
 
 export default function RequestsPage() {
   const searchParams = useSearchParams();
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [paymentDueFilter, setPaymentDueFilter] = useState<"all" | "today" | "overdue">("all");
   const [myStatusFilter, setMyStatusFilter] = useState("all");
   const [authorFilter, setAuthorFilter] = useState("all");
@@ -88,7 +88,6 @@ export default function RequestsPage() {
   const [allRequestCodeQuery, setAllRequestCodeQuery] = useState("");
   const [myPage, setMyPage] = useState(1);
   const [allPage, setAllPage] = useState(1);
-  const [buhDefaultApplied, setBuhDefaultApplied] = useState(false);
   const [archiveSweepDone, setArchiveSweepDone] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
@@ -137,7 +136,7 @@ export default function RequestsPage() {
     api.requests.listAllRequests,
     isAuthenticated && canUseAllRequestsView
       ? {
-          status: statusFilter === "all" ? undefined : (statusFilter as any),
+          statuses: statusFilters.length ? (statusFilters as any) : undefined,
           createdByEmail: authorFilter === "all" ? undefined : authorFilter,
           cfdTag:
             tagFilter === "all"
@@ -159,13 +158,6 @@ export default function RequestsPage() {
   );
 
   useEffect(() => {
-    if (isFinanceRole && !buhDefaultApplied) {
-      setStatusFilter("awaiting_payment");
-      setBuhDefaultApplied(true);
-    }
-  }, [isFinanceRole, buhDefaultApplied]);
-
-  useEffect(() => {
     if (!isAuthenticated || archiveSweepDone) {
       return;
     }
@@ -183,7 +175,7 @@ export default function RequestsPage() {
   useEffect(() => {
     setAllPage(1);
   }, [
-    statusFilter,
+    statusFilters,
     authorFilter,
     tagFilter,
     categoryFilter,
@@ -537,7 +529,7 @@ export default function RequestsPage() {
                       type="button"
                       variant={paymentDueFilter === "today" ? "default" : "outline"}
                       onClick={() => {
-                        setStatusFilter("all");
+                        setStatusFilters([]);
                         setPaymentDueFilter("today");
                       }}
                     >
@@ -547,7 +539,7 @@ export default function RequestsPage() {
                       type="button"
                       variant={paymentDueFilter === "overdue" ? "default" : "outline"}
                       onClick={() => {
-                        setStatusFilter("all");
+                        setStatusFilters([]);
                         setPaymentDueFilter("overdue");
                       }}
                     >
@@ -575,18 +567,34 @@ export default function RequestsPage() {
                     value={allRequestCodeQuery}
                     onChange={(event) => setAllRequestCodeQuery(event.target.value)}
                   />
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="Фильтр" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {statusOptions.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
+                  <div className="flex max-w-full flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant={statusFilters.length === 0 ? "default" : "outline"}
+                      onClick={() => setStatusFilters([])}
+                    >
+                      Все статусы
+                    </Button>
+                    {statusOptions.filter((opt) => opt.value !== "all").map((opt) => {
+                      const selected = statusFilters.includes(opt.value);
+                      return (
+                        <Button
+                          key={opt.value}
+                          type="button"
+                          variant={selected ? "default" : "outline"}
+                          onClick={() =>
+                            setStatusFilters((current) =>
+                              current.includes(opt.value)
+                                ? current.filter((item) => item !== opt.value)
+                                : [...current, opt.value],
+                            )
+                          }
+                        >
                           {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                        </Button>
+                      );
+                    })}
+                  </div>
                   <Select value={authorFilter} onValueChange={setAuthorFilter}>
                     <SelectTrigger className="w-[240px]">
                       <SelectValue placeholder="От кого заявка" />

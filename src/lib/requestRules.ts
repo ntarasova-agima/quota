@@ -4,6 +4,7 @@ export const INTERNAL_COSTS_FUNDING_SOURCE = "Квота на внутренни
 export const PRESALES_FUNDING_SOURCE = "Квота на пресейлы";
 export const PROJECT_REVENUE_FUNDING_SOURCE = "Отгрузки проекта";
 export const COMPANY_PROFIT_FUNDING_SOURCE = "Прибыль компании";
+export const AGIMA_QUOTAS_FUNDING_SOURCE = "Квоты AGIMA";
 export const UNKNOWN_FUNDING_SOURCE = "Я не знаю";
 export const LEGACY_SERVICE_PURCHASE_CATEGORY = "Закупка сервисов";
 export const LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY = "Закупки сервисов (кроме AI-инструментов)";
@@ -12,9 +13,14 @@ export const SERVICE_PURCHASE_CATEGORY = "Внутренние закупки (�
 export const LEGACY_AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент\\подписка";
 export const AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент/подписка";
 export const LEGACY_CLIENT_SERVICES_TRANSIT_CATEGORY = "Сервисы/транзиты для клиентов";
-export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Транзиты для проектов";
+export const LEGACY_PROJECT_TRANSIT_CATEGORY = "Транзиты для проектов";
+export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Транзиты для клиентов";
+export const PURCHASE_CATEGORY = "Закупка";
+export const CONTRACTOR_PAYMENT_CATEGORY = "Оплата подрядчика";
 export const ACCOUNTING_REQUEST_AREA = "Аккаунтинг";
 export const ADMINISTRATION_REQUEST_AREA = "Администрация";
+export const TRANSIT_DEPARTMENT = "Транзит";
+export const TRANSIT_TAG_NAME = "Транзит";
 
 export const ACCOUNTING_REQUEST_CATEGORIES = [
   "Welcome-бонус",
@@ -22,33 +28,36 @@ export const ACCOUNTING_REQUEST_CATEGORIES = [
   "Неформальное мероприятие",
   "Совместный мерч",
   "Конкурсное задание",
-  CLIENT_SERVICES_TRANSIT_CATEGORY,
 ] as const;
 
 export const ADMINISTRATION_REQUEST_CATEGORIES = [
-  SERVICE_PURCHASE_CATEGORY,
-  AI_TOOLS_REQUEST_CATEGORY,
+  PURCHASE_CATEGORY,
+  CONTRACTOR_PAYMENT_CATEGORY,
 ] as const;
 
-export const SERVICE_PURCHASE_FUNDING_SOURCES = [
-  INTERNAL_COSTS_FUNDING_SOURCE,
+export const TRANSIT_REQUEST_CATEGORIES = [
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
 ] as const;
 
-const GIFT_FUNDING_SOURCES = [
-  COMPANY_PROFIT_FUNDING_SOURCE,
-  PRESALES_FUNDING_SOURCE,
+export const NEW_FUNDING_SOURCES = [
+  AGIMA_QUOTAS_FUNDING_SOURCE,
   PROJECT_REVENUE_FUNDING_SOURCE,
-] as const;
-
-const EVENT_AND_MERCH_FUNDING_SOURCES = [
-  PROJECT_REVENUE_FUNDING_SOURCE,
-  COMPANY_PROFIT_FUNDING_SOURCE,
+  UNKNOWN_FUNDING_SOURCE,
 ] as const;
 
 export function normalizeFundingSource(fundingSource: string) {
-  return fundingSource === LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE
-    ? AI_TOOLS_FUNDING_SOURCE
-    : fundingSource;
+  if (
+    [
+      LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE,
+      AI_TOOLS_FUNDING_SOURCE,
+      INTERNAL_COSTS_FUNDING_SOURCE,
+      PRESALES_FUNDING_SOURCE,
+      COMPANY_PROFIT_FUNDING_SOURCE,
+    ].includes(fundingSource)
+  ) {
+    return AGIMA_QUOTAS_FUNDING_SOURCE;
+  }
+  return fundingSource;
 }
 
 export function normalizeRequestCategory(category: string) {
@@ -57,14 +66,15 @@ export function normalizeRequestCategory(category: string) {
       LEGACY_SERVICE_PURCHASE_CATEGORY,
       LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY,
       LEGACY_SHORT_SERVICE_PURCHASE_CATEGORY,
+      SERVICE_PURCHASE_CATEGORY,
     ].includes(category)
   ) {
-    return SERVICE_PURCHASE_CATEGORY;
+    return PURCHASE_CATEGORY;
   }
-  if (category === LEGACY_AI_TOOLS_REQUEST_CATEGORY) {
-    return AI_TOOLS_REQUEST_CATEGORY;
+  if (category === LEGACY_AI_TOOLS_REQUEST_CATEGORY || category === AI_TOOLS_REQUEST_CATEGORY) {
+    return PURCHASE_CATEGORY;
   }
-  if (category === LEGACY_CLIENT_SERVICES_TRANSIT_CATEGORY) {
+  if (category === LEGACY_CLIENT_SERVICES_TRANSIT_CATEGORY || category === LEGACY_PROJECT_TRANSIT_CATEGORY) {
     return CLIENT_SERVICES_TRANSIT_CATEGORY;
   }
   return category;
@@ -72,6 +82,20 @@ export function normalizeRequestCategory(category: string) {
 
 export function getRequestAreaForCategory(category: string) {
   const normalizedCategory = normalizeRequestCategory(category);
+  if (
+    ACCOUNTING_REQUEST_CATEGORIES.includes(
+      normalizedCategory as (typeof ACCOUNTING_REQUEST_CATEGORIES)[number],
+    )
+  ) {
+    return ACCOUNTING_REQUEST_AREA;
+  }
+  if (
+    TRANSIT_REQUEST_CATEGORIES.includes(
+      normalizedCategory as (typeof TRANSIT_REQUEST_CATEGORIES)[number],
+    )
+  ) {
+    return TRANSIT_DEPARTMENT;
+  }
   if (
     ADMINISTRATION_REQUEST_CATEGORIES.includes(
       normalizedCategory as (typeof ADMINISTRATION_REQUEST_CATEGORIES)[number],
@@ -87,16 +111,20 @@ export function isAdministrationRequestCategory(category: string) {
 }
 
 export function isAiToolsFundingSource(fundingSource: string) {
-  return normalizeFundingSource(fundingSource) === AI_TOOLS_FUNDING_SOURCE;
+  return fundingSource === AI_TOOLS_FUNDING_SOURCE || fundingSource === LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE;
 }
 
 export function isAiToolsRequestCategory(category: string) {
-  return normalizeRequestCategory(category) === AI_TOOLS_REQUEST_CATEGORY;
+  return category === AI_TOOLS_REQUEST_CATEGORY || category === LEGACY_AI_TOOLS_REQUEST_CATEGORY;
 }
 
 export function isServiceRecipientCategory(category: string) {
-  return [SERVICE_PURCHASE_CATEGORY, AI_TOOLS_REQUEST_CATEGORY].includes(
-    normalizeRequestCategory(category) as typeof SERVICE_PURCHASE_CATEGORY | typeof AI_TOOLS_REQUEST_CATEGORY,
+  return [SERVICE_PURCHASE_CATEGORY, AI_TOOLS_REQUEST_CATEGORY, PURCHASE_CATEGORY, CONTRACTOR_PAYMENT_CATEGORY].includes(
+    normalizeRequestCategory(category) as
+      | typeof SERVICE_PURCHASE_CATEGORY
+      | typeof AI_TOOLS_REQUEST_CATEGORY
+      | typeof PURCHASE_CATEGORY
+      | typeof CONTRACTOR_PAYMENT_CATEGORY,
   );
 }
 
@@ -106,46 +134,22 @@ export function isHodSelectableCategory(category: string) {
     "Конкурсное задание",
     CLIENT_SERVICES_TRANSIT_CATEGORY,
     SERVICE_PURCHASE_CATEGORY,
+    PURCHASE_CATEGORY,
+    CONTRACTOR_PAYMENT_CATEGORY,
   ].includes(normalizedCategory);
 }
 
 export function getDefaultFundingSourceForCategory(category: string) {
   const normalizedCategory = normalizeRequestCategory(category);
-  if (normalizedCategory === "Подарки") {
-    return COMPANY_PROFIT_FUNDING_SOURCE;
-  }
-  if (["Welcome-бонус", "Конкурсное задание"].includes(normalizedCategory)) {
-    return PRESALES_FUNDING_SOURCE;
-  }
-  if (isAiToolsRequestCategory(normalizedCategory)) {
-    return AI_TOOLS_FUNDING_SOURCE;
-  }
-  if (normalizedCategory === SERVICE_PURCHASE_CATEGORY) {
-    return INTERNAL_COSTS_FUNDING_SOURCE;
-  }
   if (normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY) {
     return PROJECT_REVENUE_FUNDING_SOURCE;
   }
-  if (["Неформальное мероприятие", "Совместный мерч"].includes(normalizedCategory)) {
-    return PROJECT_REVENUE_FUNDING_SOURCE;
-  }
-  return undefined;
+  return AGIMA_QUOTAS_FUNDING_SOURCE;
 }
 
 export function getFundingOwnerRoles(fundingSource: string) {
   const normalizedFundingSource = normalizeFundingSource(fundingSource);
-  if (normalizedFundingSource === PRESALES_FUNDING_SOURCE) {
-    return ["NBD"] as const;
-  }
-  if (normalizedFundingSource === AI_TOOLS_FUNDING_SOURCE) {
-    return ["AI-BOSS"] as const;
-  }
-  if (normalizedFundingSource === INTERNAL_COSTS_FUNDING_SOURCE) {
-    return ["COO"] as const;
-  }
-  if (normalizedFundingSource === COMPANY_PROFIT_FUNDING_SOURCE) {
-    return ["COO", "CFD"] as const;
-  }
+  void normalizedFundingSource;
   return [] as const;
 }
 
@@ -159,32 +163,42 @@ export function isFundingSourceAllowedForCategory(category: string, fundingSourc
   if (normalizedFundingSource === UNKNOWN_FUNDING_SOURCE) {
     return true;
   }
-  if (isAiToolsRequestCategory(normalizedCategory)) {
-    return normalizedFundingSource === AI_TOOLS_FUNDING_SOURCE;
-  }
-  if (normalizedCategory === SERVICE_PURCHASE_CATEGORY) {
-    return SERVICE_PURCHASE_FUNDING_SOURCES.includes(
-      normalizedFundingSource as (typeof SERVICE_PURCHASE_FUNDING_SOURCES)[number],
-    );
-  }
   if (normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY) {
     return normalizedFundingSource === PROJECT_REVENUE_FUNDING_SOURCE;
   }
-  if (["Welcome-бонус", "Конкурсное задание"].includes(normalizedCategory)) {
-    return normalizedFundingSource === PRESALES_FUNDING_SOURCE;
+  return NEW_FUNDING_SOURCES.includes(normalizedFundingSource as (typeof NEW_FUNDING_SOURCES)[number]);
+}
+
+export function getCategoriesForDepartment(department: string) {
+  if (department === ACCOUNTING_REQUEST_AREA) {
+    return ACCOUNTING_REQUEST_CATEGORIES;
   }
-  if (normalizedCategory === "Подарки") {
-    return GIFT_FUNDING_SOURCES.includes(
-      normalizedFundingSource as (typeof GIFT_FUNDING_SOURCES)[number],
-    );
+  if (department === TRANSIT_DEPARTMENT) {
+    return TRANSIT_REQUEST_CATEGORIES;
   }
-  if (["Неформальное мероприятие", "Совместный мерч"].includes(normalizedCategory)) {
-    return EVENT_AND_MERCH_FUNDING_SOURCES.includes(
-      normalizedFundingSource as (typeof EVENT_AND_MERCH_FUNDING_SOURCES)[number],
-    );
+  return ADMINISTRATION_REQUEST_CATEGORIES;
+}
+
+export function getRequestAreaForDepartment(department?: string | null) {
+  if (department === ACCOUNTING_REQUEST_AREA) {
+    return ACCOUNTING_REQUEST_AREA;
   }
-  if (normalizedFundingSource === AI_TOOLS_FUNDING_SOURCE) {
+  return ADMINISTRATION_REQUEST_AREA;
+}
+
+export function isCategoryAllowedForDepartment(category: string, department?: string | null) {
+  if (!department) {
     return false;
   }
-  return true;
+  return (getCategoriesForDepartment(department) as readonly string[]).includes(
+    normalizeRequestCategory(category),
+  );
+}
+
+export function isAgimaQuotaFundingSource(fundingSource: string) {
+  return normalizeFundingSource(fundingSource) === AGIMA_QUOTAS_FUNDING_SOURCE;
+}
+
+export function shouldSkipQuotaByTag(tag?: string | null) {
+  return tag?.trim() === TRANSIT_TAG_NAME;
 }

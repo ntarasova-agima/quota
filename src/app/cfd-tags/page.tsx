@@ -12,17 +12,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   HOD_DEPARTMENTS,
-  REQUEST_AREAS,
   type RequestArea,
 } from "@/lib/constants";
-import { ADMINISTRATION_REQUEST_AREA } from "@/lib/requestRules";
 
 export default function CfdTagsPage() {
-  const [requestArea, setRequestArea] = useState<RequestArea>("Аккаунтинг");
-  const [department, setDepartment] = useState("");
+  const [department, setDepartment] = useState<RequestArea>("Аккаунтинг");
   const tags = useQuery(api.cfdTags.list, {
-    requestArea,
-    department: requestArea === ADMINISTRATION_REQUEST_AREA ? department || undefined : undefined,
+    department,
   });
   const createTag = useMutation(api.cfdTags.create);
   const removeTag = useMutation(api.cfdTags.remove);
@@ -37,8 +33,7 @@ export default function CfdTagsPage() {
     try {
       await createTag({
         name,
-        requestArea,
-        department: requestArea === ADMINISTRATION_REQUEST_AREA ? department || undefined : undefined,
+        department,
       });
       setName("");
     } catch (err) {
@@ -60,18 +55,15 @@ export default function CfdTagsPage() {
               <CardDescription>Теги используются для фильтрации заявок и квот.</CardDescription>
             </CardHeader>
             <CardContent>
-              <form className="grid gap-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] sm:items-end" onSubmit={handleCreate}>
+              <form className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_auto] sm:items-end" onSubmit={handleCreate}>
                 <div className="space-y-2">
-                  <Label>Направление</Label>
-                  <Select value={requestArea} onValueChange={(value) => {
-                    setRequestArea(value as RequestArea);
-                    setDepartment("");
-                  }}>
+                  <Label>Цех</Label>
+                  <Select value={department} onValueChange={(value) => setDepartment(value as RequestArea)}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Направление" />
+                      <SelectValue placeholder="Цех" />
                     </SelectTrigger>
                     <SelectContent>
-                      {REQUEST_AREAS.map((item) => (
+                      {HOD_DEPARTMENTS.map((item) => (
                         <SelectItem key={item} value={item}>
                           {item}
                         </SelectItem>
@@ -79,24 +71,6 @@ export default function CfdTagsPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                {requestArea === ADMINISTRATION_REQUEST_AREA ? (
-                  <div className="space-y-2">
-                    <Label>Цех</Label>
-                    <Select value={department || "none"} onValueChange={(value) => setDepartment(value === "none" ? "" : value)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Цех" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Цех не выбран</SelectItem>
-                        {HOD_DEPARTMENTS.map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {item}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
                 <div className="w-full space-y-2">
                   <Label htmlFor="name">Название тега</Label>
                   <Input
@@ -107,7 +81,7 @@ export default function CfdTagsPage() {
                     required
                   />
                 </div>
-                <Button type="submit" disabled={saving || (requestArea === ADMINISTRATION_REQUEST_AREA && !department)}>
+                <Button type="submit" disabled={saving || !department}>
                   Добавить
                 </Button>
               </form>
@@ -133,26 +107,29 @@ export default function CfdTagsPage() {
                     >
                       <span>
                         {tag.name}
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          {(tag.requestArea ?? "Аккаунтинг")}
-                          {tag.department ? ` · ${tag.department}` : ""}
-                        </span>
+                        <span className="ml-2 text-xs text-muted-foreground">{tag.department}</span>
                       </span>
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        onClick={async () => {
-                          setError(null);
-                          try {
-                            await removeTag({ id: tag._id });
-                          } catch (err) {
-                            setError(err instanceof Error ? err.message : "Не удалось удалить тег");
-                          }
-                        }}
-                      >
-                        Удалить
-                      </Button>
+                      {(tag as any).isSystem ? (
+                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
+                          системный
+                        </span>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={async () => {
+                            setError(null);
+                            try {
+                              await removeTag({ id: tag._id });
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : "Не удалось удалить тег");
+                            }
+                          }}
+                        >
+                          Удалить
+                        </Button>
+                      )}
                     </div>
                   ))
                 ) : (
