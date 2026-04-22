@@ -29,14 +29,12 @@ export default function AppHeader({
   const canApprove = profile?.roles?.some((role) =>
     ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role),
   );
-  const isNbd = profile?.roles?.includes("NBD");
-  const isAiBoss = profile?.roles?.includes("AI-BOSS");
   const isCfd = profile?.roles?.includes("CFD");
   const isCoo = profile?.roles?.includes("COO");
   const isBuh = profile?.roles?.includes("BUH");
   const isHod = profile?.roles?.includes("HOD");
   const isAdmin = profile?.roles?.includes("ADMIN");
-  const canManageTags = Boolean(isCfd || isBuh);
+  const canManageTags = Boolean(isCfd || isBuh || isAdmin);
   const canSeeAdministrationQuota = Boolean(isCfd || isBuh || isCoo || isHod || isAdmin);
   const requestView = searchParams.get("view") ?? "my";
 
@@ -82,29 +80,9 @@ export default function AppHeader({
             <Link href="/requests?view=all">Все заявки</Link>
           </Button>
         )}
-        {isNbd && (
-          <Button asChild variant={pathname === "/presales-quota" ? "default" : "outline"}>
-            <Link href="/presales-quota">Квоты</Link>
-          </Button>
-        )}
-        {isAiBoss && (
-          <Button asChild variant={pathname === "/ai-tools-quota" ? "default" : "outline"}>
-            <Link href="/ai-tools-quota">Квоты</Link>
-          </Button>
-        )}
-        {isCfd && (
-          <Button asChild variant={pathname === "/cfd-quota" ? "default" : "outline"}>
-            <Link href="/cfd-quota">Квоты</Link>
-          </Button>
-        )}
         {canManageTags && (
           <Button asChild variant={pathname === "/cfd-tags" ? "default" : "outline"}>
             <Link href="/cfd-tags">Справочник тегов</Link>
-          </Button>
-        )}
-        {isCoo && (
-          <Button asChild variant={pathname === "/coo-quota" ? "default" : "outline"}>
-            <Link href="/coo-quota">Квоты</Link>
           </Button>
         )}
         {(showAdmin || isAdmin || pathname.startsWith("/admin")) && (
@@ -114,7 +92,7 @@ export default function AppHeader({
         )}
         {canSeeAdministrationQuota && (
           <Button asChild variant={pathname === "/administration-quota" ? "default" : "outline"}>
-            <Link href="/administration-quota">Квоты Администрации</Link>
+            <Link href="/administration-quota">Квоты</Link>
           </Button>
         )}
         </div>

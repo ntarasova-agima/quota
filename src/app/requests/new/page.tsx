@@ -25,7 +25,7 @@ import {
   FUNDING_SOURCES,
   HOD_DEPARTMENTS,
   REQUEST_AREAS,
-  REQUEST_CATEGORIES_BY_AREA,
+  getCategoriesForDepartment,
   ROLE_OPTIONS,
   type RequestArea,
   type RoleOption,
@@ -39,12 +39,9 @@ import {
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
-  ADMINISTRATION_REQUEST_AREA,
-  getRequestAreaForCategory,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   isAiToolsRequestCategory,
-  isAdministrationRequestCategory,
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
@@ -94,14 +91,13 @@ export default function NewRequestPage() {
 
   const [requestArea, setRequestArea] = useState<RequestArea>("Аккаунтинг");
   const [category, setCategory] = useState("Welcome-бонус");
-  const [department, setDepartment] = useState("");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [amountWithVat, setAmountWithVat] = useState("");
   const [vatRate, setVatRate] = useState(String(DEFAULT_VAT_RATE));
   const [vatInputSource, setVatInputSource] = useState<VatAmountSource>("without");
   const [currency, setCurrency] = useState("RUB");
-  const [fundingSource, setFundingSource] = useState("Квота на пресейлы");
+  const [fundingSource, setFundingSource] = useState("Квоты AGIMA");
   const [justification, setJustification] = useState("");
   const [details, setDetails] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
@@ -192,7 +188,11 @@ export default function NewRequestPage() {
     [],
   );
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
-  const isAdministrationArea = requestArea === ADMINISTRATION_REQUEST_AREA;
+  const selectedDepartment = requestArea;
+  const categoryOptions = useMemo(
+    () => getCategoriesForDepartment(selectedDepartment),
+    [selectedDepartment],
+  );
   const showTransitFields = fundingSource === "Отгрузки проекта";
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
   const paidByError = useMemo(
@@ -275,11 +275,11 @@ export default function NewRequestPage() {
                   .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
                   .map((item) => item.department as string)
               : []),
-            ...(isAdministrationArea && isHodSelectableCategory(category) && department ? [department] : []),
+            ...(isHodSelectableCategory(category) && selectedDepartment ? [selectedDepartment] : []),
           ],
         ),
       ),
-    [category, department, isAdministrationArea, specialistsPayload],
+    [category, selectedDepartment, specialistsPayload],
   );
   const effectiveRequiredHodDepartments = useMemo(
     () => Array.from(new Set([...requiredHodDepartments, ...autoRequiredHodDepartments])),
@@ -360,7 +360,7 @@ export default function NewRequestPage() {
     ],
   );
   const titleInvalid = showValidationErrors && !title.trim();
-  const departmentInvalid = showValidationErrors && isAdministrationArea && !department;
+  const departmentInvalid = showValidationErrors && !selectedDepartment;
   const clientNameInvalid = showValidationErrors && !clientName.trim();
   const amountInvalid =
     showValidationErrors &&
@@ -405,7 +405,7 @@ export default function NewRequestPage() {
     effectiveRequiredHodDepartments.length === 0;
   const hasBlockingValidationErrors =
     !title.trim() ||
-    (isAdministrationArea && !department) ||
+    !selectedDepartment ||
     !clientName.trim() ||
     !resolvedAmountsPreview.amountWithoutVat ||
     !resolvedAmountsPreview.amountWithVat ||
@@ -491,9 +491,8 @@ export default function NewRequestPage() {
 
   function handleRequestAreaChange(nextArea: RequestArea) {
     setRequestArea(nextArea);
-    const nextCategory = REQUEST_CATEGORIES_BY_AREA[nextArea][0];
+    const nextCategory = getCategoriesForDepartment(nextArea)[0];
     setCategory(nextCategory);
-    setDepartment("");
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
@@ -506,7 +505,6 @@ export default function NewRequestPage() {
 
   function handleCategoryChange(nextCategory: string) {
     setCategory(nextCategory);
-    setRequestArea(getRequestAreaForCategory(nextCategory) as RequestArea);
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
@@ -517,9 +515,6 @@ export default function NewRequestPage() {
     if (!isHodSelectableCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
-    }
-    if (!isAdministrationRequestCategory(nextCategory)) {
-      setDepartment("");
     }
   }
 
@@ -658,7 +653,7 @@ export default function NewRequestPage() {
       });
       const id = await createRequest({
         requestArea,
-        department: isAdministrationArea ? normalizeHodDepartment(department) : undefined,
+        department: normalizeHodDepartment(selectedDepartment),
         title,
         category,
         amount: resolvedAmounts.amountWithoutVat,
@@ -768,10 +763,10 @@ export default function NewRequestPage() {
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="space-y-2">
-                    <FieldLabel required>Направление</FieldLabel>
+                    <FieldLabel required>Цех</FieldLabel>
                     <Select value={requestArea} onValueChange={(value) => handleRequestAreaChange(value as RequestArea)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Выберите направление" />
+                      <SelectTrigger aria-invalid={departmentInvalid ? true : undefined}>
+                        <SelectValue placeholder="Выберите цех" />
                       </SelectTrigger>
                       <SelectContent>
                         {REQUEST_AREAS.map((item) => (
@@ -789,7 +784,7 @@ export default function NewRequestPage() {
                         <SelectValue placeholder="Выберите категорию" />
                       </SelectTrigger>
                       <SelectContent>
-                        {REQUEST_CATEGORIES_BY_AREA[requestArea].map((item) => (
+                        {categoryOptions.map((item) => (
                           <SelectItem key={item} value={item}>
                             {item}
                           </SelectItem>
@@ -816,27 +811,6 @@ export default function NewRequestPage() {
                     )}
                   </div>
                 </div>
-
-                {isAdministrationArea ? (
-                  <div className="space-y-2">
-                    <FieldLabel htmlFor="department" required>
-                      Цех
-                    </FieldLabel>
-                    <Select value={department || "none"} onValueChange={(value) => setDepartment(value === "none" ? "" : value)}>
-                      <SelectTrigger id="department" aria-invalid={departmentInvalid ? true : undefined}>
-                        <SelectValue placeholder="Выберите цех" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Цех не выбран</SelectItem>
-                        {HOD_DEPARTMENTS.map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {item}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2 sm:col-span-3">

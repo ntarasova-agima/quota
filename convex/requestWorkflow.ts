@@ -2,6 +2,8 @@ import { normalizeContestSpecialistSource, requiresContestSpecialistValidation }
 import { normalizeHodDepartment } from "../src/lib/departments";
 import {
   CLIENT_SERVICES_TRANSIT_CATEGORY,
+  CONTRACTOR_PAYMENT_CATEGORY,
+  PURCHASE_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
   isHodSelectableCategory,
   normalizeRequestCategory,
@@ -160,5 +162,7 @@ export function canCategoryUseHodApproval(category: string) {
     "Конкурсное задание",
     CLIENT_SERVICES_TRANSIT_CATEGORY,
     SERVICE_PURCHASE_CATEGORY,
+    PURCHASE_CATEGORY,
+    CONTRACTOR_PAYMENT_CATEGORY,
   ].includes(normalizedCategory);
 }
