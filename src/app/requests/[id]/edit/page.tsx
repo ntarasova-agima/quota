@@ -22,10 +22,12 @@ import { api } from "@/lib/convex";
 import {
   CURRENCIES,
   DEFAULT_REQUIRED_ROLES,
-  EXPENSE_CATEGORIES,
   FUNDING_SOURCES,
   HOD_DEPARTMENTS,
+  REQUEST_AREAS,
+  REQUEST_CATEGORIES_BY_AREA,
   ROLE_OPTIONS,
+  type RequestArea,
   type RoleOption,
 } from "@/lib/constants";
 import { getRoleLabel } from "@/lib/roleLabels";
@@ -41,17 +43,21 @@ import {
 import {
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
+  ADMINISTRATION_REQUEST_AREA,
   SERVICE_PURCHASE_CATEGORY,
+  getRequestAreaForCategory,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   isAiToolsFundingSource,
   isAiToolsRequestCategory,
+  isAdministrationRequestCategory,
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
 } from "@/lib/requestRules";
+import { normalizeHodDepartment } from "@/lib/departments";
 import {
   DEFAULT_VAT_RATE,
   parseMoneyInput,
@@ -86,11 +92,18 @@ export default function NewRequestPage() {
   const router = useRouter();
   const data = useQuery(api.requests.getRequest, { id: requestId });
   const today = useMemo(() => new Date(), []);
-  const minDateValue = useMemo(() => {
+  const minApprovalDateValue = useMemo(() => {
     const next = new Date(today);
     next.setDate(next.getDate() + 1);
     return next.toISOString().slice(0, 10);
   }, [today]);
+  const minNeededByDateValue = useMemo(
+    () =>
+      data?.request?.createdAt
+        ? timestampToDateInput(data.request.createdAt)
+        : today.toISOString().slice(0, 10),
+    [data?.request?.createdAt, today],
+  );
   const defaultDeadline = useMemo(() => {
     const date = new Date(today);
     let added = 0;
@@ -104,7 +117,9 @@ export default function NewRequestPage() {
     return date.toISOString().slice(0, 10);
   }, [today]);
 
+  const [requestArea, setRequestArea] = useState<RequestArea>("Аккаунтинг");
   const [category, setCategory] = useState("Welcome-бонус");
+  const [department, setDepartment] = useState("");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [amountWithVat, setAmountWithVat] = useState("");
@@ -118,6 +133,14 @@ export default function NewRequestPage() {
   const [clientName, setClientName] = useState("");
   const [counterparty, setCounterparty] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [contractLink, setContractLink] = useState("");
+  const [dueDiligenceChecked, setDueDiligenceChecked] = useState(false);
+  const [dueDiligenceJiraLink, setDueDiligenceJiraLink] = useState("");
+  const [prepaymentRequired, setPrepaymentRequired] = useState(false);
+  const [prepaymentAmount, setPrepaymentAmount] = useState("");
+  const [prepaymentAmountWithVat, setPrepaymentAmountWithVat] = useState("");
+  const [prepaymentVatInputSource, setPrepaymentVatInputSource] = useState<VatAmountSource>("without");
+  const [prepaymentDate, setPrepaymentDate] = useState("");
   const [contacts, setContacts] = useState("");
   const [relatedRequests, setRelatedRequests] = useState("");
   const [relatedRequestsExpanded, setRelatedRequestsExpanded] = useState(false);
@@ -145,8 +168,10 @@ export default function NewRequestPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isContractDragOver, setIsContractDragOver] = useState(false);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const contractFileInputRef = useRef<HTMLInputElement | null>(null);
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
@@ -193,7 +218,16 @@ export default function NewRequestPage() {
   );
   const showTransitFields = fundingSource === "Отгрузки проекта";
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
+  const isAdministrationArea = requestArea === ADMINISTRATION_REQUEST_AREA;
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
+  const contractAttachments = useMemo(
+    () => (attachments ?? []).filter((item) => item.attachmentType === "contract"),
+    [attachments],
+  );
+  const generalAttachments = useMemo(
+    () => (attachments ?? []).filter((item) => (item.attachmentType ?? "general") !== "contract"),
+    [attachments],
+  );
   const paidByError = useMemo(
     () => (paidBy && !isPaidByDateAllowed(paidBy) ? "AGIMA тогда еще не было" : null),
     [paidBy],
@@ -218,7 +252,10 @@ export default function NewRequestPage() {
     const request = data.request;
     const normalizedFundingSource = normalizeFundingSource(request.fundingSource);
     const normalizedStoredCategory = normalizeRequestCategory(request.category);
+    const nextRequestArea = (request.requestArea ?? getRequestAreaForCategory(normalizedStoredCategory)) as RequestArea;
+    setRequestArea(nextRequestArea);
     setCategory(normalizedStoredCategory);
+    setDepartment(normalizeHodDepartment(request.department) ?? "");
     setTitle(request.title ?? "");
     setAmount(String(request.amount ?? ""));
     setAmountWithVat(request.amountWithVat !== undefined ? String(request.amountWithVat) : "");
@@ -232,6 +269,13 @@ export default function NewRequestPage() {
     setClientName(request.clientName ?? "");
     setCounterparty(request.counterparty ?? "");
     setPaymentMethod(request.paymentMethod ?? "");
+    setContractLink(request.contractLink ?? "");
+    setDueDiligenceChecked(request.dueDiligenceChecked ?? false);
+    setDueDiligenceJiraLink(request.dueDiligenceJiraLink ?? "");
+    setPrepaymentRequired(request.prepaymentRequired ?? false);
+    setPrepaymentAmount(request.prepaymentAmount !== undefined ? String(request.prepaymentAmount) : "");
+    setPrepaymentAmountWithVat(request.prepaymentAmountWithVat !== undefined ? String(request.prepaymentAmountWithVat) : "");
+    setPrepaymentDate(request.prepaymentDate ? timestampToDateInput(request.prepaymentDate) : "");
     setContacts((request.contacts ?? []).join("\n"));
     setRelatedRequests((request.relatedRequests ?? []).join("\n"));
     setRelatedRequestsExpanded(Boolean(request.relatedRequests?.length));
@@ -243,6 +287,7 @@ export default function NewRequestPage() {
         hours: item.hours !== undefined ? String(item.hours) : "",
         directCost: item.directCost !== undefined ? String(item.directCost) : "",
         hodConfirmed: item.hodConfirmed ?? false,
+        buhConfirmed: item.buhConfirmed ?? false,
         validationSkipped: item.validationSkipped ?? false,
         sourceType: normalizeContestSpecialistSource(item.sourceType),
       })) ?? [];
@@ -322,6 +367,7 @@ export default function NewRequestPage() {
         hours: parseMoneyInput(item.hours),
         directCost: parseMoneyInput(item.directCost),
         hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
+        buhConfirmed: item.validationSkipped ? true : item.buhConfirmed ?? false,
         validationSkipped: item.validationSkipped,
       })),
     [contractors, internalSpecialists],
@@ -356,14 +402,17 @@ export default function NewRequestPage() {
     () =>
       Array.from(
         new Set(
-          category === "Конкурсное задание"
-            ? specialistsPayload
-                .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
-                .map((item) => item.department as string)
-            : [],
+          [
+            ...(category === "Конкурсное задание"
+              ? specialistsPayload
+                  .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
+                  .map((item) => item.department as string)
+              : []),
+            ...(isAdministrationArea && isHodSelectableCategory(category) && department ? [department] : []),
+          ],
         ),
       ),
-    [category, specialistsPayload],
+    [category, department, isAdministrationArea, specialistsPayload],
   );
   const effectiveRequiredHodDepartments = useMemo(
     () => Array.from(new Set([...requiredHodDepartments, ...autoRequiredHodDepartments])),
@@ -404,6 +453,24 @@ export default function NewRequestPage() {
       }),
     [amountWithVat, effectiveAmountWithoutVatInput, vatRate],
   );
+  const resolvedPrepaymentAmountsPreview = useMemo(
+    () =>
+      resolveVatAmounts({
+        amountWithoutVat: parseMoneyInput(prepaymentAmount),
+        amountWithVat: parseMoneyInput(prepaymentAmountWithVat),
+        vatRate: parseVatRateInput(vatRate),
+        autoCalculateAmountWithVat: true,
+      }),
+    [prepaymentAmount, prepaymentAmountWithVat, vatRate],
+  );
+  const needsContract =
+    (resolvedAmountsPreview.amountWithoutVat ?? 0) > 100_000 &&
+    category !== "Welcome-бонус" &&
+    category !== "Конкурсное задание";
+  const needsDueDiligence =
+    (resolvedAmountsPreview.amountWithoutVat ?? 0) > 500_000 &&
+    category !== "Welcome-бонус" &&
+    category !== "Конкурсное задание";
   const incomingRatioValue = useMemo(
     () =>
       formatIncomingRatio(
@@ -422,6 +489,7 @@ export default function NewRequestPage() {
     ],
   );
   const titleInvalid = showValidationErrors && !title.trim();
+  const departmentInvalid = showValidationErrors && isAdministrationArea && !department;
   const clientNameInvalid = showValidationErrors && !clientName.trim();
   const amountInvalid =
     showValidationErrors &&
@@ -440,6 +508,23 @@ export default function NewRequestPage() {
     showValidationErrors &&
     showTransitFields &&
     (!resolvedIncomingAmountsPreview.amountWithoutVat || !resolvedIncomingAmountsPreview.amountWithVat);
+  const contractInvalid =
+    showValidationErrors &&
+    needsContract &&
+    !contractLink.trim() &&
+    contractAttachments.length === 0;
+  const dueDiligenceInvalid =
+    showValidationErrors &&
+    needsDueDiligence &&
+    (!dueDiligenceChecked || !dueDiligenceJiraLink.trim());
+  const prepaymentInvalid =
+    showValidationErrors &&
+    prepaymentRequired &&
+    (!resolvedPrepaymentAmountsPreview.amountWithoutVat ||
+      !resolvedPrepaymentAmountsPreview.amountWithVat ||
+      resolvedPrepaymentAmountsPreview.amountWithoutVat <= 0 ||
+      resolvedPrepaymentAmountsPreview.amountWithVat <= 0 ||
+      !prepaymentDate);
   const approvalDeadlineInvalid = showValidationErrors && !approvalDeadline;
   const neededByInvalid = showValidationErrors && !neededBy;
   const hodDepartmentsInvalid =
@@ -449,6 +534,7 @@ export default function NewRequestPage() {
     effectiveRequiredHodDepartments.length === 0;
   const hasBlockingValidationErrors =
     !title.trim() ||
+    (isAdministrationArea && !department) ||
     !clientName.trim() ||
     !resolvedAmountsPreview.amountWithoutVat ||
     !resolvedAmountsPreview.amountWithVat ||
@@ -462,6 +548,14 @@ export default function NewRequestPage() {
     (showTransitFields &&
       (!resolvedIncomingAmountsPreview.amountWithoutVat ||
         !resolvedIncomingAmountsPreview.amountWithVat)) ||
+    (needsContract && !contractLink.trim() && contractAttachments.length === 0) ||
+    (needsDueDiligence && (!dueDiligenceChecked || !dueDiligenceJiraLink.trim())) ||
+    (prepaymentRequired &&
+      (!resolvedPrepaymentAmountsPreview.amountWithoutVat ||
+        !resolvedPrepaymentAmountsPreview.amountWithVat ||
+        resolvedPrepaymentAmountsPreview.amountWithoutVat <= 0 ||
+        resolvedPrepaymentAmountsPreview.amountWithVat <= 0 ||
+        !prepaymentDate)) ||
     (requiredRoles.includes("HOD") &&
       isHodSelectableCategory(category) &&
       effectiveRequiredHodDepartments.length === 0) ||
@@ -528,8 +622,24 @@ export default function NewRequestPage() {
     setRequiredRoles((current) => (current.includes("HOD") ? current : [...current, "HOD"]));
   }, [autoRequiredHodDepartments]);
 
+  function handleRequestAreaChange(nextArea: RequestArea) {
+    setRequestArea(nextArea);
+    const nextCategory = REQUEST_CATEGORIES_BY_AREA[nextArea][0];
+    setCategory(nextCategory);
+    setDepartment("");
+    const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
+    if (defaultFundingSource) {
+      setFundingSource(defaultFundingSource);
+    }
+    if (!isHodSelectableCategory(nextCategory)) {
+      setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
+      setRequiredHodDepartments([]);
+    }
+  }
+
   function handleCategoryChange(nextCategory: string) {
     setCategory(nextCategory);
+    setRequestArea(getRequestAreaForCategory(nextCategory) as RequestArea);
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
@@ -540,6 +650,9 @@ export default function NewRequestPage() {
     if (!isHodSelectableCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
+    }
+    if (!isAdministrationRequestCategory(nextCategory)) {
+      setDepartment("");
     }
   }
 
@@ -580,7 +693,7 @@ export default function NewRequestPage() {
     });
   }
 
-  async function uploadFiles(files: File[]) {
+  async function uploadFiles(files: File[], attachmentType: "general" | "contract" = "general") {
     if (!files.length) {
       return;
     }
@@ -621,6 +734,7 @@ export default function NewRequestPage() {
           fileName: file.name,
           contentType: file.type || undefined,
           fileSize: file.size,
+          attachmentType,
         });
       }
       setSelectedFiles([]);
@@ -672,8 +786,16 @@ export default function NewRequestPage() {
       if (resolvedAmounts.amountWithVat === undefined || resolvedAmounts.amountWithVat <= 0) {
         throw new Error("Укажите сумму с НДС или сумму без НДС");
       }
+      const resolvedPrepaymentAmounts = resolveVatAmounts({
+        amountWithoutVat: parseMoneyInput(prepaymentAmount),
+        amountWithVat: parseMoneyInput(prepaymentAmountWithVat),
+        vatRate: parseVatRateInput(vatRate),
+        autoCalculateAmountWithVat: true,
+      });
       await editRequest({
         id: requestId,
+        requestArea,
+        department: isAdministrationArea ? normalizeHodDepartment(department) : undefined,
         title,
         category,
         amount: resolvedAmounts.amountWithoutVat,
@@ -695,6 +817,23 @@ export default function NewRequestPage() {
           category === "Welcome-бонус"
             ? undefined
             : paymentMethod || undefined,
+        contractLink: contractLink.trim() || undefined,
+        pendingContractFileCount: contractAttachments.length,
+        dueDiligenceChecked,
+        dueDiligenceJiraLink: dueDiligenceJiraLink.trim() || undefined,
+        prepaymentRequired,
+        prepaymentAmount:
+          prepaymentRequired && resolvedPrepaymentAmounts.amountWithoutVat !== undefined
+            ? resolvedPrepaymentAmounts.amountWithoutVat
+            : undefined,
+        prepaymentAmountWithVat:
+          prepaymentRequired && resolvedPrepaymentAmounts.amountWithVat !== undefined
+            ? resolvedPrepaymentAmounts.amountWithVat
+            : undefined,
+        prepaymentDate:
+          prepaymentRequired && prepaymentDate
+            ? new Date(`${prepaymentDate}T00:00:00`).getTime()
+            : undefined,
         contacts: category === "Конкурсное задание" || isServiceCategory ? [] : contactsList,
         relatedRequests: relatedRequestsList,
         links: [],
@@ -783,7 +922,22 @@ export default function NewRequestPage() {
             </CardHeader>
             <CardContent>
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-2">
+                    <FieldLabel required>Направление</FieldLabel>
+                    <Select value={requestArea} onValueChange={(value) => handleRequestAreaChange(value as RequestArea)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Выберите направление" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REQUEST_AREAS.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {item}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-2">
                     <FieldLabel required>Категория</FieldLabel>
                     <Select value={category} onValueChange={handleCategoryChange}>
@@ -791,7 +945,7 @@ export default function NewRequestPage() {
                         <SelectValue placeholder="Выберите категорию" />
                       </SelectTrigger>
                       <SelectContent>
-                        {EXPENSE_CATEGORIES.map((item) => (
+                        {REQUEST_CATEGORIES_BY_AREA[requestArea].map((item) => (
                           <SelectItem key={item} value={item}>
                             {item}
                           </SelectItem>
@@ -818,6 +972,27 @@ export default function NewRequestPage() {
                     )}
                   </div>
                 </div>
+
+                {isAdministrationArea ? (
+                  <div className="space-y-2">
+                    <FieldLabel htmlFor="department" required>
+                      Цех
+                    </FieldLabel>
+                    <Select value={department || "none"} onValueChange={(value) => setDepartment(value === "none" ? "" : value)}>
+                      <SelectTrigger id="department" aria-invalid={departmentInvalid ? true : undefined}>
+                        <SelectValue placeholder="Выберите цех" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Цех не выбран</SelectItem>
+                        {HOD_DEPARTMENTS.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {item}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2 sm:col-span-3">
@@ -967,6 +1142,14 @@ export default function NewRequestPage() {
                       });
                       setIncomingAmount(syncedIncoming.amountWithoutVatInput);
                       setIncomingAmountWithVat(syncedIncoming.amountWithVatInput);
+                      const syncedPrepayment = syncVatInputPair({
+                        amountWithoutVatInput: prepaymentAmount,
+                        amountWithVatInput: prepaymentAmountWithVat,
+                        vatRateInput: nextVatRate,
+                        source: prepaymentVatInputSource,
+                      });
+                      setPrepaymentAmount(syncedPrepayment.amountWithoutVatInput);
+                      setPrepaymentAmountWithVat(syncedPrepayment.amountWithVatInput);
                     }}
                   />
                 </div>
@@ -1008,6 +1191,139 @@ export default function NewRequestPage() {
                   />
                 </div>
               )}
+
+              {needsContract ? (
+                <div className="space-y-3 rounded-lg border border-border p-4">
+                  <div className="space-y-1">
+                    <FieldLabel required>Договор с контрагентом</FieldLabel>
+                    <p className="text-xs text-muted-foreground">
+                      Для суммы закупки больше 100 000 без НДС добавьте ссылку на договор или прикрепите файл договора.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contractLink">Ссылка на договор</Label>
+                    <Input
+                      id="contractLink"
+                      value={contractLink}
+                      onChange={(event) => setContractLink(event.target.value)}
+                      aria-invalid={contractInvalid ? true : undefined}
+                      placeholder="https://..."
+                    />
+                  </div>
+                  <input
+                    id="contractFiles"
+                    ref={contractFileInputRef}
+                    type="file"
+                    className="hidden"
+                    multiple
+                    accept={ACCEPTED_REQUEST_ATTACHMENT_EXTENSIONS.join(",")}
+                    onChange={async (event) => {
+                      await uploadFiles(Array.from(event.target.files ?? []), "contract");
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => contractFileInputRef.current?.click()}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setIsContractDragOver(true);
+                    }}
+                    onDragLeave={(event) => {
+                      event.preventDefault();
+                      setIsContractDragOver(false);
+                    }}
+                    onDrop={async (event) => {
+                      event.preventDefault();
+                      setIsContractDragOver(false);
+                      await uploadFiles(Array.from(event.dataTransfer.files ?? []), "contract");
+                    }}
+                    className={`flex min-h-16 w-full cursor-pointer items-center justify-between rounded-xl border px-4 py-3 text-left transition-all ${
+                      isContractDragOver
+                        ? "border-amber-500 bg-amber-50 shadow-[0_0_0_4px_rgba(245,158,11,0.08)]"
+                        : contractInvalid
+                          ? "border-destructive bg-destructive/5"
+                          : "border-border bg-background hover:border-amber-400 hover:bg-amber-50/50"
+                    }`}
+                  >
+                    <span className="flex items-center gap-3">
+                      <span className="rounded-lg bg-amber-100 p-2 text-amber-700">
+                        <Paperclip className="h-4 w-4" />
+                      </span>
+                      <span>
+                        <span className="block font-medium">Прикрепить договор файлом</span>
+                        <span className="block text-sm text-muted-foreground">PDF, Office, изображения, архивы · до 40 МБ</span>
+                      </span>
+                    </span>
+                    <Upload className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                  {contractAttachments.length ? (
+                    <div className="space-y-2">
+                      {contractAttachments.map((item) => (
+                        <div key={item._id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+                          <div>
+                            <div className="font-medium">{item.fileName}</div>
+                            <div className="text-muted-foreground">
+                              {item.uploadedByName ? `${item.uploadedByName} · ` : ""}
+                              {item.uploadedByEmail}
+                              {item.fileSize ? ` · ${formatRequestAttachmentSize(item.fileSize)}` : ""}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            {item.url ? (
+                              <Button asChild variant="outline" size="sm">
+                                <a href={item.url} target="_blank" rel="noreferrer">Открыть</a>
+                              </Button>
+                            ) : null}
+                            {item.canDelete ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={async () => {
+                                  setFileActionError(null);
+                                  if (!window.confirm(`Удалить файл ${item.fileName}?`)) return;
+                                  try {
+                                    await deleteAttachment({ attachmentId: item._id });
+                                    router.refresh();
+                                  } catch (err) {
+                                    setFileActionError(err instanceof Error ? err.message : "Не удалось удалить файл");
+                                  }
+                                }}
+                              >
+                                Удалить
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {needsDueDiligence ? (
+                <div className={`space-y-3 rounded-lg border p-4 ${dueDiligenceInvalid ? "border-destructive bg-destructive/5" : "border-border"}`}>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={dueDiligenceChecked}
+                      onCheckedChange={(checked) => setDueDiligenceChecked(checked === true)}
+                    />
+                    Проведена должная осмотрительность
+                  </label>
+                  <div className="space-y-2">
+                    <FieldLabel htmlFor="dueDiligenceJiraLink" required>
+                      Ссылка на задачу в Jira
+                    </FieldLabel>
+                    <Input
+                      id="dueDiligenceJiraLink"
+                      value={dueDiligenceJiraLink}
+                      onChange={(event) => setDueDiligenceJiraLink(event.target.value)}
+                      aria-invalid={dueDiligenceInvalid ? true : undefined}
+                      placeholder="https://jira..."
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               <div className="grid gap-4 sm:grid-cols-3">
                 {showPaymentMethod ? (
@@ -1261,9 +1577,9 @@ export default function NewRequestPage() {
                   </div>
                 ) : null}
                 {fileActionError ? <p className="text-sm text-destructive">{fileActionError}</p> : null}
-                {attachments?.length ? (
+                {generalAttachments.length ? (
                   <div className="space-y-2">
-                    {attachments.map((item) => (
+                    {generalAttachments.map((item) => (
                       <div
                         key={item._id}
                         className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm"
@@ -1310,6 +1626,81 @@ export default function NewRequestPage() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className={`space-y-3 rounded-lg border p-4 ${prepaymentInvalid ? "border-destructive bg-destructive/5" : "border-border"}`}>
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Checkbox
+                    checked={prepaymentRequired}
+                    onCheckedChange={(checked) => setPrepaymentRequired(checked === true)}
+                  />
+                  Требуется предоплата
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Укажите сумму предоплаты, если платеж потребуется разделить предоплату и постоплату. Если этого не требуется, поле можно не заполнять
+                </p>
+                {prepaymentRequired ? (
+                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="prepaymentAmount" required>
+                        Предоплата без НДС
+                      </FieldLabel>
+                      <Input
+                        id="prepaymentAmount"
+                        inputMode="decimal"
+                        value={prepaymentAmount}
+                        aria-invalid={prepaymentInvalid ? true : undefined}
+                        onChange={(event) => {
+                          const nextAmount = sanitizeNumericInput(event.target.value);
+                          setPrepaymentVatInputSource("without");
+                          setPrepaymentAmount(nextAmount);
+                          const synced = syncVatInputPair({
+                            amountWithoutVatInput: nextAmount,
+                            amountWithVatInput: prepaymentAmountWithVat,
+                            vatRateInput: vatRate,
+                            source: "without",
+                          });
+                          setPrepaymentAmountWithVat(synced.amountWithVatInput);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="prepaymentAmountWithVat" required>
+                        Предоплата с НДС
+                      </FieldLabel>
+                      <Input
+                        id="prepaymentAmountWithVat"
+                        inputMode="decimal"
+                        value={prepaymentAmountWithVat}
+                        aria-invalid={prepaymentInvalid ? true : undefined}
+                        onChange={(event) => {
+                          const nextAmount = sanitizeNumericInput(event.target.value);
+                          setPrepaymentVatInputSource("with");
+                          setPrepaymentAmountWithVat(nextAmount);
+                          const synced = syncVatInputPair({
+                            amountWithoutVatInput: prepaymentAmount,
+                            amountWithVatInput: nextAmount,
+                            vatRateInput: vatRate,
+                            source: "with",
+                          });
+                          setPrepaymentAmount(synced.amountWithoutVatInput);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="prepaymentDate" required>
+                        Дата предоплаты
+                      </FieldLabel>
+                      <Input
+                        id="prepaymentDate"
+                        type="date"
+                        value={prepaymentDate}
+                        min={minNeededByDateValue}
+                        aria-invalid={prepaymentInvalid ? true : undefined}
+                        onChange={(event) => setPrepaymentDate(event.target.value)}
+                      />
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1372,20 +1763,21 @@ export default function NewRequestPage() {
                     value={approvalDeadline}
                     onChange={(event) => setApprovalDeadline(event.target.value)}
                     aria-invalid={approvalDeadlineInvalid ? true : undefined}
-                    min={minDateValue}
+                    min={minApprovalDateValue}
                   />
                 </div>
                 <div className="space-y-2">
                   <FieldLabel htmlFor="neededBy" required>
-                    Когда нужно оплатить
+                    Ожидание затраты
                   </FieldLabel>
+                  <p className="text-xs text-muted-foreground">Когда нужно оплатить</p>
                   <Input
                     id="neededBy"
                     type="date"
                     value={neededBy}
                     onChange={(event) => setNeededBy(event.target.value)}
                     aria-invalid={neededByInvalid ? true : undefined}
-                    min={minDateValue}
+                    min={minNeededByDateValue}
                   />
                 </div>
               </div>

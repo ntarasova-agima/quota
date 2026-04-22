@@ -52,13 +52,14 @@ export function isContestSpecialistValidated(item: {
   department?: string;
   directCost?: number;
   hodConfirmed?: boolean;
+  buhConfirmed?: boolean;
   validationSkipped?: boolean;
 }) {
   if (!requiresContestSpecialistValidation(item)) {
     return true;
   }
   return Boolean(
-    item.hodConfirmed &&
+    (item.hodConfirmed || item.buhConfirmed) &&
       typeof item.directCost === "number" &&
       Number.isFinite(item.directCost),
   );

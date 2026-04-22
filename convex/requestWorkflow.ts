@@ -1,4 +1,5 @@
 import { normalizeContestSpecialistSource, requiresContestSpecialistValidation } from "../src/lib/requestFields";
+import { normalizeHodDepartment } from "../src/lib/departments";
 import {
   CLIENT_SERVICES_TRANSIT_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
@@ -17,17 +18,19 @@ export type SpecialistEntryLike = {
   department?: string;
   directCost?: number;
   hodConfirmed?: boolean;
+  buhConfirmed?: boolean;
   validationSkipped?: boolean;
 };
 
-export function normalizeDepartmentList(departments: Array<string | undefined | null> = []) {
-  return Array.from(
-    new Set(
-      departments
-        .map((department) => department?.trim())
-        .filter((department): department is string => Boolean(department)),
-    ),
-  );
+export function normalizeDepartmentList(departments: Array<string | undefined | null> = []): string[] {
+  const normalized: string[] = [];
+  for (const department of departments) {
+    const value = normalizeHodDepartment(department);
+    if (value) {
+      normalized.push(value);
+    }
+  }
+  return Array.from(new Set(normalized));
 }
 
 export function getRequiredContestHodDepartments(
@@ -63,6 +66,7 @@ export function getEffectiveRequiredRoles(params: {
   requiredHodDepartments?: string[];
 }) {
   const roles = new Set(params.requiredRoles);
+  roles.add("BUH");
   if ((params.requiredHodDepartments?.length ?? 0) > 0) {
     roles.add("HOD");
   }
@@ -104,8 +108,8 @@ export function hasPendingContestValidationForDepartment(
     (item) =>
       normalizeContestSpecialistSource(item.sourceType) === "internal" &&
       requiresContestSpecialistValidation(item) &&
-      item.department === department &&
-      (!item.hodConfirmed || item.directCost === undefined),
+      normalizeHodDepartment(item.department) === normalizeHodDepartment(department) &&
+      (!(item.hodConfirmed || item.buhConfirmed) || item.directCost === undefined),
   );
 }
 

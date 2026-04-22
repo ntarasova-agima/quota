@@ -220,6 +220,50 @@ export const sendRequestSubmitted = internalAction({
   },
 });
 
+export const sendRequestCreatedToBuh = internalAction({
+  args: {
+    requestId: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request, roles } = data;
+    const recipients = dedupeEmails(
+      roles
+        .filter((role) => role.active && role.roles.includes("BUH"))
+        .map((role) => role.email),
+      [request.createdByEmail],
+    );
+    if (!recipients.length) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const creator = request.createdByName
+      ? `${request.createdByName} (${request.createdByEmail})`
+      : request.createdByEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "request_created_buh",
+      to: recipients,
+      subject: `Создана заявка: ${request.requestCode ?? request.category}`,
+      html: `
+        <p>Создана новая заявка.</p>
+        <p>Автор: ${creator}</p>
+        <p>На что нужен бюджет: <strong>${requestTitle}</strong></p>
+        <p>Категория: ${request.category}</p>
+        <p>Источник финансирования: ${request.fundingSource}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
 export const sendDecision = internalAction({
   args: {
     requestId: v.id("requests"),

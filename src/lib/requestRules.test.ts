@@ -11,6 +11,7 @@ import {
   PRESALES_FUNDING_SOURCE,
   PROJECT_REVENUE_FUNDING_SOURCE,
   SERVICE_PURCHASE_CATEGORY,
+  getRequestAreaForCategory,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   getFundingOwnerRoles,
@@ -34,14 +35,21 @@ describe("requestRules", () => {
   });
 
   it("returns enforced roles for funding sources", () => {
-    expect(getEnforcedRolesForFundingSource(PRESALES_FUNDING_SOURCE)).toEqual(["NBD"]);
-    expect(getEnforcedRolesForFundingSource(AI_TOOLS_FUNDING_SOURCE)).toEqual(["AI-BOSS"]);
-    expect(getEnforcedRolesForFundingSource(INTERNAL_COSTS_FUNDING_SOURCE)).toEqual(["COO"]);
-    expect(getEnforcedRolesForFundingSource(COMPANY_PROFIT_FUNDING_SOURCE)).toEqual(["COO", "CFD"]);
+    expect(getEnforcedRolesForFundingSource(PRESALES_FUNDING_SOURCE)).toEqual(["NBD", "BUH"]);
+    expect(getEnforcedRolesForFundingSource(AI_TOOLS_FUNDING_SOURCE)).toEqual(["AI-BOSS", "BUH"]);
+    expect(getEnforcedRolesForFundingSource(INTERNAL_COSTS_FUNDING_SOURCE)).toEqual(["COO", "BUH"]);
+    expect(getEnforcedRolesForFundingSource(COMPANY_PROFIT_FUNDING_SOURCE)).toEqual(["COO", "CFD", "BUH"]);
   });
 
   it("returns funding owner roles consistently", () => {
     expect(getFundingOwnerRoles(LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE)).toEqual(["AI-BOSS"]);
+  });
+
+  it("splits categories into top-level request areas", () => {
+    expect(getRequestAreaForCategory(SERVICE_PURCHASE_CATEGORY)).toBe("Администрация");
+    expect(getRequestAreaForCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe("Администрация");
+    expect(getRequestAreaForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe("Аккаунтинг");
+    expect(getRequestAreaForCategory("Подарки")).toBe("Аккаунтинг");
   });
 
   it("validates service purchase funding sources", () => {

@@ -17,6 +17,7 @@ export type ContestParticipantDraft = {
   directCost: string;
   validationSkipped: boolean;
   hodConfirmed?: boolean;
+  buhConfirmed?: boolean;
 };
 
 export function createContestParticipantDraft(): ContestParticipantDraft {

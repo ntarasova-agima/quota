@@ -21,6 +21,9 @@ const allowedExtensions = new Set([
   "png",
   "gif",
   "webp",
+  "zip",
+  "7z",
+  "rar",
 ]);
 
 function isAllowedAttachment(fileName: string, contentType?: string) {
@@ -42,6 +45,10 @@ function isAllowedAttachment(fileName: string, contentType?: string) {
       "text/csv",
       "application/vnd.ms-powerpoint",
       "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/zip",
+      "application/x-7z-compressed",
+      "application/vnd.rar",
+      "application/x-rar-compressed",
     ].includes(contentType)
   );
 }
@@ -70,6 +77,7 @@ export const saveAttachment = mutation({
     fileName: v.string(),
     contentType: v.optional(v.string()),
     fileSize: v.number(),
+    attachmentType: v.optional(v.union(v.literal("general"), v.literal("contract"))),
   },
   handler: async (ctx, args) => {
     const access = await ensureCanAccessRequest(ctx, args.requestId);
@@ -91,19 +99,27 @@ export const saveAttachment = mutation({
       fileName: args.fileName.trim(),
       fileSize: args.fileSize,
       contentType: args.contentType?.trim() || undefined,
+      attachmentType: args.attachmentType ?? "general",
       uploadedByEmail: access.email,
       uploadedByName: access.roleRecord?.fullName?.trim() || undefined,
       createdAt: Date.now(),
     });
+    const isContract = args.attachmentType === "contract";
     await ctx.db.patch(access.request._id, {
       attachmentCount: (access.request.attachmentCount ?? 0) + 1,
       lastAttachmentName: args.fileName.trim(),
+      contractAttachmentCount: isContract
+        ? (access.request.contractAttachmentCount ?? 0) + 1
+        : access.request.contractAttachmentCount,
+      lastContractAttachmentName: isContract
+        ? args.fileName.trim()
+        : access.request.lastContractAttachmentName,
       updatedAt: Date.now(),
     });
     await logTimelineEvent(ctx, {
       requestId: args.requestId,
       type: "attachment_added",
-      title: "Добавлен файл",
+      title: isContract ? "Добавлен договор" : "Добавлен файл",
       description: args.fileName.trim(),
       actorEmail: access.email,
       actorName: access.roleRecord?.fullName?.trim() || undefined,
@@ -144,15 +160,19 @@ export const deleteAttachment = mutation({
       .withIndex("by_request", (q) => q.eq("requestId", attachment.requestId))
       .order("desc")
       .collect();
+    const generalAttachments = remaining.filter((item: any) => (item.attachmentType ?? "general") !== "contract");
+    const contractAttachments = remaining.filter((item: any) => item.attachmentType === "contract");
     await ctx.db.patch(access.request._id, {
       attachmentCount: remaining.length,
-      lastAttachmentName: remaining[0]?.fileName,
+      lastAttachmentName: generalAttachments[0]?.fileName ?? remaining[0]?.fileName,
+      contractAttachmentCount: contractAttachments.length,
+      lastContractAttachmentName: contractAttachments[0]?.fileName,
       updatedAt: Date.now(),
     });
     await logTimelineEvent(ctx, {
       requestId: attachment.requestId,
       type: "attachment_deleted",
-      title: "Удален файл",
+      title: attachment.attachmentType === "contract" ? "Удален договор" : "Удален файл",
       description: attachment.fileName,
       actorEmail: email,
       actorName: access.roleRecord?.fullName?.trim() || undefined,

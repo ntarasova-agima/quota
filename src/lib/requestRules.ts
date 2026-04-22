@@ -13,6 +13,22 @@ export const LEGACY_AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент\\под
 export const AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент/подписка";
 export const LEGACY_CLIENT_SERVICES_TRANSIT_CATEGORY = "Сервисы/транзиты для клиентов";
 export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Транзиты для проектов";
+export const ACCOUNTING_REQUEST_AREA = "Аккаунтинг";
+export const ADMINISTRATION_REQUEST_AREA = "Администрация";
+
+export const ACCOUNTING_REQUEST_CATEGORIES = [
+  "Welcome-бонус",
+  "Подарки",
+  "Неформальное мероприятие",
+  "Совместный мерч",
+  "Конкурсное задание",
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
+] as const;
+
+export const ADMINISTRATION_REQUEST_CATEGORIES = [
+  SERVICE_PURCHASE_CATEGORY,
+  AI_TOOLS_REQUEST_CATEGORY,
+] as const;
 
 export const SERVICE_PURCHASE_FUNDING_SOURCES = [
   INTERNAL_COSTS_FUNDING_SOURCE,
@@ -52,6 +68,22 @@ export function normalizeRequestCategory(category: string) {
     return CLIENT_SERVICES_TRANSIT_CATEGORY;
   }
   return category;
+}
+
+export function getRequestAreaForCategory(category: string) {
+  const normalizedCategory = normalizeRequestCategory(category);
+  if (
+    ADMINISTRATION_REQUEST_CATEGORIES.includes(
+      normalizedCategory as (typeof ADMINISTRATION_REQUEST_CATEGORIES)[number],
+    )
+  ) {
+    return ADMINISTRATION_REQUEST_AREA;
+  }
+  return ACCOUNTING_REQUEST_AREA;
+}
+
+export function isAdministrationRequestCategory(category: string) {
+  return getRequestAreaForCategory(category) === ADMINISTRATION_REQUEST_AREA;
 }
 
 export function isAiToolsFundingSource(fundingSource: string) {
@@ -118,7 +150,7 @@ export function getFundingOwnerRoles(fundingSource: string) {
 }
 
 export function getEnforcedRolesForFundingSource(fundingSource: string) {
-  return [...getFundingOwnerRoles(fundingSource)];
+  return Array.from(new Set([...getFundingOwnerRoles(fundingSource), "BUH"]));
 }
 
 export function isFundingSourceAllowedForCategory(category: string, fundingSource: string) {

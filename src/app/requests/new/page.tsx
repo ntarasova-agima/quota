@@ -22,10 +22,12 @@ import { api } from "@/lib/convex";
 import {
   CURRENCIES,
   DEFAULT_REQUIRED_ROLES,
-  EXPENSE_CATEGORIES,
   FUNDING_SOURCES,
   HOD_DEPARTMENTS,
+  REQUEST_AREAS,
+  REQUEST_CATEGORIES_BY_AREA,
   ROLE_OPTIONS,
+  type RequestArea,
   type RoleOption,
 } from "@/lib/constants";
 import { getRoleLabel } from "@/lib/roleLabels";
@@ -37,13 +39,17 @@ import {
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
+  ADMINISTRATION_REQUEST_AREA,
+  getRequestAreaForCategory,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   isAiToolsRequestCategory,
+  isAdministrationRequestCategory,
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
 } from "@/lib/requestRules";
+import { normalizeHodDepartment } from "@/lib/departments";
 import {
   DEFAULT_VAT_RATE,
   parseMoneyInput,
@@ -67,11 +73,12 @@ export default function NewRequestPage() {
   const saveAttachment = useMutation(api.attachments.saveAttachment);
   const router = useRouter();
   const today = useMemo(() => new Date(), []);
-  const minDateValue = useMemo(() => {
+  const minApprovalDateValue = useMemo(() => {
     const next = new Date(today);
     next.setDate(next.getDate() + 1);
     return next.toISOString().slice(0, 10);
   }, [today]);
+  const minNeededByDateValue = useMemo(() => today.toISOString().slice(0, 10), [today]);
   const defaultDeadline = useMemo(() => {
     const date = new Date(today);
     let added = 0;
@@ -85,7 +92,9 @@ export default function NewRequestPage() {
     return date.toISOString().slice(0, 10);
   }, [today]);
 
+  const [requestArea, setRequestArea] = useState<RequestArea>("Аккаунтинг");
   const [category, setCategory] = useState("Welcome-бонус");
+  const [department, setDepartment] = useState("");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [amountWithVat, setAmountWithVat] = useState("");
@@ -99,6 +108,14 @@ export default function NewRequestPage() {
   const [clientName, setClientName] = useState("");
   const [counterparty, setCounterparty] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [contractLink, setContractLink] = useState("");
+  const [dueDiligenceChecked, setDueDiligenceChecked] = useState(false);
+  const [dueDiligenceJiraLink, setDueDiligenceJiraLink] = useState("");
+  const [prepaymentRequired, setPrepaymentRequired] = useState(false);
+  const [prepaymentAmount, setPrepaymentAmount] = useState("");
+  const [prepaymentAmountWithVat, setPrepaymentAmountWithVat] = useState("");
+  const [prepaymentVatInputSource, setPrepaymentVatInputSource] = useState<VatAmountSource>("without");
+  const [prepaymentDate, setPrepaymentDate] = useState("");
   const [contacts, setContacts] = useState("");
   const [relatedRequests, setRelatedRequests] = useState("");
   const [relatedRequestsExpanded, setRelatedRequestsExpanded] = useState(false);
@@ -123,10 +140,13 @@ export default function NewRequestPage() {
   const [submitting, setSubmitting] = useState(false);
   const [showValidationErrors, setShowValidationErrors] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [selectedContractFiles, setSelectedContractFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isContractDragOver, setIsContractDragOver] = useState(false);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const contractFileInputRef = useRef<HTMLInputElement | null>(null);
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
@@ -172,6 +192,7 @@ export default function NewRequestPage() {
     [],
   );
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
+  const isAdministrationArea = requestArea === ADMINISTRATION_REQUEST_AREA;
   const showTransitFields = fundingSource === "Отгрузки проекта";
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
   const paidByError = useMemo(
@@ -248,14 +269,17 @@ export default function NewRequestPage() {
     () =>
       Array.from(
         new Set(
-          category === "Конкурсное задание"
-            ? specialistsPayload
-                .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
-                .map((item) => item.department as string)
-            : [],
+          [
+            ...(category === "Конкурсное задание"
+              ? specialistsPayload
+                  .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
+                  .map((item) => item.department as string)
+              : []),
+            ...(isAdministrationArea && isHodSelectableCategory(category) && department ? [department] : []),
+          ],
         ),
       ),
-    [category, specialistsPayload],
+    [category, department, isAdministrationArea, specialistsPayload],
   );
   const effectiveRequiredHodDepartments = useMemo(
     () => Array.from(new Set([...requiredHodDepartments, ...autoRequiredHodDepartments])),
@@ -300,6 +324,24 @@ export default function NewRequestPage() {
       }),
     [amountWithVat, effectiveAmountWithoutVatInput, vatRate],
   );
+  const resolvedPrepaymentAmountsPreview = useMemo(
+    () =>
+      resolveVatAmounts({
+        amountWithoutVat: parseMoneyInput(prepaymentAmount),
+        amountWithVat: parseMoneyInput(prepaymentAmountWithVat),
+        vatRate: parseVatRateInput(vatRate),
+        autoCalculateAmountWithVat: true,
+      }),
+    [prepaymentAmount, prepaymentAmountWithVat, vatRate],
+  );
+  const needsContract =
+    (resolvedAmountsPreview.amountWithoutVat ?? 0) > 100_000 &&
+    category !== "Welcome-бонус" &&
+    category !== "Конкурсное задание";
+  const needsDueDiligence =
+    (resolvedAmountsPreview.amountWithoutVat ?? 0) > 500_000 &&
+    category !== "Welcome-бонус" &&
+    category !== "Конкурсное задание";
   const incomingRatioValue = useMemo(
     () =>
       formatIncomingRatio(
@@ -318,6 +360,7 @@ export default function NewRequestPage() {
     ],
   );
   const titleInvalid = showValidationErrors && !title.trim();
+  const departmentInvalid = showValidationErrors && isAdministrationArea && !department;
   const clientNameInvalid = showValidationErrors && !clientName.trim();
   const amountInvalid =
     showValidationErrors &&
@@ -336,6 +379,23 @@ export default function NewRequestPage() {
     showValidationErrors &&
     showTransitFields &&
     (!resolvedIncomingAmountsPreview.amountWithoutVat || !resolvedIncomingAmountsPreview.amountWithVat);
+  const contractInvalid =
+    showValidationErrors &&
+    needsContract &&
+    !contractLink.trim() &&
+    selectedContractFiles.length === 0;
+  const dueDiligenceInvalid =
+    showValidationErrors &&
+    needsDueDiligence &&
+    (!dueDiligenceChecked || !dueDiligenceJiraLink.trim());
+  const prepaymentInvalid =
+    showValidationErrors &&
+    prepaymentRequired &&
+    (!resolvedPrepaymentAmountsPreview.amountWithoutVat ||
+      !resolvedPrepaymentAmountsPreview.amountWithVat ||
+      resolvedPrepaymentAmountsPreview.amountWithoutVat <= 0 ||
+      resolvedPrepaymentAmountsPreview.amountWithVat <= 0 ||
+      !prepaymentDate);
   const approvalDeadlineInvalid = showValidationErrors && !approvalDeadline;
   const neededByInvalid = showValidationErrors && !neededBy;
   const hodDepartmentsInvalid =
@@ -345,6 +405,7 @@ export default function NewRequestPage() {
     effectiveRequiredHodDepartments.length === 0;
   const hasBlockingValidationErrors =
     !title.trim() ||
+    (isAdministrationArea && !department) ||
     !clientName.trim() ||
     !resolvedAmountsPreview.amountWithoutVat ||
     !resolvedAmountsPreview.amountWithVat ||
@@ -358,6 +419,14 @@ export default function NewRequestPage() {
     (showTransitFields &&
       (!resolvedIncomingAmountsPreview.amountWithoutVat ||
         !resolvedIncomingAmountsPreview.amountWithVat)) ||
+    (needsContract && !contractLink.trim() && selectedContractFiles.length === 0) ||
+    (needsDueDiligence && (!dueDiligenceChecked || !dueDiligenceJiraLink.trim())) ||
+    (prepaymentRequired &&
+      (!resolvedPrepaymentAmountsPreview.amountWithoutVat ||
+        !resolvedPrepaymentAmountsPreview.amountWithVat ||
+        resolvedPrepaymentAmountsPreview.amountWithoutVat <= 0 ||
+        resolvedPrepaymentAmountsPreview.amountWithVat <= 0 ||
+        !prepaymentDate)) ||
     (requiredRoles.includes("HOD") &&
       isHodSelectableCategory(category) &&
       effectiveRequiredHodDepartments.length === 0) ||
@@ -420,8 +489,24 @@ export default function NewRequestPage() {
     setRequiredRoles((current) => (current.includes("HOD") ? current : [...current, "HOD"]));
   }, [autoRequiredHodDepartments]);
 
+  function handleRequestAreaChange(nextArea: RequestArea) {
+    setRequestArea(nextArea);
+    const nextCategory = REQUEST_CATEGORIES_BY_AREA[nextArea][0];
+    setCategory(nextCategory);
+    setDepartment("");
+    const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
+    if (defaultFundingSource) {
+      setFundingSource(defaultFundingSource);
+    }
+    if (!isHodSelectableCategory(nextCategory)) {
+      setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
+      setRequiredHodDepartments([]);
+    }
+  }
+
   function handleCategoryChange(nextCategory: string) {
     setCategory(nextCategory);
+    setRequestArea(getRequestAreaForCategory(nextCategory) as RequestArea);
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
@@ -432,6 +517,9 @@ export default function NewRequestPage() {
     if (!isHodSelectableCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
+    }
+    if (!isAdministrationRequestCategory(nextCategory)) {
+      setDepartment("");
     }
   }
 
@@ -448,12 +536,13 @@ export default function NewRequestPage() {
     });
   }
 
-  function queueFiles(files: File[]) {
+  function queueFiles(files: File[], type: "general" | "contract" = "general") {
     if (!files.length) {
       return;
     }
     setFileActionError(null);
-    if (selectedFiles.length + files.length > MAX_REQUEST_ATTACHMENTS) {
+    const currentCount = selectedFiles.length + selectedContractFiles.length;
+    if (currentCount + files.length > MAX_REQUEST_ATTACHMENTS) {
       setFileActionError("Можно прикрепить не более 20 файлов");
       return;
     }
@@ -467,19 +556,30 @@ export default function NewRequestPage() {
         return;
       }
     }
-    setSelectedFiles((current) => [...current, ...files]);
+    if (type === "contract") {
+      setSelectedContractFiles((current) => [...current, ...files]);
+    } else {
+      setSelectedFiles((current) => [...current, ...files]);
+    }
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+    if (contractFileInputRef.current) {
+      contractFileInputRef.current.value = "";
     }
   }
 
   async function uploadQueuedFiles(requestId: any) {
-    if (!selectedFiles.length) {
+    const filesToUpload = [
+      ...selectedFiles.map((file) => ({ file, attachmentType: "general" as const })),
+      ...selectedContractFiles.map((file) => ({ file, attachmentType: "contract" as const })),
+    ];
+    if (!filesToUpload.length) {
       return true;
     }
     setUploadingFiles(true);
     try {
-      for (const file of selectedFiles) {
+      for (const { file, attachmentType } of filesToUpload) {
         const uploadUrl = await generateAttachmentUploadUrl({ requestId });
         const response = await fetch(uploadUrl, {
           method: "POST",
@@ -498,9 +598,11 @@ export default function NewRequestPage() {
           fileName: file.name,
           contentType: file.type || undefined,
           fileSize: file.size,
+          attachmentType,
         });
       }
       setSelectedFiles([]);
+      setSelectedContractFiles([]);
       return true;
     } catch (err) {
       window.alert(
@@ -548,7 +650,15 @@ export default function NewRequestPage() {
       if (resolvedAmounts.amountWithVat === undefined || resolvedAmounts.amountWithVat <= 0) {
         throw new Error("Укажите сумму с НДС или сумму без НДС");
       }
+      const resolvedPrepaymentAmounts = resolveVatAmounts({
+        amountWithoutVat: parseMoneyInput(prepaymentAmount),
+        amountWithVat: parseMoneyInput(prepaymentAmountWithVat),
+        vatRate: parseVatRateInput(vatRate),
+        autoCalculateAmountWithVat: true,
+      });
       const id = await createRequest({
+        requestArea,
+        department: isAdministrationArea ? normalizeHodDepartment(department) : undefined,
         title,
         category,
         amount: resolvedAmounts.amountWithoutVat,
@@ -570,6 +680,23 @@ export default function NewRequestPage() {
           category === "Welcome-бонус"
             ? undefined
             : paymentMethod || undefined,
+        contractLink: contractLink.trim() || undefined,
+        pendingContractFileCount: selectedContractFiles.length,
+        dueDiligenceChecked,
+        dueDiligenceJiraLink: dueDiligenceJiraLink.trim() || undefined,
+        prepaymentRequired,
+        prepaymentAmount:
+          prepaymentRequired && resolvedPrepaymentAmounts.amountWithoutVat !== undefined
+            ? resolvedPrepaymentAmounts.amountWithoutVat
+            : undefined,
+        prepaymentAmountWithVat:
+          prepaymentRequired && resolvedPrepaymentAmounts.amountWithVat !== undefined
+            ? resolvedPrepaymentAmounts.amountWithVat
+            : undefined,
+        prepaymentDate:
+          prepaymentRequired && prepaymentDate
+            ? new Date(`${prepaymentDate}T00:00:00`).getTime()
+            : undefined,
         contacts: category === "Конкурсное задание" || isServiceCategory ? [] : contactsList,
         relatedRequests: relatedRequestsList,
         links: [],
@@ -639,7 +766,22 @@ export default function NewRequestPage() {
             </CardHeader>
             <CardContent>
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-2">
+                    <FieldLabel required>Направление</FieldLabel>
+                    <Select value={requestArea} onValueChange={(value) => handleRequestAreaChange(value as RequestArea)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Выберите направление" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REQUEST_AREAS.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {item}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-2">
                     <FieldLabel required>Категория</FieldLabel>
                     <Select value={category} onValueChange={handleCategoryChange}>
@@ -647,7 +789,7 @@ export default function NewRequestPage() {
                         <SelectValue placeholder="Выберите категорию" />
                       </SelectTrigger>
                       <SelectContent>
-                        {EXPENSE_CATEGORIES.map((item) => (
+                        {REQUEST_CATEGORIES_BY_AREA[requestArea].map((item) => (
                           <SelectItem key={item} value={item}>
                             {item}
                           </SelectItem>
@@ -674,6 +816,27 @@ export default function NewRequestPage() {
                     )}
                   </div>
                 </div>
+
+                {isAdministrationArea ? (
+                  <div className="space-y-2">
+                    <FieldLabel htmlFor="department" required>
+                      Цех
+                    </FieldLabel>
+                    <Select value={department || "none"} onValueChange={(value) => setDepartment(value === "none" ? "" : value)}>
+                      <SelectTrigger id="department" aria-invalid={departmentInvalid ? true : undefined}>
+                        <SelectValue placeholder="Выберите цех" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Цех не выбран</SelectItem>
+                        {HOD_DEPARTMENTS.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {item}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2 sm:col-span-3">
@@ -823,6 +986,14 @@ export default function NewRequestPage() {
                       });
                       setIncomingAmount(syncedIncoming.amountWithoutVatInput);
                       setIncomingAmountWithVat(syncedIncoming.amountWithVatInput);
+                      const syncedPrepayment = syncVatInputPair({
+                        amountWithoutVatInput: prepaymentAmount,
+                        amountWithVatInput: prepaymentAmountWithVat,
+                        vatRateInput: nextVatRate,
+                        source: prepaymentVatInputSource,
+                      });
+                      setPrepaymentAmount(syncedPrepayment.amountWithoutVatInput);
+                      setPrepaymentAmountWithVat(syncedPrepayment.amountWithVatInput);
                     }}
                   />
                 </div>
@@ -864,6 +1035,114 @@ export default function NewRequestPage() {
                   />
                 </div>
               )}
+
+              {needsContract ? (
+                <div className="space-y-3 rounded-lg border border-border p-4">
+                  <div className="space-y-1">
+                    <FieldLabel required>Договор с контрагентом</FieldLabel>
+                    <p className="text-xs text-muted-foreground">
+                      Для суммы закупки больше 100 000 без НДС добавьте ссылку на договор или прикрепите файл договора.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contractLink">Ссылка на договор</Label>
+                    <Input
+                      id="contractLink"
+                      value={contractLink}
+                      onChange={(event) => setContractLink(event.target.value)}
+                      aria-invalid={contractInvalid ? true : undefined}
+                      placeholder="https://..."
+                    />
+                  </div>
+                  <input
+                    id="contractFiles"
+                    ref={contractFileInputRef}
+                    type="file"
+                    className="hidden"
+                    multiple
+                    accept={ACCEPTED_REQUEST_ATTACHMENT_EXTENSIONS.join(",")}
+                    onChange={(event) => queueFiles(Array.from(event.target.files ?? []), "contract")}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => contractFileInputRef.current?.click()}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setIsContractDragOver(true);
+                    }}
+                    onDragLeave={(event) => {
+                      event.preventDefault();
+                      setIsContractDragOver(false);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setIsContractDragOver(false);
+                      queueFiles(Array.from(event.dataTransfer.files ?? []), "contract");
+                    }}
+                    className={`flex min-h-16 w-full cursor-pointer items-center justify-between rounded-xl border px-4 py-3 text-left transition-all ${
+                      isContractDragOver
+                        ? "border-amber-500 bg-amber-50 shadow-[0_0_0_4px_rgba(245,158,11,0.08)]"
+                        : contractInvalid
+                          ? "border-destructive bg-destructive/5"
+                          : "border-border bg-background hover:border-amber-400 hover:bg-amber-50/50"
+                    }`}
+                  >
+                    <span className="flex items-center gap-3">
+                      <span className="rounded-lg bg-amber-100 p-2 text-amber-700">
+                        <Paperclip className="h-4 w-4" />
+                      </span>
+                      <span>
+                        <span className="block font-medium">Прикрепить договор файлом</span>
+                        <span className="block text-sm text-muted-foreground">PDF, Office, изображения, архивы · до 40 МБ</span>
+                      </span>
+                    </span>
+                    <Upload className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                  {selectedContractFiles.length ? (
+                    <div className="space-y-1 text-sm text-muted-foreground">
+                      {selectedContractFiles.map((file, index) => (
+                        <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                          <span>{file.name} · {formatRequestAttachmentSize(file.size)}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              setSelectedContractFiles((current) => current.filter((_, currentIndex) => currentIndex !== index))
+                            }
+                          >
+                            Удалить
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {needsDueDiligence ? (
+                <div className={`space-y-3 rounded-lg border p-4 ${dueDiligenceInvalid ? "border-destructive bg-destructive/5" : "border-border"}`}>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={dueDiligenceChecked}
+                      onCheckedChange={(checked) => setDueDiligenceChecked(checked === true)}
+                    />
+                    Проведена должная осмотрительность
+                  </label>
+                  <div className="space-y-2">
+                    <FieldLabel htmlFor="dueDiligenceJiraLink" required>
+                      Ссылка на задачу в Jira
+                    </FieldLabel>
+                    <Input
+                      id="dueDiligenceJiraLink"
+                      value={dueDiligenceJiraLink}
+                      onChange={(event) => setDueDiligenceJiraLink(event.target.value)}
+                      aria-invalid={dueDiligenceInvalid ? true : undefined}
+                      placeholder="https://jira..."
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               <div className="grid gap-4 sm:grid-cols-3">
                 {showPaymentMethod ? (
@@ -1126,6 +1405,81 @@ export default function NewRequestPage() {
                 ) : null}
                 {fileActionError ? <p className="text-sm text-destructive">{fileActionError}</p> : null}
               </div>
+              <div className={`space-y-3 rounded-lg border p-4 ${prepaymentInvalid ? "border-destructive bg-destructive/5" : "border-border"}`}>
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Checkbox
+                    checked={prepaymentRequired}
+                    onCheckedChange={(checked) => setPrepaymentRequired(checked === true)}
+                  />
+                  Требуется предоплата
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Укажите сумму предоплаты, если платеж потребуется разделить предоплату и постоплату. Если этого не требуется, поле можно не заполнять
+                </p>
+                {prepaymentRequired ? (
+                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="prepaymentAmount" required>
+                        Предоплата без НДС
+                      </FieldLabel>
+                      <Input
+                        id="prepaymentAmount"
+                        inputMode="decimal"
+                        value={prepaymentAmount}
+                        aria-invalid={prepaymentInvalid ? true : undefined}
+                        onChange={(event) => {
+                          const nextAmount = sanitizeNumericInput(event.target.value);
+                          setPrepaymentVatInputSource("without");
+                          setPrepaymentAmount(nextAmount);
+                          const synced = syncVatInputPair({
+                            amountWithoutVatInput: nextAmount,
+                            amountWithVatInput: prepaymentAmountWithVat,
+                            vatRateInput: vatRate,
+                            source: "without",
+                          });
+                          setPrepaymentAmountWithVat(synced.amountWithVatInput);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="prepaymentAmountWithVat" required>
+                        Предоплата с НДС
+                      </FieldLabel>
+                      <Input
+                        id="prepaymentAmountWithVat"
+                        inputMode="decimal"
+                        value={prepaymentAmountWithVat}
+                        aria-invalid={prepaymentInvalid ? true : undefined}
+                        onChange={(event) => {
+                          const nextAmount = sanitizeNumericInput(event.target.value);
+                          setPrepaymentVatInputSource("with");
+                          setPrepaymentAmountWithVat(nextAmount);
+                          const synced = syncVatInputPair({
+                            amountWithoutVatInput: prepaymentAmount,
+                            amountWithVatInput: nextAmount,
+                            vatRateInput: vatRate,
+                            source: "with",
+                          });
+                          setPrepaymentAmount(synced.amountWithoutVatInput);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="prepaymentDate" required>
+                        Дата предоплаты
+                      </FieldLabel>
+                      <Input
+                        id="prepaymentDate"
+                        type="date"
+                        value={prepaymentDate}
+                        min={minNeededByDateValue}
+                        aria-invalid={prepaymentInvalid ? true : undefined}
+                        onChange={(event) => setPrepaymentDate(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
               {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
                 (fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(category) && isAiBoss && aiToolQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
@@ -1185,20 +1539,21 @@ export default function NewRequestPage() {
                     value={approvalDeadline}
                     onChange={(event) => setApprovalDeadline(event.target.value)}
                     aria-invalid={approvalDeadlineInvalid ? true : undefined}
-                    min={minDateValue}
+                    min={minApprovalDateValue}
                   />
                 </div>
                 <div className="space-y-2">
                   <FieldLabel htmlFor="neededBy" required>
-                    Когда нужно оплатить
+                    Ожидание затраты
                   </FieldLabel>
+                  <p className="text-xs text-muted-foreground">Когда нужно оплатить</p>
                   <Input
                     id="neededBy"
                     type="date"
                     value={neededBy}
                     onChange={(event) => setNeededBy(event.target.value)}
                     aria-invalid={neededByInvalid ? true : undefined}
-                    min={minDateValue}
+                    min={minNeededByDateValue}
                   />
                 </div>
               </div>

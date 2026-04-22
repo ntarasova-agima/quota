@@ -36,6 +36,8 @@ export default function AppHeader({
   const isBuh = profile?.roles?.includes("BUH");
   const isHod = profile?.roles?.includes("HOD");
   const isAdmin = profile?.roles?.includes("ADMIN");
+  const canManageTags = Boolean(isCfd || isBuh);
+  const canSeeAdministrationQuota = Boolean(isCfd || isBuh || isCoo || isHod || isAdmin);
   const requestView = searchParams.get("view") ?? "my";
 
   return (
@@ -91,14 +93,14 @@ export default function AppHeader({
           </Button>
         )}
         {isCfd && (
-          <>
-            <Button asChild variant={pathname === "/cfd-tags" ? "default" : "outline"}>
-              <Link href="/cfd-tags">Теги CFD</Link>
-            </Button>
-            <Button asChild variant={pathname === "/cfd-quota" ? "default" : "outline"}>
-              <Link href="/cfd-quota">Квоты</Link>
-            </Button>
-          </>
+          <Button asChild variant={pathname === "/cfd-quota" ? "default" : "outline"}>
+            <Link href="/cfd-quota">Квоты</Link>
+          </Button>
+        )}
+        {canManageTags && (
+          <Button asChild variant={pathname === "/cfd-tags" ? "default" : "outline"}>
+            <Link href="/cfd-tags">Справочник тегов</Link>
+          </Button>
         )}
         {isCoo && (
           <Button asChild variant={pathname === "/coo-quota" ? "default" : "outline"}>
@@ -108,6 +110,11 @@ export default function AppHeader({
         {(showAdmin || isAdmin || pathname.startsWith("/admin")) && (
           <Button asChild variant={pathname === "/admin/roles" ? "default" : "outline"}>
             <Link href="/admin/roles">Роли</Link>
+          </Button>
+        )}
+        {canSeeAdministrationQuota && (
+          <Button asChild variant={pathname === "/administration-quota" ? "default" : "outline"}>
+            <Link href="/administration-quota">Квоты Администрации</Link>
           </Button>
         )}
         </div>
