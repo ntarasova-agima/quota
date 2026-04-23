@@ -86,6 +86,7 @@ const schema = defineSchema({
     requestArea: v.optional(v.string()),
     department: v.optional(v.string()),
     category: v.string(),
+    businessCategory: v.optional(v.string()),
     amount: v.number(),
     amountWithVat: v.optional(v.number()),
     vatRate: v.optional(v.number()),
@@ -299,6 +300,13 @@ const schema = defineSchema({
   })
     .index("by_name", ["name"])
     .index("by_area_department", ["requestArea", "department"]),
+  requestBusinessCategories: defineTable({
+    name: v.string(),
+    active: v.boolean(),
+    sortOrder: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_name", ["name"]),
   administrationQuotas: defineTable({
     monthKey: v.string(),
     departmentKey: v.string(),

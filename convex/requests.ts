@@ -28,12 +28,12 @@ import {
   AGIMA_QUOTAS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
+  EMPTY_BUSINESS_CATEGORY,
   PURCHASE_CATEGORY,
   PROJECT_REVENUE_FUNDING_SOURCE,
   SERVICE_PURCHASE_CATEGORY,
   TRANSIT_TAG_NAME,
   UNKNOWN_FUNDING_SOURCE,
-  CONTRACTOR_PAYMENT_CATEGORY,
   getRequestAreaForDepartment,
   getFundingOwnerRoles,
   isAgimaQuotaFundingSource,
@@ -96,7 +96,6 @@ const requestCategoryCodes: Record<string, string> = {
   "Конкурсное задание": "CT",
   [SERVICE_PURCHASE_CATEGORY]: "SV",
   [PURCHASE_CATEGORY]: "PU",
-  [CONTRACTOR_PAYMENT_CATEGORY]: "CP",
   [CLIENT_SERVICES_TRANSIT_CATEGORY]: "TR",
   [AI_TOOLS_REQUEST_CATEGORY]: "AI",
   "Неформальное мероприятие": "EV",
@@ -831,7 +830,8 @@ const requestPayloadValidator = {
 
 const requestFieldLabels: Record<string, string> = {
   title: "На что нужен бюджет",
-  category: "Категория",
+  category: "Тип заявки",
+  businessCategory: "Категория",
   amount: "Сумма без НДС",
   amountWithVat: "Сумма с НДС",
   vatRate: "НДС",
@@ -852,7 +852,6 @@ const requestFieldLabels: Record<string, string> = {
   details: "Детали заявки",
   investmentReturn: "Как будем возвращать инвестиции",
   clientName: "Клиент / получатель сервиса",
-  contacts: "Контакты клиента",
   relatedRequests: "Связанные заявки",
   links: "Ссылки на материалы",
   financePlanLinks: "ID и название отгрузки в финплане",
@@ -958,6 +957,7 @@ function diffRequestFields(previous: any, next: any) {
   const fields = [
     "title",
     "category",
+    "businessCategory",
     "requestArea",
     "department",
     "amount",
@@ -978,7 +978,6 @@ function diffRequestFields(previous: any, next: any) {
     "details",
     "investmentReturn",
     "clientName",
-    "contacts",
     "relatedRequests",
     "links",
     "financePlanLinks",
@@ -1080,7 +1079,7 @@ function buildEditImpact(previous: any, next: any, approvals: any[]) {
   }
 
   if (categoryChanged && !fundingChanged) {
-    infoLines.push("Изменение категории не сбросит согласование, но уведомит уже согласовавших.");
+    infoLines.push("Изменение типа заявки не сбросит согласование, но уведомит уже согласовавших.");
     approvedReviewerEmails.forEach((email) => notifyApprovedEmails.add(email));
   }
 
@@ -1299,8 +1298,6 @@ function validateRequestPayload(args: any) {
     throw new Error("Укажите дату отгрузки");
   }
   if (
-    normalizedCategory !== "Конкурсное задание" &&
-    normalizedCategory !== "Welcome-бонус" &&
     normalizedFundingSource === PROJECT_REVENUE_FUNDING_SOURCE &&
     (!args.financePlanLinks || args.financePlanLinks.length === 0)
   ) {
@@ -1363,6 +1360,21 @@ function getTodayBounds() {
   end.setDate(end.getDate() + 1);
   end.setMilliseconds(-1);
   return { start: start.getTime(), end: end.getTime() };
+}
+
+function normalizeBusinessCategory(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === EMPTY_BUSINESS_CATEGORY) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function matchesBusinessCategoryFilter(request: any, filter?: string) {
+  if (filter === undefined) {
+    return true;
+  }
+  return normalizeBusinessCategory(request.businessCategory) === normalizeBusinessCategory(filter);
 }
 
 function isOpenPaymentTask(request: { status: string; neededBy?: number; isCanceled?: boolean }) {
@@ -1429,6 +1441,7 @@ export const listMyRequests = query({
   args: {
     status: v.optional(requestStatus),
     category: v.optional(v.string()),
+    businessCategory: v.optional(v.string()),
     fundingSource: v.optional(v.string()),
     createdFrom: v.optional(v.number()),
     createdTo: v.optional(v.number()),
@@ -1480,6 +1493,9 @@ export const listMyRequests = query({
       if (args.fundingSource && request.fundingSource !== args.fundingSource) {
         return false;
       }
+      if (!matchesBusinessCategoryFilter(request, args.businessCategory)) {
+        return false;
+      }
       if (args.createdFrom && request.createdAt < args.createdFrom) {
         return false;
       }
@@ -1510,6 +1526,12 @@ export const listMyRequests = query({
       if (sort === "updated_desc") return b.request.updatedAt - a.request.updatedAt;
       if (sort === "updated_asc") return a.request.updatedAt - b.request.updatedAt;
       if (sort === "created_asc") return a.request.createdAt - b.request.createdAt;
+      if (sort === "business_category_asc") {
+        return (a.request.businessCategory ?? "").localeCompare(b.request.businessCategory ?? "", "ru");
+      }
+      if (sort === "business_category_desc") {
+        return (b.request.businessCategory ?? "").localeCompare(a.request.businessCategory ?? "", "ru");
+      }
       if (sort === "deadline_asc") return (a.request.approvalDeadline ?? Number.MAX_SAFE_INTEGER) - (b.request.approvalDeadline ?? Number.MAX_SAFE_INTEGER);
       if (sort === "deadline_desc") return (b.request.approvalDeadline ?? 0) - (a.request.approvalDeadline ?? 0);
       return b.request.createdAt - a.request.createdAt;
@@ -1535,6 +1557,7 @@ export const listAllRequests = query({
     createdByEmail: v.optional(v.string()),
     cfdTag: v.optional(v.string()),
     category: v.optional(v.string()),
+    businessCategory: v.optional(v.string()),
     fundingSource: v.optional(v.string()),
     paymentDueFilter: v.optional(paymentDueFilterEnum),
     createdFrom: v.optional(v.number()),
@@ -1593,6 +1616,9 @@ export const listAllRequests = query({
         return false;
       }
       if (args.fundingSource && req.fundingSource !== args.fundingSource) {
+        return false;
+      }
+      if (!matchesBusinessCategoryFilter(req, args.businessCategory)) {
         return false;
       }
       if (args.createdFrom && req.createdAt < args.createdFrom) {
@@ -1671,6 +1697,12 @@ export const listAllRequests = query({
       if (sort === "updated_desc") return b.request.updatedAt - a.request.updatedAt;
       if (sort === "updated_asc") return a.request.updatedAt - b.request.updatedAt;
       if (sort === "created_asc") return a.request.createdAt - b.request.createdAt;
+      if (sort === "business_category_asc") {
+        return (a.request.businessCategory ?? "").localeCompare(b.request.businessCategory ?? "", "ru");
+      }
+      if (sort === "business_category_desc") {
+        return (b.request.businessCategory ?? "").localeCompare(a.request.businessCategory ?? "", "ru");
+      }
       if (sort === "deadline_asc") return (a.request.approvalDeadline ?? Number.MAX_SAFE_INTEGER) - (b.request.approvalDeadline ?? Number.MAX_SAFE_INTEGER);
       if (sort === "deadline_desc") return (b.request.approvalDeadline ?? 0) - (a.request.approvalDeadline ?? 0);
       return b.request.createdAt - a.request.createdAt;
@@ -2851,6 +2883,7 @@ export const assignCfdTag = mutation({
     id: v.id("requests"),
     tag: v.optional(v.string()),
     fundingSource: v.optional(v.string()),
+    businessCategory: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -2892,18 +2925,25 @@ export const assignCfdTag = mutation({
         throw new Error("Тег не найден");
       }
     }
+    const nextBusinessCategory =
+      args.businessCategory === undefined
+        ? normalizeBusinessCategory(request.businessCategory)
+        : normalizeBusinessCategory(args.businessCategory);
     await ctx.db.patch(request._id, {
       cfdTag: args.tag?.trim() || undefined,
       fundingSource: nextFundingSource,
+      businessCategory: nextBusinessCategory,
       updatedAt: Date.now(),
     });
     await logTimelineEvent(ctx, {
       requestId: request._id,
       type: "cfd_tag_updated",
-      title: "Изменен тег заявки",
-      description: args.tag?.trim()
-        ? `${nextFundingSource} · ${args.tag.trim()}`
-        : `${nextFundingSource} · тег снят`,
+      title: "Изменена классификация заявки",
+      description: [
+        nextFundingSource,
+        args.tag?.trim() ? args.tag.trim() : "тег снят",
+        nextBusinessCategory ? `категория: ${nextBusinessCategory}` : undefined,
+      ].filter(Boolean).join(" · "),
       actorEmail: email,
       actorName: record.fullName ?? undefined,
     });

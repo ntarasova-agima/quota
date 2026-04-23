@@ -194,11 +194,11 @@ export default function EditableQuotaTable({
             <div className="grid gap-3">
               <div className="grid grid-cols-[1fr_1.45fr_1.45fr_0.95fr_0.95fr] gap-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 <div>Месяц и год</div>
-                <div>Изначальная квота</div>
+                <div>Квота</div>
                 <div>
-                  <HoverHint label="Если лимиты не менялись, можно не заполнять. Если квоту меняли после согласования, траты будут вычитаться из измененной.">
+                  <HoverHint label="Если лимиты не менялись, можно не заполнять. Если квоту меняли после согласования, траты будут вычитаться из новой суммы.">
                     <span className="underline decoration-dotted underline-offset-4">
-                      Измененная квота
+                      Корректировка
                     </span>
                   </HoverHint>
                 </div>

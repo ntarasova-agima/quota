@@ -219,7 +219,7 @@ export default function ApprovalsPage() {
                               {buhStatusSummary?.label === "Есть нераспределенный платеж" &&
                               unallocatedPaymentAmounts ? (
                                 <div>
-                                  Нераспределено:{" "}
+                                  Не распределено:{" "}
                                   {formatAmountPair({
                                     amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
                                     amountWithVat: unallocatedPaymentAmounts.amountWithVat,

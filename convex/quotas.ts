@@ -42,6 +42,18 @@ function getQuotaWithVat(quota: number, quotaWithVat?: number, vatRate?: number)
   return getAmountWithVat(quota, quotaWithVat, vatRate) ?? quota;
 }
 
+function quotaValue(row: any) {
+  return row?.adjustedQuota ?? row?.quota ?? 0;
+}
+
+function quotaValueWithVat(row: any) {
+  if (!row) return 0;
+  if (row.adjustedQuota !== undefined) {
+    return getQuotaWithVat(row.adjustedQuota, row.adjustedQuotaWithVat, row.vatRate);
+  }
+  return getQuotaWithVat(row.quota ?? 0, row.quotaWithVat, row.vatRate);
+}
+
 function getSpentPair(
   spentByMonth: Map<string, { amountWithoutVat: number; amountWithVat: number }>,
   key: string,
@@ -663,16 +675,7 @@ export const listAdministrationByMonthKeys = query({
       transitTags.push(TRANSIT_TAG_NAME);
       activeTagsByDepartment.set("Транзит", transitTags);
     }
-    const quotaValue = (row: any) => row?.adjustedQuota ?? row?.quota ?? 0;
-    const quotaValueWithVat = (row: any) => {
-      if (!row) return 0;
-      if (row.adjustedQuota !== undefined) {
-        return getQuotaWithVat(row.adjustedQuota, row.adjustedQuotaWithVat, row.vatRate);
-      }
-      return getQuotaWithVat(row.quota ?? 0, row.quotaWithVat, row.vatRate);
-    };
-
-    return args.monthKeys.map((key) => {
+	    return args.monthKeys.map((key) => {
       const { year, month } = monthInfoFromKey(key);
       const totalRow = rowMap.get(`${key}:${ADMINISTRATION_TOTAL_KEY}:`);
       const monthUsage = usageByMonth.get(key);
@@ -698,9 +701,13 @@ export const listAdministrationByMonthKeys = query({
             .map((tagName) => {
               const tagRow = rowMap.get(`${key}:${department}:${tagName}`);
               const tagSpent = spentTags.get(tagName) ?? emptyUsage();
-              const quota = quotaValue(tagRow);
-              const quotaWithVat = quotaValueWithVat(tagRow);
-              return {
+	              const quota = quotaValue(tagRow);
+	              const quotaWithVat = quotaValueWithVat(tagRow);
+              const tagIssues: string[] = [];
+	              if (quota > quotaValue(row)) {
+	                tagIssues.push("Квота тега больше квоты цеха");
+	              }
+	              return {
                 monthKey: key,
                 year,
                 month,
@@ -711,16 +718,27 @@ export const listAdministrationByMonthKeys = query({
                 vatRate: normalizeVatRate(tagRow?.vatRate),
                 spent: tagSpent.amountWithoutVat,
                 spentWithVat: tagSpent.amountWithVat,
-                remaining: quota - tagSpent.amountWithoutVat,
-                remainingWithVat: quotaWithVat - tagSpent.amountWithVat,
-                updatedAt: tagRow?.updatedAt ?? 0,
-              };
-            });
-          const tagAllocated = tagRows.reduce((sum, tagRow) => sum + tagRow.quota, 0);
+	                remaining: quota - tagSpent.amountWithoutVat,
+	                remainingWithVat: quotaWithVat - tagSpent.amountWithVat,
+	                issues: tagIssues,
+	                updatedAt: tagRow?.updatedAt ?? 0,
+	              };
+	            });
+	          const tagAllocated = tagRows.reduce((sum, tagRow) => sum + tagRow.quota, 0);
           const tagAllocatedWithVat = tagRows.reduce((sum, tagRow) => sum + (tagRow.quotaWithVat ?? tagRow.quota), 0);
-          const quota = quotaValue(row);
-          const quotaWithVat = quotaValueWithVat(row);
-          return {
+	          const quota = quotaValue(row);
+	          const quotaWithVat = quotaValueWithVat(row);
+	          const departmentIssues: string[] = [];
+	          if (quota > quotaValue(totalRow)) {
+	            departmentIssues.push("Квота цеха больше общей квоты AGIMA");
+	          }
+	          if (tagAllocated > quota) {
+	            departmentIssues.push("Сумма квот тегов больше квоты цеха");
+	            for (const tagRow of tagRows) {
+	              tagRow.issues = Array.from(new Set([...(tagRow.issues ?? []), "Сумма квот тегов больше квоты цеха"]));
+	            }
+	          }
+	          return {
             monthKey: key,
             year,
             month,
@@ -735,17 +753,25 @@ export const listAdministrationByMonthKeys = query({
             remainingWithVat: quotaWithVat - spent.amountWithVat,
             distributed: tagAllocated,
             distributedWithVat: tagAllocatedWithVat,
-            unallocated: quota - tagAllocated,
-            unallocatedWithVat: quotaWithVat - tagAllocatedWithVat,
-            tags: tagRows,
-            updatedAt: row?.updatedAt ?? 0,
-          };
-        });
+	            unallocated: quota - tagAllocated,
+	            unallocatedWithVat: quotaWithVat - tagAllocatedWithVat,
+	            issues: departmentIssues,
+	            tags: tagRows,
+	            updatedAt: row?.updatedAt ?? 0,
+	          };
+	        });
       const distributed = departmentRows.reduce((sum, row) => sum + row.quota, 0);
       const distributedWithVat = departmentRows.reduce((sum, row) => sum + (row.quotaWithVat ?? row.quota), 0);
-      const totalQuota = quotaValue(totalRow);
-      const totalQuotaWithVat = quotaValueWithVat(totalRow);
-      return {
+	      const totalQuota = quotaValue(totalRow);
+	      const totalQuotaWithVat = quotaValueWithVat(totalRow);
+	      const totalIssues: string[] = [];
+	      if (distributed > totalQuota) {
+	        totalIssues.push("Сумма квот цехов больше общей квоты AGIMA");
+	        for (const department of departmentRows) {
+	          department.issues = Array.from(new Set([...(department.issues ?? []), "Сумма квот цехов больше общей квоты AGIMA"]));
+	        }
+	      }
+	      return {
         monthKey: key,
         year,
         month,
@@ -761,9 +787,10 @@ export const listAdministrationByMonthKeys = query({
               remainingWithVat: totalQuotaWithVat - totalSpent.amountWithVat,
               distributed,
               distributedWithVat,
-              unallocated: totalQuota - distributed,
-              unallocatedWithVat: totalQuotaWithVat - distributedWithVat,
-              updatedAt: totalRow?.updatedAt ?? 0,
+	              unallocated: totalQuota - distributed,
+	              unallocatedWithVat: totalQuotaWithVat - distributedWithVat,
+	              issues: totalIssues,
+	              updatedAt: totalRow?.updatedAt ?? 0,
             }
           : undefined,
         departments: departmentRows,
@@ -803,19 +830,85 @@ export const updateAdministrationQuota = mutation({
     if (departmentKey === ADMINISTRATION_TOTAL_KEY && tagName) {
       throw new Error("Так не бывает");
     }
+    const vatRate = normalizeVatRate(args.vatRate);
+    const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
+    const monthRows = await ctx.db
+      .query("administrationQuotas")
+      .withIndex("by_monthKey", (q: any) => q.eq("monthKey", args.monthKey))
+      .collect();
+    const projectedRows = [
+      ...monthRows.filter(
+        (row: any) =>
+          !(
+            row.departmentKey === departmentKey &&
+            (row.tagName ?? undefined) === tagName
+          ),
+      ),
+      {
+        departmentKey,
+        tagName,
+        quota: args.quota,
+        quotaWithVat,
+        vatRate,
+      },
+    ];
+    const projectedQuota = (key: string, tag?: string) =>
+      quotaValue(
+        projectedRows.find(
+          (row: any) =>
+            row.departmentKey === key &&
+            (row.tagName ?? undefined) === tag,
+        ),
+      );
+    const totalQuota = projectedQuota(ADMINISTRATION_TOTAL_KEY);
+    const departmentQuotas = projectedRows.filter(
+      (row: any) =>
+        row.departmentKey !== ADMINISTRATION_TOTAL_KEY &&
+        !row.tagName,
+    );
+    const departmentQuotaSum = departmentQuotas.reduce(
+      (sum: number, row: any) => sum + quotaValue(row),
+      0,
+    );
+    if (departmentKey === ADMINISTRATION_TOTAL_KEY) {
+      if (departmentQuotaSum > args.quota) {
+        throw new Error("Сумма квот цехов не может быть больше общей квоты AGIMA");
+      }
+    } else if (!tagName) {
+      if (args.quota > totalQuota) {
+        throw new Error("Квота цеха не может быть больше общей квоты AGIMA");
+      }
+      if (departmentQuotaSum > totalQuota) {
+        throw new Error("Сумма квот цехов не может быть больше общей квоты AGIMA");
+      }
+      const tagQuotaSum = projectedRows
+        .filter((row: any) => row.departmentKey === departmentKey && row.tagName)
+        .reduce((sum: number, row: any) => sum + quotaValue(row), 0);
+      if (tagQuotaSum > args.quota) {
+        throw new Error("Сумма квот тегов не может быть больше квоты цеха");
+      }
+    } else {
+      const departmentQuota = projectedQuota(departmentKey);
+      if (args.quota > departmentQuota) {
+        throw new Error("Квота тега не может быть больше квоты цеха");
+      }
+      const tagQuotaSum = projectedRows
+        .filter((row: any) => row.departmentKey === departmentKey && row.tagName)
+        .reduce((sum: number, row: any) => sum + quotaValue(row), 0);
+      if (tagQuotaSum > departmentQuota) {
+        throw new Error("Сумма квот тегов не может быть больше квоты цеха");
+      }
+    }
     const requests = await ctx.db.query("requests").collect();
     const spent = getAdministrationUsage(requests, {
       department: departmentKey === ADMINISTRATION_TOTAL_KEY ? undefined : departmentKey,
       tag: tagName,
     }).get(args.monthKey)?.total ?? emptyUsage();
-    const vatRate = normalizeVatRate(args.vatRate);
-    const quotaWithVat = getQuotaWithVat(args.quota, args.quotaWithVat, vatRate);
-    const existing = (await ctx.db
-      .query("administrationQuotas")
-      .withIndex("by_month_department", (q: any) =>
-        q.eq("monthKey", args.monthKey).eq("departmentKey", departmentKey),
-      )
-      .collect()).find((row: any) => (row.tagName ?? undefined) === tagName);
+    const existing = monthRows.find(
+      (row: any) =>
+        row.departmentKey === departmentKey &&
+        (row.tagName ?? undefined) === tagName,
+    );
     const patch = {
       monthKey: args.monthKey,
       departmentKey,

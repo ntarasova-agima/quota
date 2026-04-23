@@ -1,13 +1,11 @@
 import { normalizeContestSpecialistSource, requiresContestSpecialistValidation } from "../src/lib/requestFields";
 import { normalizeHodDepartment } from "../src/lib/departments";
 import {
-  CLIENT_SERVICES_TRANSIT_CATEGORY,
-  CONTRACTOR_PAYMENT_CATEGORY,
-  PURCHASE_CATEGORY,
-  SERVICE_PURCHASE_CATEGORY,
   isHodSelectableCategory,
   normalizeRequestCategory,
 } from "../src/lib/requestRules";
+
+const FINANCE_LEGAL_DEPARTMENT = "Финансово-юридический отдел";
 
 export type ApprovalEntryLike = {
   role: string;
@@ -56,6 +54,7 @@ export function getEffectiveRequiredHodDepartments(params: {
     return [];
   }
   return normalizeDepartmentList([
+    FINANCE_LEGAL_DEPARTMENT,
     ...(params.requiredHodDepartments ?? []),
     ...(normalizedCategory === "Конкурсное задание"
       ? getRequiredContestHodDepartments(params.specialists)
@@ -158,11 +157,5 @@ export function getRequestApprovalStatus(params: {
 
 export function canCategoryUseHodApproval(category: string) {
   const normalizedCategory = normalizeRequestCategory(category);
-  return [
-    "Конкурсное задание",
-    CLIENT_SERVICES_TRANSIT_CATEGORY,
-    SERVICE_PURCHASE_CATEGORY,
-    PURCHASE_CATEGORY,
-    CONTRACTOR_PAYMENT_CATEGORY,
-  ].includes(normalizedCategory);
+  return isHodSelectableCategory(normalizedCategory);
 }

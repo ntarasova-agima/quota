@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { HoverHint } from "@/components/ui/hover-hint";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import ContestParticipantsEditor, {
@@ -112,7 +113,6 @@ export default function NewRequestPage() {
   const [prepaymentAmountWithVat, setPrepaymentAmountWithVat] = useState("");
   const [prepaymentVatInputSource, setPrepaymentVatInputSource] = useState<VatAmountSource>("without");
   const [prepaymentDate, setPrepaymentDate] = useState("");
-  const [contacts, setContacts] = useState("");
   const [relatedRequests, setRelatedRequests] = useState("");
   const [relatedRequestsExpanded, setRelatedRequestsExpanded] = useState(false);
   const [internalSpecialists, setInternalSpecialists] = useState<ContestParticipantDraft[]>([
@@ -187,6 +187,8 @@ export default function NewRequestPage() {
     },
     [],
   );
+  const wrappedSelectTriggerClass =
+    "h-auto min-h-9 whitespace-normal text-left *:data-[slot=select-value]:line-clamp-2";
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
   const selectedDepartment = requestArea;
   const categoryOptions = useMemo(
@@ -206,20 +208,7 @@ export default function NewRequestPage() {
     category !== "Конкурсное задание" &&
     category !== "Welcome-бонус" &&
     !isServiceCategory;
-  const financeLinksRequired =
-    category !== "Конкурсное задание" &&
-    category !== "Welcome-бонус" &&
-    !isServiceCategory &&
-    fundingSource === "Отгрузки проекта";
-
-  const contactsList = useMemo(
-    () =>
-      contacts
-        .split("\n")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    [contacts],
-  );
+  const financeLinksRequired = fundingSource === "Отгрузки проекта";
   const relatedRequestsList = useMemo(
     () =>
       relatedRequests
@@ -270,6 +259,7 @@ export default function NewRequestPage() {
       Array.from(
         new Set(
           [
+            "Финансово-юридический отдел",
             ...(category === "Конкурсное задание"
               ? specialistsPayload
                   .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
@@ -692,18 +682,14 @@ export default function NewRequestPage() {
           prepaymentRequired && prepaymentDate
             ? new Date(`${prepaymentDate}T00:00:00`).getTime()
             : undefined,
-        contacts: category === "Конкурсное задание" || isServiceCategory ? [] : contactsList,
+        contacts: [],
         relatedRequests: relatedRequestsList,
         links: [],
         specialists: category === "Конкурсное задание" ? specialistsPayload : undefined,
         financePlanLinks:
-          category === "Конкурсное задание" ||
-          category === "Welcome-бонус" ||
-          isServiceCategory
-            ? undefined
-            : financeLinksList.length
-              ? financeLinksList
-              : undefined,
+          showTransitFields && financeLinksList.length
+            ? financeLinksList
+            : undefined,
         incomingAmount:
           showTransitFields && resolvedIncomingAmountsPreview.amountWithoutVat !== undefined
             ? resolvedIncomingAmountsPreview.amountWithoutVat
@@ -736,7 +722,7 @@ export default function NewRequestPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось создать заявку";
       if (message === "Так не бывает") {
-        setError("выбран неверный источник финансирования или категория заявки");
+        setError("Выбран неверный источник финансирования или тип заявки");
       } else {
         setError(message);
       }
@@ -761,16 +747,19 @@ export default function NewRequestPage() {
             </CardHeader>
             <CardContent>
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
-                <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
                   <div className="space-y-2">
                     <FieldLabel required>Цех</FieldLabel>
                     <Select value={requestArea} onValueChange={(value) => handleRequestAreaChange(value as RequestArea)}>
-                      <SelectTrigger aria-invalid={departmentInvalid ? true : undefined}>
+                      <SelectTrigger
+                        className={wrappedSelectTriggerClass}
+                        aria-invalid={departmentInvalid ? true : undefined}
+                      >
                         <SelectValue placeholder="Выберите цех" />
                       </SelectTrigger>
                       <SelectContent>
                         {REQUEST_AREAS.map((item) => (
-                          <SelectItem key={item} value={item}>
+                          <SelectItem key={item} value={item} className="whitespace-normal">
                             {item}
                           </SelectItem>
                         ))}
@@ -778,14 +767,14 @@ export default function NewRequestPage() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <FieldLabel required>Категория</FieldLabel>
+                    <FieldLabel required>Тип заявки</FieldLabel>
                     <Select value={category} onValueChange={handleCategoryChange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Выберите категорию" />
+                      <SelectTrigger className={wrappedSelectTriggerClass}>
+                        <SelectValue placeholder="Выберите тип заявки" />
                       </SelectTrigger>
                       <SelectContent>
                         {categoryOptions.map((item) => (
-                          <SelectItem key={item} value={item}>
+                          <SelectItem key={item} value={item} className="whitespace-normal">
                             {item}
                           </SelectItem>
                         ))}
@@ -1136,17 +1125,6 @@ export default function NewRequestPage() {
                         ))}
                       </SelectContent>
                     </Select>
-                  </div>
-                ) : null}
-                {category !== "Конкурсное задание" && !isServiceCategory ? (
-                  <div className={`space-y-2 ${showPaymentMethod ? "sm:col-span-2" : "sm:col-span-3"}`}>
-                    <Label htmlFor="contacts">Контакты клиента</Label>
-                    <Textarea
-                      id="contacts"
-                      value={contacts}
-                      onChange={(event) => setContacts(event.target.value)}
-                      rows={3}
-                    />
                   </div>
                 ) : null}
               </div>
@@ -1518,9 +1496,10 @@ export default function NewRequestPage() {
                 </div>
                 <div className="space-y-2">
                   <FieldLabel htmlFor="neededBy" required>
-                    Ожидание затраты
+                    <HoverHint label="Когда нужно оплатить">
+                      <span>Ожидание затраты</span>
+                    </HoverHint>
                   </FieldLabel>
-                  <p className="text-xs text-muted-foreground">Когда нужно оплатить</p>
                   <Input
                     id="neededBy"
                     type="date"
@@ -1571,7 +1550,7 @@ export default function NewRequestPage() {
                             />
                             <span>
                               {department}
-                              {isAutoRequired ? " · обязателен по специалистам" : ""}
+                              {isAutoRequired ? " · обязателен" : ""}
                             </span>
                           </label>
                         );

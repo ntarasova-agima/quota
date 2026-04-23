@@ -4,7 +4,6 @@ import {
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
-  CONTRACTOR_PAYMENT_CATEGORY,
   LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE,
   LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY,
   LEGACY_PROJECT_TRANSIT_CATEGORY,
@@ -55,9 +54,10 @@ describe("requestRules", () => {
 
   it("returns categories by department", () => {
     expect(getCategoriesForDepartment("Аккаунтинг")).toContain("Подарки");
+    expect(getCategoriesForDepartment("Аккаунтинг")).toContain(PURCHASE_CATEGORY);
     expect(getCategoriesForDepartment("Аккаунтинг")).not.toContain(CLIENT_SERVICES_TRANSIT_CATEGORY);
     expect(getCategoriesForDepartment("Транзит")).toEqual([CLIENT_SERVICES_TRANSIT_CATEGORY]);
-    expect(getCategoriesForDepartment("Разработка")).toEqual([PURCHASE_CATEGORY, CONTRACTOR_PAYMENT_CATEGORY]);
+    expect(getCategoriesForDepartment("Разработка")).toEqual([PURCHASE_CATEGORY]);
   });
 
   it("checks category availability by department", () => {
@@ -91,8 +91,7 @@ describe("requestRules", () => {
   });
 
   it("recognizes service recipient and legacy AI categories", () => {
-    expect(isServiceRecipientCategory(PURCHASE_CATEGORY)).toBe(true);
-    expect(isServiceRecipientCategory(CONTRACTOR_PAYMENT_CATEGORY)).toBe(true);
+    expect(isServiceRecipientCategory(PURCHASE_CATEGORY)).toBe(false);
     expect(isServiceRecipientCategory(LEGACY_SERVICE_PURCHASE_CATEGORY)).toBe(true);
     expect(isServiceRecipientCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(false);
     expect(isAiToolsRequestCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe(true);
