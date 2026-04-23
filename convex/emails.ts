@@ -255,7 +255,7 @@ export const sendRequestCreatedToBuh = internalAction({
         <p>Создана новая заявка.</p>
         <p>Автор: ${creator}</p>
         <p>На что нужен бюджет: <strong>${requestTitle}</strong></p>
-        <p>Категория: ${request.category}</p>
+        <p>Тип заявки: ${request.category}</p>
         <p>Источник финансирования: ${request.fundingSource}</p>
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>

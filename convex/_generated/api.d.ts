@@ -12,6 +12,7 @@ import type * as approvals from "../approvals.js";
 import type * as attachments from "../attachments.js";
 import type * as auth from "../auth.js";
 import type * as authHelpers from "../authHelpers.js";
+import type * as businessCategories from "../businessCategories.js";
 import type * as cfdTags from "../cfdTags.js";
 import type * as comments from "../comments.js";
 import type * as emails from "../emails.js";
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   attachments: typeof attachments;
   auth: typeof auth;
   authHelpers: typeof authHelpers;
+  businessCategories: typeof businessCategories;
   cfdTags: typeof cfdTags;
   comments: typeof comments;
   emails: typeof emails;

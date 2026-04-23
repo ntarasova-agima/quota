@@ -10,12 +10,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { HoverHint } from "@/components/ui/hover-hint";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/convex";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import { getBuhPaymentStatusSummary, getRequestStatusSummary } from "@/lib/requestStatus";
-import { EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
+import { EMPTY_BUSINESS_CATEGORY, EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
 import { normalizeRequestCategory } from "@/lib/requestRules";
 import { formatAmountPair } from "@/lib/vat";
 
@@ -67,19 +74,50 @@ function toEndOfDay(value: string) {
   return new Date(`${value}T23:59:59.999`).getTime();
 }
 
+function getMonthRange(monthKey: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) {
+    return { from: "", to: "" };
+  }
+  const [year, month] = monthKey.split("-").map(Number);
+  const start = new Date(year, month - 1, 1);
+  const end = new Date(year, month, 0);
+  const formatDateInput = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return {
+    from: formatDateInput(start),
+    to: formatDateInput(end),
+  };
+}
+
+function getStatusFilterLabel(statusFilters: string[]) {
+  if (!statusFilters.length) {
+    return "Все статусы";
+  }
+  if (statusFilters.length === 1) {
+    return statusOptions.find((item) => item.value === statusFilters[0])?.label ?? "1 статус";
+  }
+  return `Статусы: ${statusFilters.length}`;
+}
+
 export default function RequestsPage() {
   const searchParams = useSearchParams();
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [paymentDueFilter, setPaymentDueFilter] = useState<"all" | "today" | "overdue">("all");
   const [myStatusFilter, setMyStatusFilter] = useState("all");
   const [authorFilter, setAuthorFilter] = useState("all");
+  const [authorQuery, setAuthorQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("all");
+  const [tagQuery, setTagQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [businessCategoryFilter, setBusinessCategoryFilter] = useState("all");
   const [fundingFilter, setFundingFilter] = useState("all");
+  const [createdMonth, setCreatedMonth] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [myCategoryFilter, setMyCategoryFilter] = useState("all");
+  const [myBusinessCategoryFilter, setMyBusinessCategoryFilter] = useState("all");
   const [myFundingFilter, setMyFundingFilter] = useState("all");
+  const [myCreatedMonth, setMyCreatedMonth] = useState("");
   const [myCreatedFrom, setMyCreatedFrom] = useState("");
   const [myCreatedTo, setMyCreatedTo] = useState("");
   const [mySort, setMySort] = useState("created_desc");
@@ -114,6 +152,7 @@ export default function RequestsPage() {
   const activeView = rawView === "all" && canUseAllRequestsView ? "all" : "my";
   const adContacts = useQuery(api.roles.listAdContacts, isAuthenticated && isApprover ? {} : "skip");
   const cfdTags = useQuery(api.cfdTags.list, isAuthenticated && isTagViewer ? {} : "skip");
+  const businessCategories = useQuery(api.businessCategories.list, isAuthenticated ? {} : "skip");
   const updatePaymentStatus = useMutation(api.requests.updatePaymentStatus);
   const archiveOldRequests = useMutation(api.requests.archiveOldRequests);
   const myRequests = useQuery(
@@ -122,6 +161,7 @@ export default function RequestsPage() {
         ? {
             status: myStatusFilter === "all" ? undefined : (myStatusFilter as any),
             category: myCategoryFilter === "all" ? undefined : myCategoryFilter,
+            businessCategory: myBusinessCategoryFilter === "all" ? undefined : myBusinessCategoryFilter,
             fundingSource: myFundingFilter === "all" ? undefined : myFundingFilter,
             createdFrom: toStartOfDay(myCreatedFrom),
             createdTo: toEndOfDay(myCreatedTo),
@@ -145,6 +185,7 @@ export default function RequestsPage() {
                 ? ""
                 : tagFilter,
           category: categoryFilter === "all" ? undefined : categoryFilter,
+          businessCategory: businessCategoryFilter === "all" ? undefined : businessCategoryFilter,
           fundingSource: fundingFilter === "all" ? undefined : fundingFilter,
           paymentDueFilter: paymentDueFilter === "all" ? undefined : paymentDueFilter,
           createdFrom: toStartOfDay(createdFrom),
@@ -167,10 +208,58 @@ export default function RequestsPage() {
   }, [archiveOldRequests, archiveSweepDone, isAuthenticated]);
   const myRequestItems = myRequests?.items ?? [];
   const allRequestItems = allRequests?.items ?? [];
+  const filteredAuthors = useMemo(() => {
+    const query = authorQuery.trim().toLowerCase();
+    if (!query) {
+      return adContacts ?? [];
+    }
+    return (adContacts ?? []).filter((contact) =>
+      [
+        contact.fullName,
+        contact.creatorTitle,
+        contact.email,
+      ].filter(Boolean).join(" ").toLowerCase().includes(query),
+    );
+  }, [adContacts, authorQuery]);
+  const filteredTags = useMemo(() => {
+    const query = tagQuery.trim().toLowerCase();
+    if (!query) {
+      return cfdTags ?? [];
+    }
+    return (cfdTags ?? []).filter((tag) =>
+      `${tag.name} ${tag.department ?? ""}`.toLowerCase().includes(query),
+    );
+  }, [cfdTags, tagQuery]);
+  const businessCategoryOptions = businessCategories ?? [
+    { _id: "empty", name: EMPTY_BUSINESS_CATEGORY },
+  ];
+
+  useEffect(() => {
+    const month = searchParams.get("month");
+    if (!month) {
+      return;
+    }
+    const range = getMonthRange(month);
+    if (!range.from || !range.to) {
+      return;
+    }
+    setCreatedMonth(month);
+    setCreatedFrom(range.from);
+    setCreatedTo(range.to);
+  }, [searchParams]);
 
   useEffect(() => {
     setMyPage(1);
-  }, [myStatusFilter, myCategoryFilter, myFundingFilter, myCreatedFrom, myCreatedTo, mySort, myRequestCodeQuery]);
+  }, [
+    myStatusFilter,
+    myCategoryFilter,
+    myBusinessCategoryFilter,
+    myFundingFilter,
+    myCreatedFrom,
+    myCreatedTo,
+    mySort,
+    myRequestCodeQuery,
+  ]);
 
   useEffect(() => {
     setAllPage(1);
@@ -179,6 +268,7 @@ export default function RequestsPage() {
     authorFilter,
     tagFilter,
     categoryFilter,
+    businessCategoryFilter,
     fundingFilter,
     paymentDueFilter,
     createdFrom,
@@ -213,6 +303,8 @@ export default function RequestsPage() {
                       <SelectItem value="updated_asc">По дате изменения: старые</SelectItem>
                       <SelectItem value="deadline_asc">По дедлайну: ближе</SelectItem>
                       <SelectItem value="deadline_desc">По дедлайну: дальше</SelectItem>
+                      <SelectItem value="business_category_asc">По категории: А-Я</SelectItem>
+                      <SelectItem value="business_category_desc">По категории: Я-А</SelectItem>
                     </SelectContent>
                   </Select>
                   <Input
@@ -235,13 +327,26 @@ export default function RequestsPage() {
                   </Select>
                   <Select value={myCategoryFilter} onValueChange={setMyCategoryFilter}>
                     <SelectTrigger className="w-[220px]">
+                      <SelectValue placeholder="Тип заявки" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Все типы заявок</SelectItem>
+                      {EXPENSE_CATEGORIES.map((category) => (
+                        <SelectItem key={category} value={category}>
+                          {category}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={myBusinessCategoryFilter} onValueChange={setMyBusinessCategoryFilter}>
+                    <SelectTrigger className="w-[220px]">
                       <SelectValue placeholder="Категория" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Все категории</SelectItem>
-                      {EXPENSE_CATEGORIES.map((category) => (
-                        <SelectItem key={category} value={category}>
-                          {category}
+                      {businessCategoryOptions.map((category) => (
+                        <SelectItem key={category._id} value={category.name}>
+                          {category.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -260,16 +365,34 @@ export default function RequestsPage() {
                     </SelectContent>
                   </Select>
                   <Input
+                    type="month"
+                    className="w-[180px]"
+                    value={myCreatedMonth}
+                    onChange={(event) => {
+                      const month = event.target.value;
+                      setMyCreatedMonth(month);
+                      const range = getMonthRange(month);
+                      setMyCreatedFrom(range.from);
+                      setMyCreatedTo(range.to);
+                    }}
+                  />
+                  <Input
                     type="date"
                     className="w-[180px]"
                     value={myCreatedFrom}
-                    onChange={(event) => setMyCreatedFrom(event.target.value)}
+                    onChange={(event) => {
+                      setMyCreatedMonth("");
+                      setMyCreatedFrom(event.target.value);
+                    }}
                   />
                   <Input
                     type="date"
                     className="w-[180px]"
                     value={myCreatedTo}
-                    onChange={(event) => setMyCreatedTo(event.target.value)}
+                    onChange={(event) => {
+                      setMyCreatedMonth("");
+                      setMyCreatedTo(event.target.value);
+                    }}
                   />
                 </div>
               </div>
@@ -559,6 +682,8 @@ export default function RequestsPage() {
                       <SelectItem value="updated_asc">По дате изменения: старые</SelectItem>
                       <SelectItem value="deadline_asc">По дедлайну: ближе</SelectItem>
                       <SelectItem value="deadline_desc">По дедлайну: дальше</SelectItem>
+                      <SelectItem value="business_category_asc">По категории: А-Я</SelectItem>
+                      <SelectItem value="business_category_desc">По категории: Я-А</SelectItem>
                     </SelectContent>
                   </Select>
                   <Input
@@ -567,41 +692,46 @@ export default function RequestsPage() {
                     value={allRequestCodeQuery}
                     onChange={(event) => setAllRequestCodeQuery(event.target.value)}
                   />
-                  <div className="flex max-w-full flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant={statusFilters.length === 0 ? "default" : "outline"}
-                      onClick={() => setStatusFilters([])}
-                    >
-                      Все статусы
-                    </Button>
-                    {statusOptions.filter((opt) => opt.value !== "all").map((opt) => {
-                      const selected = statusFilters.includes(opt.value);
-                      return (
-                        <Button
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant={statusFilters.length ? "outline" : "default"} className="w-[220px] justify-start">
+                        {getStatusFilterLabel(statusFilters)}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-72">
+                      <DropdownMenuItem onClick={() => setStatusFilters([])}>
+                        Все статусы
+                      </DropdownMenuItem>
+                      {statusOptions.filter((opt) => opt.value !== "all").map((opt) => (
+                        <DropdownMenuCheckboxItem
                           key={opt.value}
-                          type="button"
-                          variant={selected ? "default" : "outline"}
-                          onClick={() =>
+                          checked={statusFilters.includes(opt.value)}
+                          onCheckedChange={(checked) =>
                             setStatusFilters((current) =>
-                              current.includes(opt.value)
-                                ? current.filter((item) => item !== opt.value)
-                                : [...current, opt.value],
+                              checked
+                                ? Array.from(new Set([...current, opt.value]))
+                                : current.filter((item) => item !== opt.value),
                             )
                           }
                         >
                           {opt.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Input
+                    className="w-[220px]"
+                    placeholder="Поиск автора"
+                    value={authorQuery}
+                    onChange={(event) => setAuthorQuery(event.target.value)}
+                  />
                   <Select value={authorFilter} onValueChange={setAuthorFilter}>
                     <SelectTrigger className="w-[240px]">
                       <SelectValue placeholder="От кого заявка" />
                     </SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">Все авторы</SelectItem>
-                        {adContacts?.map((contact) => (
+                        {filteredAuthors.map((contact) => (
                           <SelectItem key={contact.email} value={contact.email}>
                             {contact.fullName
                               ? `${contact.fullName}${contact.creatorTitle ? ` · ${contact.creatorTitle}` : ""} · ${contact.email}`
@@ -612,13 +742,26 @@ export default function RequestsPage() {
                   </Select>
                   <Select value={categoryFilter} onValueChange={setCategoryFilter}>
                     <SelectTrigger className="w-[220px]">
+                      <SelectValue placeholder="Тип заявки" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Все типы заявок</SelectItem>
+                      {EXPENSE_CATEGORIES.map((category) => (
+                        <SelectItem key={category} value={category}>
+                          {category}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={businessCategoryFilter} onValueChange={setBusinessCategoryFilter}>
+                    <SelectTrigger className="w-[220px]">
                       <SelectValue placeholder="Категория" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Все категории</SelectItem>
-                      {EXPENSE_CATEGORIES.map((category) => (
-                        <SelectItem key={category} value={category}>
-                          {category}
+                      {businessCategoryOptions.map((category) => (
+                        <SelectItem key={category._id} value={category.name}>
+                          {category.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -637,32 +780,58 @@ export default function RequestsPage() {
                     </SelectContent>
                   </Select>
                   {isTagViewer && (
-                    <Select value={tagFilter} onValueChange={setTagFilter}>
-                      <SelectTrigger className="w-[220px]">
-                        <SelectValue placeholder="Тег CFD" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Все теги</SelectItem>
-                        <SelectItem value="without_tag">Без тега</SelectItem>
-                        {(cfdTags ?? []).map((tag) => (
-                          <SelectItem key={tag._id} value={tag.name}>
-                            {tag.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <>
+                      <Input
+                        className="w-[180px]"
+                        placeholder="Поиск тега"
+                        value={tagQuery}
+                        onChange={(event) => setTagQuery(event.target.value)}
+                      />
+                      <Select value={tagFilter} onValueChange={setTagFilter}>
+                        <SelectTrigger className="w-[220px]">
+                          <SelectValue placeholder="Тег CFD" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Все теги</SelectItem>
+                          <SelectItem value="without_tag">Без тега</SelectItem>
+                          {filteredTags.map((tag) => (
+                            <SelectItem key={tag._id} value={tag.name}>
+                              {tag.department ? `${tag.name} · ${tag.department}` : tag.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </>
                   )}
+                  <Input
+                    type="month"
+                    className="w-[180px]"
+                    value={createdMonth}
+                    onChange={(event) => {
+                      const month = event.target.value;
+                      setCreatedMonth(month);
+                      const range = getMonthRange(month);
+                      setCreatedFrom(range.from);
+                      setCreatedTo(range.to);
+                    }}
+                  />
                   <Input
                     type="date"
                     className="w-[180px]"
                     value={createdFrom}
-                    onChange={(event) => setCreatedFrom(event.target.value)}
+                    onChange={(event) => {
+                      setCreatedMonth("");
+                      setCreatedFrom(event.target.value);
+                    }}
                   />
                   <Input
                     type="date"
                     className="w-[180px]"
                     value={createdTo}
-                    onChange={(event) => setCreatedTo(event.target.value)}
+                    onChange={(event) => {
+                      setCreatedMonth("");
+                      setCreatedTo(event.target.value);
+                    }}
                   />
                 </div>
               </CardHeader>

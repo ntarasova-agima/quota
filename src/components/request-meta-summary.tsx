@@ -43,7 +43,7 @@ export default function RequestMetaSummary({
         <span>{clientName}</span>
       </HoverHint>
       <span aria-hidden="true">·</span>
-      <HoverHint label="Категория заявки">
+      <HoverHint label="Тип заявки">
         <span>{normalizedCategory}</span>
       </HoverHint>
       {amount !== undefined && currency ? (

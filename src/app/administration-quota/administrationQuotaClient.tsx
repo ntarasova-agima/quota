@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/lib/convex";
@@ -46,6 +47,7 @@ type QuotaEditableRow = {
   remainingWithVat?: number;
   distributed?: number;
   unallocated?: number;
+  issues?: string[];
 };
 
 type HistoryEvent = {
@@ -91,6 +93,7 @@ function RowEditor({
   const [quota, setQuota] = useState(String(row.quota ?? 0));
   const [quotaWithVat, setQuotaWithVat] = useState(String(row.quotaWithVat ?? row.quota ?? 0));
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const vatRate = row.vatRate ?? DEFAULT_VAT_RATE;
 
   useEffect(() => {
@@ -102,6 +105,7 @@ function RowEditor({
     if (!canEdit || saving) {
       return;
     }
+    setSaveError(null);
     const resolved = resolveVatAmounts({
       amountWithoutVat: parseMoneyInput(quota),
       amountWithVat: parseMoneyInput(quotaWithVat),
@@ -124,10 +128,14 @@ function RowEditor({
         quotaWithVat: resolved.amountWithVat,
         vatRate,
       });
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Не удалось сохранить квоту");
     } finally {
       setSaving(false);
     }
   }
+
+  const hasIssues = Boolean(row.issues?.length || saveError);
 
   const wrapperClass =
     tone === "total"
@@ -137,7 +145,7 @@ function RowEditor({
         : "rounded-xl border border-zinc-100 bg-zinc-50/80 p-3";
 
   return (
-    <div className={wrapperClass}>
+    <div className={`${wrapperClass} ${hasIssues ? "border-destructive bg-destructive/5" : ""}`}>
       <div className="grid gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,0.85fr)] md:items-end">
         <div>
           <div className={tone === "total" ? "text-lg font-semibold" : "font-medium"}>{label}</div>
@@ -198,6 +206,14 @@ function RowEditor({
           Не распределено: {formatAmount(row.unallocated)} без НДС
         </div>
       ) : null}
+      {row.issues?.length || saveError ? (
+        <div className="mt-3 space-y-1 text-sm text-destructive">
+          {row.issues?.map((issue) => (
+            <div key={issue}>{issue}</div>
+          ))}
+          {saveError ? <div>{saveError}</div> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -207,6 +223,8 @@ export default function AdministrationQuotaClient() {
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState("all");
   const [activeTab, setActiveTab] = useState<"quotas" | "history">("quotas");
+  const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
+  const [expandedDepartments, setExpandedDepartments] = useState<Record<string, boolean>>({});
   const monthKeys = useMemo(() => {
     const now = new Date();
     return Array.from({ length: monthsCount }, (_, index) => {
@@ -328,72 +346,120 @@ export default function AdministrationQuotaClient() {
           <CardContent className="py-6 text-sm text-muted-foreground">Загрузка...</CardContent>
         </Card>
       ) : (
-        rows.map((month) => (
-          <Card key={month.monthKey}>
-            <CardHeader>
-              <CardTitle>{formatMonth(month.year, month.month)}</CardTitle>
-              {month.total ? (
-                <CardDescription>
-                  Общая квота: {formatAmount(month.total.quota)} без НДС · Не распределено:{" "}
-                  {formatAmount(month.total.unallocated)} без НДС
-                </CardDescription>
-              ) : (
-                <CardDescription>Квота вашего цеха и распределение по тегам.</CardDescription>
-              )}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {month.total ? (
-                <RowEditor
-                  row={{ ...month.total, monthKey: month.monthKey, departmentKey: "__total__" }}
-                  label="Общая квота AGIMA"
-                  tone="total"
-                  canEdit={month.canEdit}
-                  onSave={async (row, values) => {
-                    await updateQuota({ monthKey: row.monthKey, departmentKey: row.departmentKey, ...values });
-                  }}
-                />
-              ) : null}
-              {month.departments.map((department) => (
-                <div key={`${month.monthKey}-${department.departmentKey}`} className="space-y-3">
-                  <RowEditor
-                    row={department}
-                    label={department.departmentName ?? department.departmentKey}
-                    tone="department"
-                    canEdit={month.canEdit}
-                    onSave={async (row, values) => {
-                      await updateQuota({ monthKey: row.monthKey, departmentKey: row.departmentKey, ...values });
-                    }}
-                  />
-                  <div className="ml-0 space-y-2 border-l border-dashed border-zinc-200 pl-3 md:ml-6">
-                    {department.tags.length ? (
-                      department.tags.map((tag) => (
-                        <RowEditor
-                          key={`${month.monthKey}-${department.departmentKey}-${tag.tagName}`}
-                          row={tag}
-                          label={tag.tagName ?? "Без тега"}
-                          tone="tag"
-                          canEdit={month.canEdit && tag.tagName !== "Без тега"}
-                          onSave={async (row, values) => {
-                            await updateQuota({
-                              monthKey: row.monthKey,
-                              departmentKey: row.departmentKey,
-                              tagName: row.tagName,
-                              ...values,
-                            });
-                          }}
-                        />
-                      ))
+        rows.map((month) => {
+          const monthExpanded = expandedMonths[month.monthKey] ?? false;
+          return (
+            <Card key={month.monthKey}>
+              <CardHeader>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle>{formatMonth(month.year, month.month)}</CardTitle>
+                    {month.total ? (
+                      <CardDescription>
+                        Общая квота: {formatAmount(month.total.quota)} без НДС · Не распределено:{" "}
+                        {formatAmount(month.total.unallocated)} без НДС
+                      </CardDescription>
                     ) : (
-                      <div className="rounded-xl border border-dashed border-zinc-200 px-4 py-3 text-sm text-muted-foreground">
-                        У цеха пока нет тегов или списаний.
-                      </div>
+                      <CardDescription>Квота вашего цеха и распределение по тегам.</CardDescription>
                     )}
                   </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button asChild type="button" variant="outline" size="sm">
+                      <Link href={`/requests?view=all&month=${month.monthKey}`}>
+                        Перейти к заявкам месяца
+                      </Link>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={monthExpanded ? "default" : "outline"}
+                      size="sm"
+                      onClick={() =>
+                        setExpandedMonths((current) => ({
+                          ...current,
+                          [month.monthKey]: !monthExpanded,
+                        }))
+                      }
+                    >
+                      {monthExpanded ? "Свернуть" : "Развернуть"}
+                    </Button>
+                  </div>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
-        ))
+              </CardHeader>
+              {monthExpanded ? (
+                <CardContent className="space-y-4">
+                  {month.total ? (
+                    <RowEditor
+                      row={{ ...month.total, monthKey: month.monthKey, departmentKey: "__total__" }}
+                      label="Общая квота AGIMA"
+                      tone="total"
+                      canEdit={month.canEdit}
+                      onSave={async (row, values) => {
+                        await updateQuota({ monthKey: row.monthKey, departmentKey: row.departmentKey, ...values });
+                      }}
+                    />
+                  ) : null}
+                  {month.departments.map((department) => {
+                    const departmentKey = `${month.monthKey}:${department.departmentKey}`;
+                    const departmentExpanded = expandedDepartments[departmentKey] ?? false;
+                    return (
+                      <div key={departmentKey} className="space-y-3">
+                        <RowEditor
+                          row={department}
+                          label={department.departmentName ?? department.departmentKey}
+                          tone="department"
+                          canEdit={month.canEdit}
+                          onSave={async (row, values) => {
+                            await updateQuota({ monthKey: row.monthKey, departmentKey: row.departmentKey, ...values });
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setExpandedDepartments((current) => ({
+                              ...current,
+                              [departmentKey]: !departmentExpanded,
+                            }))
+                          }
+                        >
+                          {departmentExpanded ? "Скрыть теги" : `Показать теги (${department.tags.length})`}
+                        </Button>
+                        {departmentExpanded ? (
+                          <div className="ml-0 space-y-2 border-l border-dashed border-zinc-200 pl-3 md:ml-6">
+                            {department.tags.length ? (
+                              department.tags.map((tag) => (
+                                <RowEditor
+                                  key={`${month.monthKey}-${department.departmentKey}-${tag.tagName}`}
+                                  row={tag}
+                                  label={tag.tagName ?? "Без тега"}
+                                  tone="tag"
+                                  canEdit={month.canEdit && tag.tagName !== "Без тега"}
+                                  onSave={async (row, values) => {
+                                    await updateQuota({
+                                      monthKey: row.monthKey,
+                                      departmentKey: row.departmentKey,
+                                      tagName: row.tagName,
+                                      ...values,
+                                    });
+                                  }}
+                                />
+                              ))
+                            ) : (
+                              <div className="rounded-xl border border-dashed border-zinc-200 px-4 py-3 text-sm text-muted-foreground">
+                                У цеха пока нет тегов или списаний.
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              ) : null}
+            </Card>
+          );
+        })
       )}
       <Button type="button" variant="outline" onClick={() => setMonthsCount((count) => count + 6)}>
         Показать еще 6 месяцев

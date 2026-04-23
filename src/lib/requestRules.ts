@@ -24,6 +24,7 @@ export const TRANSIT_TAG_NAME = "Транзит";
 
 export const ACCOUNTING_REQUEST_CATEGORIES = [
   "Welcome-бонус",
+  PURCHASE_CATEGORY,
   "Подарки",
   "Неформальное мероприятие",
   "Совместный мерч",
@@ -32,7 +33,6 @@ export const ACCOUNTING_REQUEST_CATEGORIES = [
 
 export const ADMINISTRATION_REQUEST_CATEGORIES = [
   PURCHASE_CATEGORY,
-  CONTRACTOR_PAYMENT_CATEGORY,
 ] as const;
 
 export const TRANSIT_REQUEST_CATEGORIES = [
@@ -43,6 +43,18 @@ export const NEW_FUNDING_SOURCES = [
   AGIMA_QUOTAS_FUNDING_SOURCE,
   PROJECT_REVENUE_FUNDING_SOURCE,
   UNKNOWN_FUNDING_SOURCE,
+] as const;
+
+export const EMPTY_BUSINESS_CATEGORY = "(Пусто)";
+export const DEFAULT_BUSINESS_CATEGORIES = [
+  EMPTY_BUSINESS_CATEGORY,
+  "Закупки",
+  "Офис",
+  "Продажи",
+  "Развитие",
+  "Прочее",
+  "Инвестиции",
+  "Налоги",
 ] as const;
 
 export function normalizeFundingSource(fundingSource: string) {
@@ -67,6 +79,7 @@ export function normalizeRequestCategory(category: string) {
       LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY,
       LEGACY_SHORT_SERVICE_PURCHASE_CATEGORY,
       SERVICE_PURCHASE_CATEGORY,
+      CONTRACTOR_PAYMENT_CATEGORY,
     ].includes(category)
   ) {
     return PURCHASE_CATEGORY;
@@ -119,24 +132,23 @@ export function isAiToolsRequestCategory(category: string) {
 }
 
 export function isServiceRecipientCategory(category: string) {
-  return [SERVICE_PURCHASE_CATEGORY, AI_TOOLS_REQUEST_CATEGORY, PURCHASE_CATEGORY, CONTRACTOR_PAYMENT_CATEGORY].includes(
-    normalizeRequestCategory(category) as
-      | typeof SERVICE_PURCHASE_CATEGORY
-      | typeof AI_TOOLS_REQUEST_CATEGORY
-      | typeof PURCHASE_CATEGORY
-      | typeof CONTRACTOR_PAYMENT_CATEGORY,
-  );
+  return [
+    LEGACY_SERVICE_PURCHASE_CATEGORY,
+    LEGACY_EXTENDED_SERVICE_PURCHASE_CATEGORY,
+    LEGACY_SHORT_SERVICE_PURCHASE_CATEGORY,
+    SERVICE_PURCHASE_CATEGORY,
+    AI_TOOLS_REQUEST_CATEGORY,
+    LEGACY_AI_TOOLS_REQUEST_CATEGORY,
+  ].includes(category);
 }
 
 export function isHodSelectableCategory(category: string) {
   const normalizedCategory = normalizeRequestCategory(category);
   return [
-    "Конкурсное задание",
-    CLIENT_SERVICES_TRANSIT_CATEGORY,
-    SERVICE_PURCHASE_CATEGORY,
-    PURCHASE_CATEGORY,
-    CONTRACTOR_PAYMENT_CATEGORY,
-  ].includes(normalizedCategory);
+    ...ACCOUNTING_REQUEST_CATEGORIES,
+    ...ADMINISTRATION_REQUEST_CATEGORIES,
+    ...TRANSIT_REQUEST_CATEGORIES,
+  ].includes(normalizedCategory as any);
 }
 
 export function getDefaultFundingSourceForCategory(category: string) {
@@ -182,6 +194,9 @@ export function getCategoriesForDepartment(department: string) {
 export function getRequestAreaForDepartment(department?: string | null) {
   if (department === ACCOUNTING_REQUEST_AREA) {
     return ACCOUNTING_REQUEST_AREA;
+  }
+  if (department === TRANSIT_DEPARTMENT) {
+    return TRANSIT_DEPARTMENT;
   }
   return ADMINISTRATION_REQUEST_AREA;
 }

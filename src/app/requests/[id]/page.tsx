@@ -22,7 +22,7 @@ import {
   getRequestStatusSummary,
   getUnallocatedPaymentAmounts,
 } from "@/lib/requestStatus";
-import { FUNDING_SOURCES, HOD_DEPARTMENTS } from "@/lib/constants";
+import { EMPTY_BUSINESS_CATEGORY, FUNDING_SOURCES, HOD_DEPARTMENTS } from "@/lib/constants";
 import { getRoleLabel } from "@/lib/roleLabels";
 import {
   formatIncomingRatio,
@@ -577,6 +577,7 @@ export default function RequestDetailPage() {
   const [grantingViewerAccess, setGrantingViewerAccess] = useState(false);
   const [selectedTag, setSelectedTag] = useState("");
   const [selectedFundingSource, setSelectedFundingSource] = useState("");
+  const [selectedBusinessCategory, setSelectedBusinessCategory] = useState(EMPTY_BUSINESS_CATEGORY);
   const [customTagName, setCustomTagName] = useState("");
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
@@ -631,6 +632,10 @@ export default function RequestDetailPage() {
           department: data?.request?.department,
         }
       : "skip",
+  );
+  const businessCategories = useQuery(
+    api.businessCategories.list,
+    isAuthenticated && canSetCfdTag ? {} : "skip",
   );
   const canSetAwaitingPayment = useMemo(() => data?.isCreator || myRoles.includes("ADMIN"), [data?.isCreator, myRoles]);
   const canManagePayments = useMemo(
@@ -779,6 +784,7 @@ export default function RequestDetailPage() {
         : data.request.plannedPaymentAmountWithVat ?? remainingAmounts.amountWithVat;
       setSelectedTag(data.request.cfdTag ?? "");
       setSelectedFundingSource(normalizeFundingSource(data.request.fundingSource));
+      setSelectedBusinessCategory(data.request.businessCategory ?? EMPTY_BUSINESS_CATEGORY);
       setCustomTagName("");
       setFinplanCostIdsRaw((data.request.finplanCostIds ?? []).join(", "));
       setPaymentPlannedDate(
@@ -1737,7 +1743,7 @@ export default function RequestDetailPage() {
               ) : null}
               {showStandaloneTagEditor && (
                 <div className="space-y-2">
-                  <div className="grid max-w-4xl gap-2 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
+                  <div className="grid max-w-6xl gap-2 md:grid-cols-[1fr_1fr_1fr_1fr_auto] md:items-end">
                     <div className="space-y-2">
                       <Label>Источник финансирования</Label>
                       <Select value={selectedFundingSource} onValueChange={setSelectedFundingSource}>
@@ -1748,6 +1754,24 @@ export default function RequestDetailPage() {
                           {FUNDING_SOURCES.map((source) => (
                             <SelectItem key={source} value={source}>
                               {source}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Категория</Label>
+                      <Select
+                        value={selectedBusinessCategory}
+                        onValueChange={setSelectedBusinessCategory}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Выберите категорию" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(businessCategories ?? []).map((item) => (
+                            <SelectItem key={item._id} value={item.name}>
+                              {item.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -1797,6 +1821,7 @@ export default function RequestDetailPage() {
                             id: request._id,
                             tag: nextTag,
                             fundingSource: selectedFundingSource,
+                            businessCategory: selectedBusinessCategory,
                           });
                           router.refresh();
                         } catch (err) {
@@ -1804,7 +1829,7 @@ export default function RequestDetailPage() {
                         }
                       }}
                     >
-                      Сохранить тег
+                      Сохранить
                     </Button>
                   </div>
                 </div>
@@ -1925,82 +1950,6 @@ export default function RequestDetailPage() {
                   </div>
                   {(canSetPaymentPlanned || canSetPaid) && (
                     <div className="space-y-3 rounded-lg border border-border p-3">
-                      {canSetCfdTag ? (
-                        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
-                          <div className="min-w-[220px] flex-1 space-y-2">
-                            <Label>Источник финансирования</Label>
-                            <Select value={selectedFundingSource} onValueChange={setSelectedFundingSource}>
-                              <SelectTrigger>
-                                <SelectValue placeholder="Выберите источник" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {FUNDING_SOURCES.map((source) => (
-                                  <SelectItem key={source} value={source}>
-                                    {source}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="min-w-[220px] flex-1 space-y-2">
-                            <Label>Тег заявки</Label>
-                            <Select
-                              value={selectedTag || "none"}
-                              onValueChange={(value) => setSelectedTag(value === "none" ? "" : value)}
-                            >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Выберите тег" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="none">Без тега</SelectItem>
-                                {(cfdTags ?? []).map((tag) => (
-                                  <SelectItem key={tag._id} value={tag.name}>
-                                    {tag.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="min-w-[220px] flex-1 space-y-2">
-                            <Label htmlFor="customTag">Новый тег</Label>
-                            <Input
-                              id="customTag"
-                              value={customTagName}
-                              onChange={(event) => setCustomTagName(event.target.value)}
-                              placeholder="Впишите новый тег"
-                            />
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={async () => {
-                              setError(null);
-                              try {
-                                let nextTag = selectedTag || undefined;
-                                if (customTagName.trim()) {
-                                  await createTag({
-                                    name: customTagName.trim(),
-                                    department: request.department ?? request.requestArea ?? "Аккаунтинг",
-                                  });
-                                  nextTag = customTagName.trim();
-                                  setSelectedTag(customTagName.trim());
-                                  setCustomTagName("");
-                                }
-                                await assignCfdTag({
-                                  id: request._id,
-                                  tag: nextTag,
-                                  fundingSource: selectedFundingSource,
-                                });
-                                router.refresh();
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : "Не удалось сохранить тег");
-                              }
-                            }}
-                          >
-                            Сохранить тег
-                          </Button>
-                        </div>
-                      ) : null}
                       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)]">
                         <div className="space-y-2">
                           <Label htmlFor="finplanIds">ID затрат в Финплане</Label>
@@ -2732,6 +2681,10 @@ export default function RequestDetailPage() {
                   <div className="text-muted-foreground">Цех</div>
                   <p className="mt-1">{request.department ?? request.requestArea ?? "Не указан"}</p>
                 </div>
+                <div>
+                  <div className="text-muted-foreground">Категория</div>
+                  <p className="mt-1">{request.businessCategory ?? EMPTY_BUSINESS_CATEGORY}</p>
+                </div>
               </div>
               {(request.contractLink || request.contractAttachmentCount) ? (
                 <div>
@@ -2841,21 +2794,6 @@ export default function RequestDetailPage() {
                 <div>
                   <div className="text-muted-foreground">Способ оплаты</div>
                   <p className="mt-1">{request.paymentMethod}</p>
-                </div>
-              ) : null}
-              {request.category !== "Конкурсное задание" &&
-              !isServiceCategory ? (
-                <div>
-                  <div className="text-muted-foreground">Контакты клиента</div>
-                  {request.contacts.length ? (
-                    <ul className="mt-1 list-disc pl-5">
-                      {request.contacts.map((contact, index) => (
-                        <li key={`${contact}-${index}`}>{contact}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-1 text-muted-foreground">Контакты не указаны.</p>
-                  )}
                 </div>
               ) : null}
               {request.financePlanLinks?.length ? (

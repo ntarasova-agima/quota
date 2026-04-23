@@ -86,8 +86,8 @@ export default function QuotaRemainingTable({
           <div className="grid gap-3">
             <div className="grid grid-cols-[1.1fr_1.35fr_1.35fr_1fr_1fr] gap-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <div>Месяц и год</div>
-              <div>Изначальная квота</div>
-              <div>Измененная квота</div>
+              <div>Квота</div>
+              <div>Корректировка</div>
               <div>Потрачено</div>
               <div>Остаток</div>
             </div>
