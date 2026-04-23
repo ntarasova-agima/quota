@@ -7,8 +7,10 @@ import { useSearchParams } from "next/navigation";
 import { Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import DateRangeFilter from "@/components/date-range-filter";
 import { HoverHint } from "@/components/ui/hover-hint";
 import { Input } from "@/components/ui/input";
+import SearchableSelect from "@/components/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   DropdownMenu,
@@ -105,9 +107,7 @@ export default function RequestsPage() {
   const [paymentDueFilter, setPaymentDueFilter] = useState<"all" | "today" | "overdue">("all");
   const [myStatusFilter, setMyStatusFilter] = useState("all");
   const [authorFilter, setAuthorFilter] = useState("all");
-  const [authorQuery, setAuthorQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("all");
-  const [tagQuery, setTagQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [businessCategoryFilter, setBusinessCategoryFilter] = useState("all");
   const [fundingFilter, setFundingFilter] = useState("all");
@@ -208,31 +208,34 @@ export default function RequestsPage() {
   }, [archiveOldRequests, archiveSweepDone, isAuthenticated]);
   const myRequestItems = myRequests?.items ?? [];
   const allRequestItems = allRequests?.items ?? [];
-  const filteredAuthors = useMemo(() => {
-    const query = authorQuery.trim().toLowerCase();
-    if (!query) {
-      return adContacts ?? [];
-    }
-    return (adContacts ?? []).filter((contact) =>
-      [
-        contact.fullName,
-        contact.creatorTitle,
-        contact.email,
-      ].filter(Boolean).join(" ").toLowerCase().includes(query),
-    );
-  }, [adContacts, authorQuery]);
-  const filteredTags = useMemo(() => {
-    const query = tagQuery.trim().toLowerCase();
-    if (!query) {
-      return cfdTags ?? [];
-    }
-    return (cfdTags ?? []).filter((tag) =>
-      `${tag.name} ${tag.department ?? ""}`.toLowerCase().includes(query),
-    );
-  }, [cfdTags, tagQuery]);
   const businessCategoryOptions = businessCategories ?? [
     { _id: "empty", name: EMPTY_BUSINESS_CATEGORY },
   ];
+  const authorOptions = useMemo(
+    () => [
+      { value: "all", label: "Все авторы", searchText: "все авторы" },
+      ...((adContacts ?? []).map((contact) => ({
+        value: contact.email,
+        label: contact.fullName || contact.email,
+        subtitle: [contact.creatorTitle, contact.email].filter(Boolean).join(" · "),
+        searchText: [contact.fullName, contact.creatorTitle, contact.email].filter(Boolean).join(" "),
+      }))),
+    ],
+    [adContacts],
+  );
+  const tagOptions = useMemo(
+    () => [
+      { value: "all", label: "Все теги", searchText: "все теги" },
+      { value: "without_tag", label: "Без тега", searchText: "без тега" },
+      ...((cfdTags ?? []).map((tag) => ({
+        value: tag.name,
+        label: tag.name,
+        subtitle: tag.department || undefined,
+        searchText: `${tag.name} ${tag.department ?? ""}`,
+      }))),
+    ],
+    [cfdTags],
+  );
 
   useEffect(() => {
     const month = searchParams.get("month");
@@ -364,34 +367,17 @@ export default function RequestsPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Input
-                    type="month"
-                    className="w-[180px]"
-                    value={myCreatedMonth}
-                    onChange={(event) => {
-                      const month = event.target.value;
-                      setMyCreatedMonth(month);
-                      const range = getMonthRange(month);
-                      setMyCreatedFrom(range.from);
-                      setMyCreatedTo(range.to);
+                  <DateRangeFilter
+                    className="w-[250px]"
+                    value={{
+                      from: myCreatedFrom,
+                      to: myCreatedTo,
+                      monthKey: myCreatedMonth,
                     }}
-                  />
-                  <Input
-                    type="date"
-                    className="w-[180px]"
-                    value={myCreatedFrom}
-                    onChange={(event) => {
-                      setMyCreatedMonth("");
-                      setMyCreatedFrom(event.target.value);
-                    }}
-                  />
-                  <Input
-                    type="date"
-                    className="w-[180px]"
-                    value={myCreatedTo}
-                    onChange={(event) => {
-                      setMyCreatedMonth("");
-                      setMyCreatedTo(event.target.value);
+                    onChange={(nextValue) => {
+                      setMyCreatedMonth(nextValue.monthKey);
+                      setMyCreatedFrom(nextValue.from);
+                      setMyCreatedTo(nextValue.to);
                     }}
                   />
                 </div>
@@ -719,27 +705,14 @@ export default function RequestsPage() {
                       ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  <Input
-                    className="w-[220px]"
-                    placeholder="Поиск автора"
-                    value={authorQuery}
-                    onChange={(event) => setAuthorQuery(event.target.value)}
+                  <SearchableSelect
+                    className="w-[260px]"
+                    value={authorFilter}
+                    options={authorOptions}
+                    placeholder="От кого заявка"
+                    searchPlaceholder="Найти автора"
+                    onValueChange={setAuthorFilter}
                   />
-                  <Select value={authorFilter} onValueChange={setAuthorFilter}>
-                    <SelectTrigger className="w-[240px]">
-                      <SelectValue placeholder="От кого заявка" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="all">Все авторы</SelectItem>
-                        {filteredAuthors.map((contact) => (
-                          <SelectItem key={contact.email} value={contact.email}>
-                            {contact.fullName
-                              ? `${contact.fullName}${contact.creatorTitle ? ` · ${contact.creatorTitle}` : ""} · ${contact.email}`
-                              : contact.email}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
                   <Select value={categoryFilter} onValueChange={setCategoryFilter}>
                     <SelectTrigger className="w-[220px]">
                       <SelectValue placeholder="Тип заявки" />
@@ -780,57 +753,26 @@ export default function RequestsPage() {
                     </SelectContent>
                   </Select>
                   {isTagViewer && (
-                    <>
-                      <Input
-                        className="w-[180px]"
-                        placeholder="Поиск тега"
-                        value={tagQuery}
-                        onChange={(event) => setTagQuery(event.target.value)}
-                      />
-                      <Select value={tagFilter} onValueChange={setTagFilter}>
-                        <SelectTrigger className="w-[220px]">
-                          <SelectValue placeholder="Тег CFD" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Все теги</SelectItem>
-                          <SelectItem value="without_tag">Без тега</SelectItem>
-                          {filteredTags.map((tag) => (
-                            <SelectItem key={tag._id} value={tag.name}>
-                              {tag.department ? `${tag.name} · ${tag.department}` : tag.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </>
+                    <SearchableSelect
+                      className="w-[240px]"
+                      value={tagFilter}
+                      options={tagOptions}
+                      placeholder="Тег CFD"
+                      searchPlaceholder="Найти тег"
+                      onValueChange={setTagFilter}
+                    />
                   )}
-                  <Input
-                    type="month"
-                    className="w-[180px]"
-                    value={createdMonth}
-                    onChange={(event) => {
-                      const month = event.target.value;
-                      setCreatedMonth(month);
-                      const range = getMonthRange(month);
-                      setCreatedFrom(range.from);
-                      setCreatedTo(range.to);
+                  <DateRangeFilter
+                    className="w-[250px]"
+                    value={{
+                      from: createdFrom,
+                      to: createdTo,
+                      monthKey: createdMonth,
                     }}
-                  />
-                  <Input
-                    type="date"
-                    className="w-[180px]"
-                    value={createdFrom}
-                    onChange={(event) => {
-                      setCreatedMonth("");
-                      setCreatedFrom(event.target.value);
-                    }}
-                  />
-                  <Input
-                    type="date"
-                    className="w-[180px]"
-                    value={createdTo}
-                    onChange={(event) => {
-                      setCreatedMonth("");
-                      setCreatedTo(event.target.value);
+                    onChange={(nextValue) => {
+                      setCreatedMonth(nextValue.monthKey);
+                      setCreatedFrom(nextValue.from);
+                      setCreatedTo(nextValue.to);
                     }}
                   />
                 </div>

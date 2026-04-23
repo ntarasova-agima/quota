@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { type SyntheticEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "@/lib/convex";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -82,12 +83,18 @@ function RowEditor({
   canEdit,
   label,
   tone = "plain",
+  expandable = false,
+  expanded = false,
+  onToggleExpand,
   onSave,
 }: {
   row: QuotaEditableRow;
   canEdit: boolean;
   label: string;
   tone?: "total" | "department" | "tag" | "plain";
+  expandable?: boolean;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
   onSave: (row: QuotaEditableRow, values: { quota: number; quotaWithVat: number; vatRate: number }) => Promise<void>;
 }) {
   const [quota, setQuota] = useState(String(row.quota ?? 0));
@@ -143,15 +150,30 @@ function RowEditor({
       : tone === "department"
         ? "rounded-2xl border border-zinc-200 bg-white p-4"
         : "rounded-xl border border-zinc-100 bg-zinc-50/80 p-3";
+  const stopToggle = (event: SyntheticEvent) => {
+    event.stopPropagation();
+  };
 
   return (
-    <div className={`${wrapperClass} ${hasIssues ? "border-destructive bg-destructive/5" : ""}`}>
+    <div
+      className={`${wrapperClass} ${hasIssues ? "border-destructive bg-destructive/5" : ""} ${expandable ? "cursor-pointer transition-colors hover:border-zinc-300" : ""}`}
+      onClick={() => onToggleExpand?.()}
+    >
       <div className="grid gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,0.85fr)] md:items-end">
         <div>
-          <div className={tone === "total" ? "text-lg font-semibold" : "font-medium"}>{label}</div>
-          <div className="text-xs text-muted-foreground">НДС: {vatRate}%</div>
+          <div className="flex items-start gap-2">
+            {expandable ? (
+              <span className="mt-0.5 text-muted-foreground">
+                {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+              </span>
+            ) : null}
+            <div>
+              <div className={tone === "total" ? "text-lg font-semibold" : "font-medium"}>{label}</div>
+              <div className="text-xs text-muted-foreground">НДС: {vatRate}%</div>
+            </div>
+          </div>
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1" onClick={stopToggle}>
           <Label>Квота без НДС</Label>
           <Input
             value={quota}
@@ -171,7 +193,7 @@ function RowEditor({
             }}
           />
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1" onClick={stopToggle}>
           <Label>Квота с НДС</Label>
           <Input
             value={quotaWithVat}
@@ -191,11 +213,11 @@ function RowEditor({
             }}
           />
         </div>
-        <div>
+        <div onClick={stopToggle}>
           <div className="text-xs text-muted-foreground">Потрачено</div>
           <div>{formatAmount(row.spent)} / {formatAmount(row.spentWithVat ?? row.spent)}</div>
         </div>
-        <div>
+        <div onClick={stopToggle}>
           <div className="text-xs text-muted-foreground">Остаток</div>
           <div>{formatAmount(row.remaining)} / {formatAmount(row.remainingWithVat ?? row.remaining)}</div>
           {saving ? <div className="text-xs text-emerald-700">Сохраняю...</div> : null}
@@ -353,26 +375,9 @@ export default function AdministrationQuotaClient() {
               <CardHeader>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <CardTitle>{formatMonth(month.year, month.month)}</CardTitle>
-                    {month.total ? (
-                      <CardDescription>
-                        Общая квота: {formatAmount(month.total.quota)} без НДС · Не распределено:{" "}
-                        {formatAmount(month.total.unallocated)} без НДС
-                      </CardDescription>
-                    ) : (
-                      <CardDescription>Квота вашего цеха и распределение по тегам.</CardDescription>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button asChild type="button" variant="outline" size="sm">
-                      <Link href={`/requests?view=all&month=${month.monthKey}`}>
-                        Перейти к заявкам месяца
-                      </Link>
-                    </Button>
-                    <Button
+                    <button
                       type="button"
-                      variant={monthExpanded ? "default" : "outline"}
-                      size="sm"
+                      className="flex items-start gap-2 text-left"
                       onClick={() =>
                         setExpandedMonths((current) => ({
                           ...current,
@@ -380,7 +385,27 @@ export default function AdministrationQuotaClient() {
                         }))
                       }
                     >
-                      {monthExpanded ? "Свернуть" : "Развернуть"}
+                      <span className="mt-1 text-muted-foreground">
+                        {monthExpanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                      </span>
+                      <div>
+                        <CardTitle>{formatMonth(month.year, month.month)}</CardTitle>
+                        {month.total ? (
+                          <CardDescription>
+                            Общая квота: {formatAmount(month.total.quota)} без НДС · Не распределено:{" "}
+                            {formatAmount(month.total.unallocated)} без НДС
+                          </CardDescription>
+                        ) : (
+                          <CardDescription>Квота вашего цеха и распределение по тегам.</CardDescription>
+                        )}
+                      </div>
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button asChild type="button" variant="outline" size="sm">
+                      <Link href={`/requests?view=all&month=${month.monthKey}`}>
+                        Перейти к заявкам месяца
+                      </Link>
                     </Button>
                   </div>
                 </div>
@@ -407,26 +432,24 @@ export default function AdministrationQuotaClient() {
                           row={department}
                           label={department.departmentName ?? department.departmentKey}
                           tone="department"
+                          expandable={department.tags.length > 0}
+                          expanded={departmentExpanded}
+                          onToggleExpand={
+                            department.tags.length
+                              ? () =>
+                                  setExpandedDepartments((current) => ({
+                                    ...current,
+                                    [departmentKey]: !departmentExpanded,
+                                  }))
+                              : undefined
+                          }
                           canEdit={month.canEdit}
                           onSave={async (row, values) => {
                             await updateQuota({ monthKey: row.monthKey, departmentKey: row.departmentKey, ...values });
                           }}
                         />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            setExpandedDepartments((current) => ({
-                              ...current,
-                              [departmentKey]: !departmentExpanded,
-                            }))
-                          }
-                        >
-                          {departmentExpanded ? "Скрыть теги" : `Показать теги (${department.tags.length})`}
-                        </Button>
                         {departmentExpanded ? (
-                          <div className="ml-0 space-y-2 border-l border-dashed border-zinc-200 pl-3 md:ml-6">
+                          <div className="ml-4 space-y-2 border-l border-zinc-100 pl-4">
                             {department.tags.length ? (
                               department.tags.map((tag) => (
                                 <RowEditor

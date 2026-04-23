@@ -214,7 +214,8 @@ export default function NewRequestPage() {
   );
   const showTransitFields = fundingSource === "Отгрузки проекта";
   const wrappedSelectTriggerClass =
-    "h-auto min-h-9 whitespace-normal text-left *:data-[slot=select-value]:line-clamp-2";
+    "h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left *:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:pr-6 *:data-[slot=select-value]:whitespace-normal *:data-[slot=select-value]:break-words *:data-[slot=select-value]:leading-snug";
+  const headerFieldLabelClass = "min-h-11 items-start leading-snug";
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
   const selectedDepartment = requestArea;
   const categoryOptions = useMemo(
@@ -904,7 +905,7 @@ export default function NewRequestPage() {
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
                 <div className="grid gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
                   <div className="space-y-2">
-                    <FieldLabel required>Цех</FieldLabel>
+                    <FieldLabel required className={headerFieldLabelClass}>Цех</FieldLabel>
                     <Select value={requestArea} onValueChange={(value) => handleRequestAreaChange(value as RequestArea)}>
                       <SelectTrigger
                         className={wrappedSelectTriggerClass}
@@ -922,7 +923,7 @@ export default function NewRequestPage() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <FieldLabel required>Тип заявки</FieldLabel>
+                    <FieldLabel required className={headerFieldLabelClass}>Тип заявки</FieldLabel>
                     <Select value={category} onValueChange={handleCategoryChange}>
                       <SelectTrigger className={wrappedSelectTriggerClass}>
                         <SelectValue placeholder="Выберите тип заявки" />
@@ -937,9 +938,12 @@ export default function NewRequestPage() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <FieldLabel required>Источник финансирования</FieldLabel>
+                    <FieldLabel required className={headerFieldLabelClass}>Источник финансирования</FieldLabel>
                     <Select value={fundingSource} onValueChange={setFundingSource}>
-                      <SelectTrigger aria-invalid={fundingError ? true : undefined}>
+                      <SelectTrigger
+                        className={wrappedSelectTriggerClass}
+                        aria-invalid={fundingError ? true : undefined}
+                      >
                         <SelectValue placeholder="Выберите источник" />
                       </SelectTrigger>
                       <SelectContent>
