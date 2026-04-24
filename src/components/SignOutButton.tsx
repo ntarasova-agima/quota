@@ -10,17 +10,31 @@ export default function SignOutButton({ variant = "outline" }: { variant?: "defa
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
+  function clearStoredAuthState() {
+    if (typeof window === "undefined") {
+      return;
+    }
+    sessionStorage.removeItem("auth_code");
+    sessionStorage.removeItem("auth_email");
+  }
+
+  function redirectToSignIn() {
+    if (typeof window !== "undefined") {
+      window.location.replace("/sign-in");
+      return;
+    }
+    router.replace("/sign-in");
+  }
+
   async function handleSignOut() {
     setLoading(true);
     try {
       await signOut();
-      if (typeof window !== "undefined") {
-        sessionStorage.removeItem("auth_code");
-        sessionStorage.removeItem("auth_email");
-      }
-      router.replace("/sign-in");
+    } catch (error) {
+      console.error("Aurum sign-out failed, falling back to local redirect", error);
     } finally {
-      setLoading(false);
+      clearStoredAuthState();
+      redirectToSignIn();
     }
   }
 
