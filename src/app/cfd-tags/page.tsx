@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
@@ -20,6 +20,7 @@ export default function CfdTagsPage() {
   const [departmentFilter, setDepartmentFilter] = useState<"all" | RequestArea>("all");
   const [newTagDepartment, setNewTagDepartment] = useState<RequestArea>("Аккаунтинг");
   const [tagSearch, setTagSearch] = useState("");
+  const myProfile = useQuery(api.roles.myProfile);
   const tags = useQuery(
     api.cfdTags.list,
     departmentFilter === "all" ? {} : { department: departmentFilter },
@@ -36,6 +37,30 @@ export default function CfdTagsPage() {
   const [editingBusinessCategoryName, setEditingBusinessCategoryName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const canManageBusinessCategories = useMemo(
+    () =>
+      Boolean(
+        myProfile?.roles?.some((role) => ["CFD", "ADMIN", "BUH"].includes(role)),
+      ),
+    [myProfile?.roles],
+  );
+  const availableDepartments = useMemo(() => {
+    if (myProfile?.roles?.some((role) => ["CFD", "ADMIN", "BUH", "COO"].includes(role))) {
+      return HOD_DEPARTMENTS;
+    }
+    const hodDepartments = (myProfile?.hodDepartments ?? []).filter((department): department is RequestArea =>
+      HOD_DEPARTMENTS.includes(department as RequestArea),
+    );
+    return hodDepartments.length ? hodDepartments : HOD_DEPARTMENTS;
+  }, [myProfile?.hodDepartments, myProfile?.roles]);
+  useEffect(() => {
+    if (!availableDepartments.includes(newTagDepartment)) {
+      setNewTagDepartment(availableDepartments[0] ?? "Аккаунтинг");
+    }
+    if (departmentFilter !== "all" && !availableDepartments.includes(departmentFilter)) {
+      setDepartmentFilter("all");
+    }
+  }, [availableDepartments, departmentFilter, newTagDepartment]);
   const filteredTags = useMemo(() => {
     const query = tagSearch.trim().toLowerCase();
     if (!query) {
@@ -97,7 +122,7 @@ export default function CfdTagsPage() {
                       <SelectValue placeholder="Цех" />
                     </SelectTrigger>
                     <SelectContent>
-                      {HOD_DEPARTMENTS.map((item) => (
+                      {availableDepartments.map((item) => (
                         <SelectItem key={item} value={item}>
                           {item}
                         </SelectItem>
@@ -135,16 +160,16 @@ export default function CfdTagsPage() {
               <div className="mb-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                 <div className="space-y-2">
                   <Label>Цех</Label>
-                  <Select
-                    value={departmentFilter}
-                    onValueChange={(value) => setDepartmentFilter(value as "all" | RequestArea)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Цех" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Все цеха</SelectItem>
-                      {HOD_DEPARTMENTS.map((item) => (
+                    <Select
+                      value={departmentFilter}
+                      onValueChange={(value) => setDepartmentFilter(value as "all" | RequestArea)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Цех" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Все цеха</SelectItem>
+                      {availableDepartments.map((item) => (
                         <SelectItem key={item} value={item}>
                           {item}
                         </SelectItem>
@@ -203,118 +228,120 @@ export default function CfdTagsPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Категории заявок</CardTitle>
-              <CardDescription>Эти категории BUH и CFD присваивают заявкам для сортировки и фильтров.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <form className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={handleCreateBusinessCategory}>
-                <Input
-                  value={businessCategoryName}
-                  onChange={(event) => setBusinessCategoryName(event.target.value)}
-                  placeholder="Например: Обучение"
-                />
-                <Button type="submit" disabled={saving || !businessCategoryName.trim()}>
-                  Добавить категорию
-                </Button>
-              </form>
-              <div className="space-y-3">
-                {(businessCategories ?? []).map((category) => {
-                  const isDefault = String(category._id).startsWith("default-business-category");
-                  const isEmpty = category.name === EMPTY_BUSINESS_CATEGORY;
-                  const isEditing = editingBusinessCategoryId === String(category._id);
-                  return (
-                    <div
-                      key={category._id}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-4 py-3 text-sm"
-                    >
-                      {isEditing ? (
-                        <Input
-                          className="max-w-sm"
-                          value={editingBusinessCategoryName}
-                          onChange={(event) => setEditingBusinessCategoryName(event.target.value)}
-                        />
-                      ) : (
-                        <span>{category.name}</span>
-                      )}
-                      <div className="flex flex-wrap gap-2">
-                        {isDefault ? (
-                          <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
-                            базовая
-                          </span>
-                        ) : isEditing ? (
-                          <>
-                            <Button
-                              type="button"
-                              size="sm"
-                              onClick={async () => {
-                                setError(null);
-                                try {
-                                  await updateBusinessCategory({
-                                    id: category._id as any,
-                                    name: editingBusinessCategoryName,
-                                  });
-                                  setEditingBusinessCategoryId(null);
-                                  setEditingBusinessCategoryName("");
-                                } catch (err) {
-                                  setError(err instanceof Error ? err.message : "Не удалось сохранить категорию");
-                                }
-                              }}
-                            >
-                              Сохранить
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setEditingBusinessCategoryId(null);
-                                setEditingBusinessCategoryName("");
-                              }}
-                            >
-                              Отмена
-                            </Button>
-                          </>
+          {canManageBusinessCategories ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Категории заявок</CardTitle>
+                <CardDescription>Эти категории BUH и CFD присваивают заявкам для сортировки и фильтров.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <form className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={handleCreateBusinessCategory}>
+                  <Input
+                    value={businessCategoryName}
+                    onChange={(event) => setBusinessCategoryName(event.target.value)}
+                    placeholder="Например: Обучение"
+                  />
+                  <Button type="submit" disabled={saving || !businessCategoryName.trim()}>
+                    Добавить категорию
+                  </Button>
+                </form>
+                <div className="space-y-3">
+                  {(businessCategories ?? []).map((category) => {
+                    const isDefault = String(category._id).startsWith("default-business-category");
+                    const isEmpty = category.name === EMPTY_BUSINESS_CATEGORY;
+                    const isEditing = editingBusinessCategoryId === String(category._id);
+                    return (
+                      <div
+                        key={category._id}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-4 py-3 text-sm"
+                      >
+                        {isEditing ? (
+                          <Input
+                            className="max-w-sm"
+                            value={editingBusinessCategoryName}
+                            onChange={(event) => setEditingBusinessCategoryName(event.target.value)}
+                          />
                         ) : (
-                          <>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setEditingBusinessCategoryId(String(category._id));
-                                setEditingBusinessCategoryName(category.name);
-                              }}
-                            >
-                              Изменить
-                            </Button>
-                            {!isEmpty ? (
+                          <span>{category.name}</span>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          {isDefault ? (
+                            <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+                              базовая
+                            </span>
+                          ) : isEditing ? (
+                            <>
                               <Button
                                 type="button"
-                                variant="destructive"
                                 size="sm"
                                 onClick={async () => {
                                   setError(null);
                                   try {
-                                    await removeBusinessCategory({ id: category._id as any });
+                                    await updateBusinessCategory({
+                                      id: category._id as any,
+                                      name: editingBusinessCategoryName,
+                                    });
+                                    setEditingBusinessCategoryId(null);
+                                    setEditingBusinessCategoryName("");
                                   } catch (err) {
-                                    setError(err instanceof Error ? err.message : "Не удалось удалить категорию");
+                                    setError(err instanceof Error ? err.message : "Не удалось сохранить категорию");
                                   }
                                 }}
                               >
-                                Удалить
+                                Сохранить
                               </Button>
-                            ) : null}
-                          </>
-                        )}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingBusinessCategoryId(null);
+                                  setEditingBusinessCategoryName("");
+                                }}
+                              >
+                                Отмена
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingBusinessCategoryId(String(category._id));
+                                  setEditingBusinessCategoryName(category.name);
+                                }}
+                              >
+                                Изменить
+                              </Button>
+                              {!isEmpty ? (
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  size="sm"
+                                  onClick={async () => {
+                                    setError(null);
+                                    try {
+                                      await removeBusinessCategory({ id: category._id as any });
+                                    } catch (err) {
+                                      setError(err instanceof Error ? err.message : "Не удалось удалить категорию");
+                                    }
+                                  }}
+                                >
+                                  Удалить
+                                </Button>
+                              ) : null}
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
         </main>
       </div>
     </RequireAuth>

@@ -44,6 +44,7 @@ import {
   normalizeFundingSource,
   normalizeRequestCategory,
   shouldSkipQuotaByTag,
+  usesServiceRecipientLabel,
 } from "../src/lib/requestRules";
 import {
   isKnownHodDepartment,
@@ -1331,7 +1332,7 @@ function validateRequestPayload(args: any) {
   if (args.category === "Welcome-бонус" && (!args.investmentReturn || !args.investmentReturn.trim())) {
     throw new Error("Укажите, как будем возвращать инвестиции");
   }
-  if (isServiceRecipientCategory(args.category) && (!args.clientName || !args.clientName.trim())) {
+  if (usesServiceRecipientLabel(args.category) && (!args.clientName || !args.clientName.trim())) {
     throw new Error("Укажите получателя сервиса");
   }
   if (
@@ -1360,6 +1361,57 @@ function getTodayBounds() {
   end.setDate(end.getDate() + 1);
   end.setMilliseconds(-1);
   return { start: start.getTime(), end: end.getTime() };
+}
+
+async function loadRequestsForAllList(
+  ctx: any,
+  args: {
+    status?: string;
+    statuses?: string[];
+    createdByEmail?: string;
+    paymentDueFilter?: "today" | "overdue";
+  },
+) {
+  const statusSet = args.statuses?.length
+    ? Array.from(new Set(args.statuses))
+    : args.status
+      ? [args.status]
+      : [];
+
+  if (args.createdByEmail) {
+    return await ctx.db
+      .query("requests")
+      .withIndex("by_createdByEmail", (q: any) => q.eq("createdByEmail", args.createdByEmail))
+      .collect();
+  }
+
+  if (statusSet.length > 0) {
+    return (
+      await Promise.all(
+        statusSet.map((status) =>
+          ctx.db
+            .query("requests")
+            .withIndex("by_status", (q: any) => q.eq("status", status))
+            .collect(),
+        ),
+      )
+    ).flat();
+  }
+
+  if (args.paymentDueFilter) {
+    return (
+      await Promise.all(
+        ["awaiting_payment", "payment_planned", "partially_paid"].map((status) =>
+          ctx.db
+            .query("requests")
+            .withIndex("by_status", (q: any) => q.eq("status", status as any))
+            .collect(),
+        ),
+      )
+    ).flat();
+  }
+
+  return await ctx.db.query("requests").collect();
 }
 
 function normalizeBusinessCategory(value?: string | null) {
@@ -1588,8 +1640,10 @@ export const listAllRequests = query({
             .take(1)
         ).length > 0
       : false;
-    const allRequests = await ctx.db.query("requests").collect();
-    const hasExplicitViewerAccessAny = allRequests.some((req: any) => hasViewerAccess(req, email));
+    const hasExplicitViewerAccessAny =
+      !canViewAll && !hasReviewedAny
+        ? (await ctx.db.query("requests").collect()).some((req: any) => hasViewerAccess(req, email))
+        : false;
     if (!canViewAll && !hasReviewedAny && !hasExplicitViewerAccessAny) {
       throw new Error("Not authorized");
     }
@@ -1599,13 +1653,19 @@ export const listAllRequests = query({
       : args.status
         ? new Set([args.status])
         : undefined;
+    const candidateRequests = await loadRequestsForAllList(ctx, {
+      status: args.status,
+      statuses: args.statuses,
+      createdByEmail: args.createdByEmail,
+      paymentDueFilter: args.paymentDueFilter,
+    });
     const requests = statusSet
-      ? allRequests.filter((req: any) => statusSet.has(req.status))
-      : allRequests;
+      ? candidateRequests.filter((req: any) => statusSet.has(req.status))
+      : candidateRequests;
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const hasExplicitDateRange = args.createdFrom !== undefined || args.createdTo !== undefined;
     const todayBounds = getTodayBounds();
-    const filtered = requests.filter((req) => {
+    const filtered = requests.filter((req: any) => {
       if (args.createdByEmail && req.createdByEmail !== args.createdByEmail) {
         return false;
       }
@@ -1655,17 +1715,19 @@ export const listAllRequests = query({
     const scopedToCurrentRole =
       record?.roles?.includes("HOD") &&
       !record.roles.some((role: string) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role))
-        ? filtered.filter((req) => hasHodAccessToRequest(record, req))
+        ? filtered.filter((req: any) => hasHodAccessToRequest(record, req))
         : canViewAll
           ? filtered
           : [];
-    const withHistorical = hasReviewedAny
+    const withHistorical = canViewAll
+      ? scopedToCurrentRole
+      : hasReviewedAny
       ? [
           ...scopedToCurrentRole,
-          ...filtered.filter((req) => req.createdBy === userId || req.createdByEmail === email),
+          ...filtered.filter((req: any) => req.createdBy === userId || req.createdByEmail === email),
           ...(
             await Promise.all(
-              filtered.map(async (req) =>
+              filtered.map(async (req: any) =>
                 (await hasHistoricalApprovalAccess(ctx, req._id, email)) ? req : null,
               ),
             )
@@ -1674,8 +1736,8 @@ export const listAllRequests = query({
       : scopedToCurrentRole;
     const withViewerAccess = [
       ...withHistorical,
-      ...filtered.filter((req) => hasViewerAccess(req, email)),
-      ...filtered.filter((req) => req.createdBy === userId || req.createdByEmail === email),
+      ...filtered.filter((req: any) => hasViewerAccess(req, email)),
+      ...filtered.filter((req: any) => req.createdBy === userId || req.createdByEmail === email),
     ];
     const deduped = Array.from(new Map(withViewerAccess.map((req) => [req._id, req])).values());
     const filteredByTag =
@@ -2895,16 +2957,35 @@ export const assignCfdTag = mutation({
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
-    if (
-      !record?.roles?.includes("CFD") &&
-      !record?.roles?.includes("ADMIN") &&
-      !record?.roles?.includes("BUH")
-    ) {
-      throw new Error("Not authorized");
-    }
     const request = await ctx.db.get(args.id);
     if (!request) {
       throw new Error("Request not found");
+    }
+    const requestDepartment = normalizeHodDepartment(request.department);
+    const canManageClassification =
+      record?.roles?.includes("CFD") ||
+      record?.roles?.includes("ADMIN") ||
+      record?.roles?.includes("BUH");
+    const canManageTagOnly =
+      record?.roles?.includes("COO") ||
+      (record?.roles?.includes("HOD") &&
+        Boolean(
+          requestDepartment &&
+            (record.hodDepartments ?? [])
+              .map((department: string) => normalizeHodDepartment(department))
+              .includes(requestDepartment),
+        ));
+    if (!canManageClassification && !canManageTagOnly) {
+      throw new Error("Not authorized");
+    }
+    if (
+      !canManageClassification &&
+      (
+        (args.fundingSource !== undefined && normalizeFundingSource(args.fundingSource) !== normalizeFundingSource(request.fundingSource)) ||
+        args.businessCategory !== undefined
+      )
+    ) {
+      throw new Error("Можно изменить только тег заявки");
     }
     const nextFundingSource = args.fundingSource
       ? normalizeFundingSource(args.fundingSource)
@@ -2913,7 +2994,6 @@ export const assignCfdTag = mutation({
       throw new Error("Так не бывает");
     }
     if (args.tag?.trim()) {
-      const requestDepartment = normalizeHodDepartment(request.department);
       const tagName = args.tag.trim();
       const existingTag = (await ctx.db.query("cfdTags").collect()).find(
         (tag: any) =>

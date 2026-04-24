@@ -39,6 +39,7 @@ import {
   normalizeRequestCategory,
 } from "@/lib/requestRules";
 import { isAgimaEmail, normalizeEmail } from "@/lib/authRules";
+import { normalizeHodDepartment } from "@/lib/departments";
 import {
   DEFAULT_VAT_RATE,
   calculateAmountWithVat,
@@ -615,19 +616,34 @@ export default function RequestDetailPage() {
   const isNbd = useMemo(() => myRoles.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles.includes("AI-BOSS"), [myRoles]);
   const isCoo = useMemo(() => myRoles.includes("COO"), [myRoles]);
+  const requestDepartment = useMemo(
+    () => normalizeHodDepartment(data?.request?.department),
+    [data?.request?.department],
+  );
   const canManageViewerAccess = Boolean(data?.canManageViewerAccess);
   const canManageFiles = Boolean(data?.canManageFiles);
-  const canSetCfdTag = useMemo(
+  const canManageClassification = useMemo(
     () =>
       myRoles.includes("CFD") ||
       myRoles.includes("ADMIN") ||
       myRoles.includes("BUH"),
     [myRoles],
   );
-  const showStandaloneTagEditor = canSetCfdTag;
+  const canManageRequestTag = useMemo(
+    () =>
+      canManageClassification ||
+      myRoles.includes("COO") ||
+      Boolean(
+        myRoles.includes("HOD") &&
+          requestDepartment &&
+          myProfile?.hodDepartments?.includes(requestDepartment),
+      ),
+    [canManageClassification, myProfile?.hodDepartments, myRoles, requestDepartment],
+  );
+  const showStandaloneTagEditor = canManageRequestTag;
   const cfdTags = useQuery(
     api.cfdTags.list,
-    isAuthenticated && canSetCfdTag
+    isAuthenticated && canManageRequestTag
       ? {
           department: data?.request?.department,
         }
@@ -635,7 +651,7 @@ export default function RequestDetailPage() {
   );
   const businessCategories = useQuery(
     api.businessCategories.list,
-    isAuthenticated && canSetCfdTag ? {} : "skip",
+    isAuthenticated && canManageClassification ? {} : "skip",
   );
   const canSetAwaitingPayment = useMemo(() => data?.isCreator || myRoles.includes("ADMIN"), [data?.isCreator, myRoles]);
   const canManagePayments = useMemo(
@@ -1743,40 +1759,50 @@ export default function RequestDetailPage() {
               ) : null}
               {showStandaloneTagEditor && (
                 <div className="space-y-2">
-                  <div className="grid max-w-6xl gap-2 md:grid-cols-[1fr_1fr_1fr_1fr_auto] md:items-end">
-                    <div className="space-y-2">
-                      <Label>Источник финансирования</Label>
-                      <Select value={selectedFundingSource} onValueChange={setSelectedFundingSource}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Выберите источник" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {FUNDING_SOURCES.map((source) => (
-                            <SelectItem key={source} value={source}>
-                              {source}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Категория</Label>
-                      <Select
-                        value={selectedBusinessCategory}
-                        onValueChange={setSelectedBusinessCategory}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Выберите категорию" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(businessCategories ?? []).map((item) => (
-                            <SelectItem key={item._id} value={item.name}>
-                              {item.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                  <div
+                    className={
+                      canManageClassification
+                        ? "grid max-w-6xl gap-2 md:grid-cols-[1fr_1fr_1fr_1fr_auto] md:items-end"
+                        : "grid max-w-4xl gap-2 md:grid-cols-[1fr_1fr_auto] md:items-end"
+                    }
+                  >
+                    {canManageClassification ? (
+                      <div className="space-y-2">
+                        <Label>Источник финансирования</Label>
+                        <Select value={selectedFundingSource} onValueChange={setSelectedFundingSource}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Выберите источник" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {FUNDING_SOURCES.map((source) => (
+                              <SelectItem key={source} value={source}>
+                                {source}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : null}
+                    {canManageClassification ? (
+                      <div className="space-y-2">
+                        <Label>Категория</Label>
+                        <Select
+                          value={selectedBusinessCategory}
+                          onValueChange={setSelectedBusinessCategory}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Выберите категорию" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(businessCategories ?? []).map((item) => (
+                              <SelectItem key={item._id} value={item.name}>
+                                {item.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : null}
                     <div className="space-y-2">
                       <Label>Тег заявки</Label>
                       <Select value={selectedTag || "none"} onValueChange={(value) => setSelectedTag(value === "none" ? "" : value)}>
@@ -1820,8 +1846,8 @@ export default function RequestDetailPage() {
                           await assignCfdTag({
                             id: request._id,
                             tag: nextTag,
-                            fundingSource: selectedFundingSource,
-                            businessCategory: selectedBusinessCategory,
+                            fundingSource: canManageClassification ? selectedFundingSource : undefined,
+                            businessCategory: canManageClassification ? selectedBusinessCategory : undefined,
                           });
                           router.refresh();
                         } catch (err) {

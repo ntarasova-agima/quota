@@ -4,9 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
-import { isAiToolsFundingSource } from "../src/lib/requestRules";
 import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
-import { getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
 import {
   buildApprovalTargets,
   getApprovalIdentity,
@@ -34,16 +32,6 @@ const additionalApprovalRoleEnum = v.union(
   v.literal("HOD"),
 );
 const forwardModeEnum = v.union(v.literal("approve"), v.literal("defer"));
-
-function getQuotaTableName(fundingSource: string) {
-  if (fundingSource === "Квота на пресейлы") {
-    return "presalesQuotas";
-  }
-  if (isAiToolsFundingSource(fundingSource)) {
-    return "aiToolQuotas";
-  }
-  return null;
-}
 
 export const listPendingForMe = query({
   args: {},
@@ -110,7 +98,16 @@ export const listPendingForMe = query({
     }
 
     if (roles.some((role) => ["BUH", "CFD"].includes(role))) {
-      const paymentRequests = await ctx.db.query("requests").collect();
+      const paymentRequests = (
+        await Promise.all(
+          ["awaiting_payment", "payment_planned", "partially_paid"].map((status) =>
+            ctx.db
+              .query("requests")
+              .withIndex("by_status", (q) => q.eq("status", status as any))
+              .collect(),
+          ),
+        )
+      ).flat();
       for (const request of paymentRequests) {
         if (
           seen.has(request._id) ||
@@ -134,7 +131,10 @@ export const listPendingForMe = query({
 
     if (roles.includes("HOD")) {
       const departments = roleRecord.hodDepartments ?? [];
-      const hodRequests = await ctx.db.query("requests").collect();
+      const hodRequests = await ctx.db
+        .query("requests")
+        .withIndex("by_status", (q) => q.eq("status", "hod_pending"))
+        .collect();
       for (const request of hodRequests) {
         if (seen.has(request._id) || request.isCanceled) {
           continue;
@@ -386,41 +386,6 @@ export const decide = mutation({
       },
     });
 
-    const quotaTableName = getQuotaTableName(request.fundingSource);
-    if (status === "approved" && request.status !== "approved" && quotaTableName) {
-      if (!request.neededBy) {
-        throw new Error("Missing neededBy for quota-backed request");
-      }
-      const date = new Date(request.neededBy);
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-      const existing = await ctx.db
-        .query(quotaTableName)
-        .withIndex("by_monthKey", (q: any) => q.eq("monthKey", key))
-        .first();
-      const requestAmountWithVat =
-        getAmountWithVat(request.amount, request.amountWithVat, request.vatRate) ?? request.amount;
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          spent: existing.spent + request.amount,
-          spentWithVat: (existing.spentWithVat ?? existing.spent) + requestAmountWithVat,
-          vatRate: normalizeVatRate(existing.vatRate ?? request.vatRate),
-          updatedAt: Date.now(),
-        });
-      } else {
-        await ctx.db.insert(quotaTableName, {
-          monthKey: key,
-          year: date.getFullYear(),
-          month: date.getMonth() + 1,
-          quota: 0,
-          quotaWithVat: 0,
-          vatRate: normalizeVatRate(request.vatRate),
-          spent: request.amount,
-          spentWithVat: requestAmountWithVat,
-          updatedAt: Date.now(),
-        });
-      }
-    }
-
     if (additionalTargets.length > 0) {
       await ctx.scheduler.runAfter(0, internal.emails.sendAdditionalApprovalRequested, {
         requestId: request._id,
@@ -599,41 +564,6 @@ export const adminApproveAsRole = mutation({
       status,
       updatedAt: now,
     });
-
-    const quotaTableName = getQuotaTableName(request.fundingSource);
-    if (status === "approved" && quotaTableName) {
-      if (!request.neededBy) {
-        throw new Error("Missing neededBy for quota-backed request");
-      }
-      const date = new Date(request.neededBy);
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-      const existing = await ctx.db
-        .query(quotaTableName)
-        .withIndex("by_monthKey", (q: any) => q.eq("monthKey", key))
-        .first();
-      const requestAmountWithVat =
-        getAmountWithVat(request.amount, request.amountWithVat, request.vatRate) ?? request.amount;
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          spent: existing.spent + request.amount,
-          spentWithVat: (existing.spentWithVat ?? existing.spent) + requestAmountWithVat,
-          vatRate: normalizeVatRate(existing.vatRate ?? request.vatRate),
-          updatedAt: Date.now(),
-        });
-      } else {
-        await ctx.db.insert(quotaTableName, {
-          monthKey: key,
-          year: date.getFullYear(),
-          month: date.getMonth() + 1,
-          quota: 0,
-          quotaWithVat: 0,
-          vatRate: normalizeVatRate(request.vatRate),
-          spent: request.amount,
-          spentWithVat: requestAmountWithVat,
-          updatedAt: Date.now(),
-        });
-      }
-    }
 
     await logTimelineEvent(ctx, {
       requestId: args.requestId,
