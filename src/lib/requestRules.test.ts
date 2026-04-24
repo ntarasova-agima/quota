@@ -56,21 +56,20 @@ describe("requestRules", () => {
   it("returns categories by department", () => {
     expect(getCategoriesForDepartment("Аккаунтинг")).toContain("Подарки");
     expect(getCategoriesForDepartment("Аккаунтинг")).toContain(PURCHASE_CATEGORY);
-    expect(getCategoriesForDepartment("Аккаунтинг")).not.toContain(CLIENT_SERVICES_TRANSIT_CATEGORY);
-    expect(getCategoriesForDepartment("Транзит")).toEqual([CLIENT_SERVICES_TRANSIT_CATEGORY]);
-    expect(getCategoriesForDepartment("Разработка")).toEqual([PURCHASE_CATEGORY]);
+    expect(getCategoriesForDepartment("Аккаунтинг")).toContain(CLIENT_SERVICES_TRANSIT_CATEGORY);
+    expect(getCategoriesForDepartment("Разработка")).toEqual([PURCHASE_CATEGORY, CLIENT_SERVICES_TRANSIT_CATEGORY]);
   });
 
   it("checks category availability by department", () => {
     expect(isCategoryAllowedForDepartment("Подарки", "Аккаунтинг")).toBe(true);
-    expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Транзит")).toBe(true);
-    expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Аккаунтинг")).toBe(false);
+    expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Аккаунтинг")).toBe(true);
+    expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Разработка")).toBe(true);
     expect(isCategoryAllowedForDepartment(PURCHASE_CATEGORY, "Разработка")).toBe(true);
     expect(isCategoryAllowedForDepartment("Подарки", "Разработка")).toBe(false);
   });
 
   it("keeps request area helpers compatible with legacy consumers", () => {
-    expect(getRequestAreaForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe("Транзит");
+    expect(getRequestAreaForCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe("Аккаунтинг");
     expect(getRequestAreaForCategory("Подарки")).toBe("Аккаунтинг");
     expect(getRequestAreaForDepartment("Аккаунтинг")).toBe("Аккаунтинг");
     expect(getRequestAreaForDepartment("Разработка")).toBe("Администрация");

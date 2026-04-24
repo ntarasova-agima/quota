@@ -9,7 +9,6 @@ import {
   NEW_FUNDING_SOURCES,
   PURCHASE_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
-  TRANSIT_REQUEST_CATEGORIES,
   getCategoriesForDepartment,
 } from "./requestRules";
 import { HOD_DEPARTMENTS, type HodDepartment } from "./departments";
@@ -48,7 +47,6 @@ export const REQUEST_AREAS = HOD_DEPARTMENTS;
 export const REQUEST_CATEGORIES_BY_AREA = {
   Аккаунтинг: ACCOUNTING_REQUEST_CATEGORIES,
   Администрация: ADMINISTRATION_REQUEST_CATEGORIES,
-  Транзит: TRANSIT_REQUEST_CATEGORIES,
 } as const;
 
 export const CURRENCIES = ["RUB", "USD"] as const;

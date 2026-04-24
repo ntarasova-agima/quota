@@ -1,6 +1,5 @@
 export const HOD_DEPARTMENTS = [
   "Аккаунтинг",
-  "Транзит",
   "AI RnD",
   "Администрация",
   "Разработка",
@@ -17,6 +16,7 @@ export const HOD_DEPARTMENTS = [
 export type HodDepartment = (typeof HOD_DEPARTMENTS)[number];
 
 const LEGACY_DEPARTMENT_MAP: Record<string, HodDepartment> = {
+  Транзит: "Аккаунтинг",
   PHP: "Разработка",
   Frontend: "Разработка",
   Mobile: "Разработка",
