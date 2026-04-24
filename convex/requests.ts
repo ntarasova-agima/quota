@@ -249,6 +249,10 @@ function hasContestSpecialists(
   );
 }
 
+function requestHasSpecialists(request: { specialists?: Array<unknown> }) {
+  return Boolean(request.specialists?.length);
+}
+
 function hasContestDepartments(
   specialists: Array<{
     sourceType?: string;
@@ -1560,6 +1564,7 @@ export const listMyRequests = query({
     createdFrom: v.optional(v.number()),
     createdTo: v.optional(v.number()),
     requestCodeQuery: v.optional(v.string()),
+    hasSpecialists: v.optional(v.boolean()),
     sort: v.optional(v.string()),
     page: v.optional(v.number()),
     pageSize: v.optional(v.number()),
@@ -1622,6 +1627,9 @@ export const listMyRequests = query({
       ) {
         return false;
       }
+      if (args.hasSpecialists === true && !requestHasSpecialists(request)) {
+        return false;
+      }
       if (!hasExplicitDateRange && (request.archivedAt || request.createdAt < oneYearAgo)) {
         return false;
       }
@@ -1677,6 +1685,7 @@ export const listAllRequests = query({
     createdFrom: v.optional(v.number()),
     createdTo: v.optional(v.number()),
     requestCodeQuery: v.optional(v.string()),
+    hasSpecialists: v.optional(v.boolean()),
     sort: v.optional(v.string()),
     page: v.optional(v.number()),
     pageSize: v.optional(v.number()),
@@ -1753,6 +1762,9 @@ export const listAllRequests = query({
         args.requestCodeQuery &&
         !(req.requestCode ?? "").toLowerCase().includes(args.requestCodeQuery.trim().toLowerCase())
       ) {
+        return false;
+      }
+      if (args.hasSpecialists === true && !requestHasSpecialists(req)) {
         return false;
       }
       if (args.paymentDueFilter === "today") {

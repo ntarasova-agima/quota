@@ -111,12 +111,14 @@ export default function RequestsPage() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [businessCategoryFilter, setBusinessCategoryFilter] = useState("all");
   const [fundingFilter, setFundingFilter] = useState("all");
+  const [specialistFilter, setSpecialistFilter] = useState("all");
   const [createdMonth, setCreatedMonth] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [myCategoryFilter, setMyCategoryFilter] = useState("all");
   const [myBusinessCategoryFilter, setMyBusinessCategoryFilter] = useState("all");
   const [myFundingFilter, setMyFundingFilter] = useState("all");
+  const [mySpecialistFilter, setMySpecialistFilter] = useState("all");
   const [myCreatedMonth, setMyCreatedMonth] = useState("");
   const [myCreatedFrom, setMyCreatedFrom] = useState("");
   const [myCreatedTo, setMyCreatedTo] = useState("");
@@ -163,6 +165,7 @@ export default function RequestsPage() {
             category: myCategoryFilter === "all" ? undefined : myCategoryFilter,
             businessCategory: myBusinessCategoryFilter === "all" ? undefined : myBusinessCategoryFilter,
             fundingSource: myFundingFilter === "all" ? undefined : myFundingFilter,
+            hasSpecialists: mySpecialistFilter === "with_specialists" ? true : undefined,
             createdFrom: toStartOfDay(myCreatedFrom),
             createdTo: toEndOfDay(myCreatedTo),
             requestCodeQuery: myRequestCodeQuery.trim() || undefined,
@@ -187,6 +190,7 @@ export default function RequestsPage() {
           category: categoryFilter === "all" ? undefined : categoryFilter,
           businessCategory: businessCategoryFilter === "all" ? undefined : businessCategoryFilter,
           fundingSource: fundingFilter === "all" ? undefined : fundingFilter,
+          hasSpecialists: specialistFilter === "with_specialists" ? true : undefined,
           paymentDueFilter: paymentDueFilter === "all" ? undefined : paymentDueFilter,
           createdFrom: toStartOfDay(createdFrom),
           createdTo: toEndOfDay(createdTo),
@@ -258,6 +262,7 @@ export default function RequestsPage() {
     myCategoryFilter,
     myBusinessCategoryFilter,
     myFundingFilter,
+    mySpecialistFilter,
     myCreatedFrom,
     myCreatedTo,
     mySort,
@@ -273,6 +278,7 @@ export default function RequestsPage() {
     categoryFilter,
     businessCategoryFilter,
     fundingFilter,
+    specialistFilter,
     paymentDueFilter,
     createdFrom,
     createdTo,
@@ -367,6 +373,17 @@ export default function RequestsPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {isFinanceRole ? (
+                    <Select value={mySpecialistFilter} onValueChange={setMySpecialistFilter}>
+                      <SelectTrigger className="w-[240px]">
+                        <SelectValue placeholder="Специалисты" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Все заявки</SelectItem>
+                        <SelectItem value="with_specialists">В заявке есть специалисты</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : null}
                   <DateRangeFilter
                     className="w-[250px]"
                     value={{
@@ -764,6 +781,17 @@ export default function RequestsPage() {
                       onValueChange={setTagFilter}
                     />
                   )}
+                  {isFinanceRole ? (
+                    <Select value={specialistFilter} onValueChange={setSpecialistFilter}>
+                      <SelectTrigger className="w-[240px]">
+                        <SelectValue placeholder="Специалисты" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Все заявки</SelectItem>
+                        <SelectItem value="with_specialists">В заявке есть специалисты</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : null}
                   <DateRangeFilter
                     className="w-[250px]"
                     value={{
