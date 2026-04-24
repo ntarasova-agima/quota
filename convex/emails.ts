@@ -6,8 +6,13 @@ import {
   getApprovalRecipientsForApprovals,
   getApprovalRecipientsForTargets,
 } from "../src/lib/approvalRecipients";
-import { normalizeContestSpecialistSource, requiresContestSpecialistValidation } from "../src/lib/requestFields";
-import { usesServiceRecipientLabel } from "../src/lib/requestRules";
+import {
+  HR_DEPARTMENT,
+  normalizeContestSpecialistSource,
+  requiresContestSpecialistValidation,
+  specialistNeedsHrValidation,
+} from "../src/lib/requestFields";
+import { supportsRequestSpecialists, usesServiceRecipientLabel } from "../src/lib/requestRules";
 import { formatAmountPair } from "../src/lib/vat";
 
 const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
@@ -1075,18 +1080,21 @@ export const sendHodValidationRequest = internalAction({
       throw new Error("Request not found");
     }
     const { request, roles } = data;
-    if (request.category !== "Конкурсное задание") {
+    if (!supportsRequestSpecialists(request.category)) {
       return;
     }
     const specialists = request.specialists ?? [];
     const departments = Array.from(
       new Set(
-        specialists
-          .filter((item: { department?: string; validationSkipped?: boolean }) =>
-            requiresContestSpecialistValidation(item),
-          )
-          .map((item: { department?: string }) => item.department?.trim())
-          .filter(Boolean),
+        [
+          ...specialists
+            .filter((item: { department?: string; validationSkipped?: boolean }) =>
+              requiresContestSpecialistValidation(item),
+            )
+            .map((item: { department?: string }) => item.department?.trim())
+            .filter(Boolean),
+          ...(specialists.some((item: any) => specialistNeedsHrValidation(item)) ? [HR_DEPARTMENT] : []),
+        ],
       ),
     ) as string[];
     if (departments.length === 0) {
@@ -1107,24 +1115,23 @@ export const sendHodValidationRequest = internalAction({
       const visibleDepartments = recipient.hodDepartments ?? [];
       const specialistRows = specialists
         .filter(
-          (item: { department?: string; validationSkipped?: boolean }) =>
-            requiresContestSpecialistValidation(item) &&
-            item.department &&
-            visibleDepartments.includes(item.department),
+          (item: any) =>
+            (
+              requiresContestSpecialistValidation(item) &&
+              item.department &&
+              visibleDepartments.includes(item.department)
+            ) ||
+            (visibleDepartments.includes(HR_DEPARTMENT) && specialistNeedsHrValidation(item)),
         )
         .map(
-          (item: {
-            name?: string;
-            sourceType?: string;
-            department?: string;
-            hours?: number;
-            directCost?: number;
-          }) => `
+          (item: any) => `
             <li>
-              ${normalizeContestSpecialistSource(item.sourceType) === "contractor" ? "Подрядчик" : "Внутренний специалист"}: ${item.name || "Не указан"}<br />
+              ${normalizeContestSpecialistSource(item.sourceType) === "contractor" ? "Подрядчик, ГПХ, ИП, СЗ" : "Штатный специалист"}: ${item.name || "Не указан"}<br />
               Цех: ${item.department || "Не указан"}<br />
+              ${(item.contractorTypes ?? []).length ? `Тип подрядчика: ${(item.contractorTypes ?? []).join(", ")}<br />` : ""}
               Часы: ${item.hours ?? "Не указаны"}<br />
-              Прямые затраты: ${item.directCost ?? "Не указаны"}
+              Прямые затраты: ${item.directCost ?? "Не указаны"}<br />
+              Налоги: ${item.taxAmount ?? "Не указаны"}
             </li>
           `,
         )

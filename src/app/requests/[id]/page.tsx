@@ -27,8 +27,11 @@ import { getRoleLabel } from "@/lib/roleLabels";
 import {
   formatIncomingRatio,
   formatMonthKeyLabel,
+  getSpecialistEffectiveCost,
+  HR_DEPARTMENT,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
+  specialistNeedsHrValidation,
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
@@ -37,6 +40,7 @@ import {
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
+  supportsRequestSpecialists,
 } from "@/lib/requestRules";
 import { isAgimaEmail, normalizeEmail } from "@/lib/authRules";
 import { normalizeHodDepartment } from "@/lib/departments";
@@ -56,9 +60,14 @@ type SpecialistView = {
   id: string;
   name: string;
   sourceType?: string;
+  contractorTypes?: string[];
   department?: string;
   hours?: number;
   directCost?: number;
+  taxAmount?: number;
+  taxUnknown?: boolean;
+  amountIncludesTaxes?: boolean;
+  amountExcludesTaxes?: boolean;
   hodConfirmed?: boolean;
   buhConfirmed?: boolean;
   validationSkipped?: boolean;
@@ -943,13 +952,18 @@ export default function RequestDetailPage() {
   const isCreator = data.isCreator;
   const canCancel = isCreator || isAdmin;
   const canDeleteRequest = isCreator || isAdmin;
+  const requestSupportsSpecialists = supportsRequestSpecialists(request.category);
   const hasPendingHodValidation = Boolean(
     request.status === "hod_pending" &&
       myRoles.includes("HOD") &&
       (request.specialists ?? []).some(
         (item) =>
-          requiresContestSpecialistValidation(item) &&
-          (data.hodDepartments ?? []).includes(item.department) &&
+          (requiresContestSpecialistValidation(item) ||
+            specialistNeedsHrValidation(item)) &&
+          (
+            (item.department && (data.hodDepartments ?? []).includes(item.department)) ||
+            (data.hodDepartments ?? []).includes(HR_DEPARTMENT)
+          ) &&
           (!item.hodConfirmed || item.directCost === undefined),
       ),
   );
@@ -1069,6 +1083,29 @@ export default function RequestDetailPage() {
           : groupedChangeHistory.some((group) => group.triggeredRepeatApproval)
             ? "Заявка изменена и отправлена на повторное согласование"
             : null;
+
+  async function persistSpecialistDraft(
+    specialistId: string,
+    draft: SpecialistView,
+    overrides: Partial<SpecialistView> = {},
+  ) {
+    await updateContestSpecialist({
+      requestId: request._id,
+      specialistId,
+      name: (overrides.name ?? draft.name ?? "").trim(),
+      department: overrides.department ?? draft.department,
+      contractorTypes: overrides.contractorTypes ?? draft.contractorTypes,
+      hours: overrides.hours ?? draft.hours,
+      directCost: overrides.directCost ?? draft.directCost,
+      taxAmount: overrides.taxAmount ?? draft.taxAmount,
+      taxUnknown: overrides.taxUnknown ?? draft.taxUnknown,
+      amountIncludesTaxes: overrides.amountIncludesTaxes ?? draft.amountIncludesTaxes,
+      amountExcludesTaxes: overrides.amountExcludesTaxes ?? draft.amountExcludesTaxes,
+      hodConfirmed: overrides.hodConfirmed ?? draft.hodConfirmed,
+      buhConfirmed: overrides.buhConfirmed ?? draft.buhConfirmed,
+    });
+  }
+
   async function uploadFiles(files: File[]) {
     if (!files.length) {
       return;
@@ -1643,8 +1680,7 @@ export default function RequestDetailPage() {
                         setDeletingRequest(true);
                         try {
                           await deleteRequest({ id: request._id });
-                          router.replace("/requests");
-                          router.refresh();
+                          window.location.assign("/requests");
                         } catch (err) {
                           setError(err instanceof Error ? err.message : "Не удалось удалить заявку");
                           setDeletingRequest(false);
@@ -2904,103 +2940,209 @@ export default function RequestDetailPage() {
               {request.fundingSource === "Отгрузки проекта" && !request.financePlanLinks?.length ? (
                 <p className="text-sm text-muted-foreground">ID и название отгрузки в финплане не указаны.</p>
               ) : null}
-              {request.category === "Конкурсное задание" ? (
+              {requestSupportsSpecialists ? (
                 <div className="space-y-4">
                   {[
-                    { key: "internal", label: "Внутренние специалисты", items: contestParticipants.internal },
-                    { key: "contractor", label: "Подрядчики", items: contestParticipants.contractor },
+                    { key: "internal", label: "Штатные специалисты", items: contestParticipants.internal },
+                    { key: "contractor", label: "Подрядчики, ГПХ, ИП, СЗ", items: contestParticipants.contractor },
                   ].map((section) => (
                     <div key={section.key} className="space-y-3">
                       <div className="text-muted-foreground">{section.label}</div>
                       {section.items.length ? (
                         section.items.map((item) => {
                           const draft = specialistDrafts[item.id] ?? item;
-                          const canBuhValidateThis = !item.validationSkipped && (myRoles.includes("BUH") || isAdmin);
+                          const canBuhValidateThis =
+                            !item.validationSkipped &&
+                            (myRoles.includes("BUH") || myRoles.includes("CFD") || isAdmin);
+                          const canHrValidateThis =
+                            !item.validationSkipped &&
+                            data.canHodEditSpecialists &&
+                            (data.hodDepartments ?? []).includes(HR_DEPARTMENT) &&
+                            specialistNeedsHrValidation(item);
                           const canHodValidateThis =
                             !item.validationSkipped &&
                             data.canHodEditSpecialists &&
-                            (item.department
-                              ? (data.hodDepartments ?? []).includes(item.department)
-                              : true);
+                            (
+                              canHrValidateThis ||
+                              (item.department
+                                ? (data.hodDepartments ?? []).includes(item.department)
+                                : true)
+                            );
                           const canEditThis =
                             !item.validationSkipped &&
                             (canHodValidateThis || canBuhValidateThis);
+                          const selectedTaxFlagsCount = [
+                            draft.taxUnknown,
+                            draft.amountIncludesTaxes,
+                            draft.amountExcludesTaxes,
+                          ].filter(Boolean).length;
                           return (
                             <div
                               key={item.id}
-                              className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]"
+                              className="space-y-3 rounded-lg border border-border p-3"
                             >
-                              <Input
-                                className="min-w-0"
-                                value={draft.name}
-                                onChange={(event) =>
-                                  setSpecialistDrafts((current) => ({
-                                    ...current,
-                                    [item.id]: { ...draft, name: event.target.value },
-                                  }))
-                                }
-                                disabled={!canEditThis}
-                                placeholder={section.key === "contractor" ? "Подрядчик" : "Специалист"}
-                              />
-                              <Select
-                                value={draft.department ?? "none"}
-                                onValueChange={(value) =>
-                                  setSpecialistDrafts((current) => ({
-                                    ...current,
-                                    [item.id]: {
-                                      ...draft,
-                                      department: value === "none" ? undefined : value,
-                                    },
-                                  }))
-                                }
-                                disabled={!canEditThis}
-                              >
-                                <SelectTrigger className="min-w-0 w-full">
-                                  <SelectValue placeholder="Цех" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="none">Цех не выбран</SelectItem>
-                                  {(
-                                    myRoles?.includes("ADMIN") ? HOD_DEPARTMENTS : data.hodDepartments ?? []
-                                  ).map((dep: string) => (
-                                    <SelectItem key={dep} value={dep}>
-                                      {dep}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <Input
-                                className="min-w-0"
-                                inputMode="decimal"
-                                value={draft.hours === undefined ? "" : String(draft.hours)}
-                                onChange={(event) =>
-                                  setSpecialistDrafts((current) => ({
-                                    ...current,
-                                    [item.id]: {
-                                      ...draft,
-                                      hours: parseMoneyInput(sanitizeNumericInput(event.target.value)),
-                                    },
-                                  }))
-                                }
-                                disabled={!canEditThis}
-                                placeholder="Часы"
-                              />
-                              <Input
-                                className="min-w-0"
-                                inputMode="decimal"
-                                value={draft.directCost === undefined ? "" : String(draft.directCost)}
-                                onChange={(event) =>
-                                  setSpecialistDrafts((current) => ({
-                                    ...current,
-                                    [item.id]: {
-                                      ...draft,
-                                      directCost: parseMoneyInput(sanitizeNumericInput(event.target.value)),
-                                    },
-                                  }))
-                                }
-                                disabled={!canEditThis}
-                                placeholder="Прямые затраты"
-                              />
+                              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]">
+                                <Input
+                                  className="min-w-0"
+                                  value={draft.name}
+                                  onChange={(event) =>
+                                    setSpecialistDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: { ...draft, name: event.target.value },
+                                    }))
+                                  }
+                                  disabled={!canEditThis}
+                                  placeholder={section.key === "contractor" ? "Подрядчик" : "Специалист"}
+                                />
+                                <Select
+                                  value={draft.department ?? "none"}
+                                  onValueChange={(value) =>
+                                    setSpecialistDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: {
+                                        ...draft,
+                                        department: value === "none" ? undefined : value,
+                                      },
+                                    }))
+                                  }
+                                  disabled={!canEditThis}
+                                >
+                                  <SelectTrigger className="min-w-0 w-full">
+                                    <SelectValue placeholder="Цех" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">Цех не выбран</SelectItem>
+                                    {(
+                                      myRoles?.some((role) => ["ADMIN", "BUH", "CFD"].includes(role))
+                                        ? HOD_DEPARTMENTS
+                                        : data.hodDepartments ?? []
+                                    ).map((dep: string) => (
+                                      <SelectItem key={dep} value={dep}>
+                                        {dep}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <Input
+                                  className="min-w-0"
+                                  inputMode="decimal"
+                                  value={draft.hours === undefined ? "" : String(draft.hours)}
+                                  onChange={(event) =>
+                                    setSpecialistDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: {
+                                        ...draft,
+                                        hours: parseMoneyInput(sanitizeNumericInput(event.target.value)),
+                                      },
+                                    }))
+                                  }
+                                  disabled={!canEditThis}
+                                  placeholder="Часы"
+                                />
+                                <Input
+                                  className="min-w-0"
+                                  inputMode="decimal"
+                                  value={draft.directCost === undefined ? "" : String(draft.directCost)}
+                                  onChange={(event) =>
+                                    setSpecialistDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: {
+                                        ...draft,
+                                        directCost: parseMoneyInput(sanitizeNumericInput(event.target.value)),
+                                      },
+                                    }))
+                                  }
+                                  disabled={!canEditThis}
+                                  placeholder="Прямые затраты"
+                                />
+                                <Input
+                                  className="min-w-0"
+                                  inputMode="decimal"
+                                  value={draft.taxAmount === undefined ? "" : String(draft.taxAmount)}
+                                  onChange={(event) =>
+                                    setSpecialistDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: {
+                                        ...draft,
+                                        taxAmount: parseMoneyInput(sanitizeNumericInput(event.target.value)),
+                                      },
+                                    }))
+                                  }
+                                  disabled={!canEditThis}
+                                  placeholder="Налоги"
+                                />
+                              </div>
+                              {section.key === "contractor" ? (
+                                <div className="space-y-2">
+                                  <div className="text-sm font-medium">Тип подрядчика</div>
+                                  <div className="flex flex-wrap gap-3">
+                                    {["ООО", "ИП", "ГПХ", "СЗ", "другое"].map((option) => {
+                                      const checked = (draft.contractorTypes ?? []).includes(option);
+                                      return (
+                                        <label key={option} className="flex items-center gap-2 text-sm">
+                                          <Checkbox
+                                            checked={checked}
+                                            disabled={!canEditThis}
+                                            onCheckedChange={(checkedValue) =>
+                                              setSpecialistDrafts((current) => ({
+                                                ...current,
+                                                [item.id]: {
+                                                  ...draft,
+                                                  contractorTypes:
+                                                    checkedValue === true
+                                                      ? Array.from(
+                                                          new Set([...(draft.contractorTypes ?? []), option]),
+                                                        )
+                                                      : (draft.contractorTypes ?? []).filter(
+                                                          (value) => value !== option,
+                                                        ),
+                                                },
+                                              }))
+                                            }
+                                          />
+                                          {option}
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ) : null}
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium">Налоги</div>
+                                <div className="flex flex-wrap gap-3">
+                                  {[
+                                    { key: "taxUnknown", label: "Я не знаю, какие налоги" },
+                                    { key: "amountIncludesTaxes", label: "Сумма уже с налогами" },
+                                    { key: "amountExcludesTaxes", label: "Сумма не включает налоги" },
+                                  ].map((option) => {
+                                    const checked = Boolean(draft[option.key as keyof SpecialistView]);
+                                    const disabled = !checked && selectedTaxFlagsCount >= 2;
+                                    return (
+                                      <label key={option.key} className="flex items-center gap-2 text-sm">
+                                        <Checkbox
+                                          checked={checked}
+                                          disabled={!canEditThis || disabled}
+                                          onCheckedChange={(checkedValue) =>
+                                            setSpecialistDrafts((current) => ({
+                                              ...current,
+                                              [item.id]: {
+                                                ...draft,
+                                                [option.key]: checkedValue === true,
+                                              },
+                                            }))
+                                          }
+                                        />
+                                        {option.label}
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              <div className="text-sm text-muted-foreground">
+                                Итого в квоту:{" "}
+                                {getSpecialistEffectiveCost(draft).toLocaleString("ru-RU")}{" "}
+                                {request.currency}
+                              </div>
                               {item.validationSkipped ? (
                                 <div className="flex items-center text-sm text-muted-foreground">
                                   Валидация не требуется
@@ -3022,16 +3164,7 @@ export default function RequestDetailPage() {
                                       setSavingSpecialistId(item.id);
                                       setError(null);
                                       try {
-                                        await updateContestSpecialist({
-                                          requestId: request._id,
-                                          specialistId: item.id,
-                                          name: draft.name,
-                                          department: draft.department,
-                                          hours: draft.hours,
-                                          directCost: draft.directCost,
-                                          hodConfirmed: checked,
-                                          buhConfirmed: draft.buhConfirmed,
-                                        });
+                                        await persistSpecialistDraft(item.id, draft, { hodConfirmed: checked });
                                         router.refresh();
                                       } catch (err) {
                                         setError(
@@ -3065,16 +3198,7 @@ export default function RequestDetailPage() {
                                       setSavingSpecialistId(item.id);
                                       setError(null);
                                       try {
-                                        await updateContestSpecialist({
-                                          requestId: request._id,
-                                          specialistId: item.id,
-                                          name: draft.name,
-                                          department: draft.department,
-                                          hours: draft.hours,
-                                          directCost: draft.directCost,
-                                          hodConfirmed: draft.hodConfirmed,
-                                          buhConfirmed: checked,
-                                        });
+                                        await persistSpecialistDraft(item.id, draft, { buhConfirmed: checked });
                                         router.refresh();
                                       } catch (err) {
                                         setError(
@@ -3091,12 +3215,42 @@ export default function RequestDetailPage() {
                                   Подтверждено BUH
                                 </label>
                               ) : null}
+                              {canEditThis ? (
+                                <div className="sm:col-span-6">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={savingSpecialistId === item.id}
+                                    onClick={async () => {
+                                      setSavingSpecialistId(item.id);
+                                      setError(null);
+                                      try {
+                                        await persistSpecialistDraft(item.id, draft);
+                                        router.refresh();
+                                      } catch (err) {
+                                        setError(
+                                          err instanceof Error
+                                            ? err.message
+                                            : "Не удалось обновить специалиста",
+                                        );
+                                      } finally {
+                                        setSavingSpecialistId(null);
+                                      }
+                                    }}
+                                  >
+                                    Сохранить изменения
+                                  </Button>
+                                </div>
+                              ) : null}
                               <div className="sm:col-span-6 text-xs text-muted-foreground">
                                 {item.validationSkipped
                                   ? "Цех не получает задачу на валидацию по этой записи."
                                   : item.hodConfirmed || item.buhConfirmed
                                     ? `Прямые затраты подтверждены${item.hodConfirmed ? " руководителем цеха" : ""}${item.hodConfirmed && item.buhConfirmed ? " и" : ""}${item.buhConfirmed ? " BUH" : ""}.`
-                                    : "Ждет валидации руководителя цеха или BUH."}
+                                    : canHrValidateThis
+                                      ? "Ждет валидации руководителя цеха, Отдела кадров или BUH."
+                                      : "Ждет валидации руководителя цеха или BUH."}
                               </div>
                             </div>
                           );

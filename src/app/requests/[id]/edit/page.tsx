@@ -36,9 +36,12 @@ import {
   calculateIncomingRatio,
   formatIncomingRatio,
   getPaymentMethodOptions,
+  getSpecialistEffectiveCost,
+  HR_DEPARTMENT,
   isPaidByDateAllowed,
   monthKeyToDateInput,
   normalizeContestSpecialistSource,
+  specialistNeedsHrValidation,
   timestampToDateInput,
 } from "@/lib/requestFields";
 import {
@@ -54,6 +57,7 @@ import {
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
+  supportsRequestSpecialists,
   usesServiceRecipientLabel,
 } from "@/lib/requestRules";
 import { normalizeHodDepartment } from "@/lib/departments";
@@ -219,6 +223,7 @@ export default function NewRequestPage() {
   const headerFieldLabelClass = "min-h-11 items-start leading-snug";
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
   const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(category), [category]);
+  const requestSupportsSpecialists = useMemo(() => supportsRequestSpecialists(category), [category]);
   const selectedDepartment = requestArea;
   const categoryOptions = useMemo(
     () => getCategoriesForDepartment(selectedDepartment),
@@ -285,6 +290,11 @@ export default function NewRequestPage() {
         department: item.department ?? "",
         hours: item.hours !== undefined ? String(item.hours) : "",
         directCost: item.directCost !== undefined ? String(item.directCost) : "",
+        taxAmount: item.taxAmount !== undefined ? String(item.taxAmount) : "",
+        contractorTypes: item.contractorTypes ?? [],
+        taxUnknown: item.taxUnknown ?? false,
+        amountIncludesTaxes: item.amountIncludesTaxes ?? false,
+        amountExcludesTaxes: item.amountExcludesTaxes ?? false,
         hodConfirmed: item.hodConfirmed ?? false,
         buhConfirmed: item.buhConfirmed ?? false,
         validationSkipped: item.validationSkipped ?? false,
@@ -354,39 +364,40 @@ export default function NewRequestPage() {
         id: item.id,
         name: item.name.trim(),
         sourceType: item.sourceType,
+        contractorTypes: item.contractorTypes,
         department: item.department || undefined,
         hours: parseMoneyInput(item.hours),
         directCost: parseMoneyInput(item.directCost),
+        taxAmount: parseMoneyInput(item.taxAmount),
+        taxUnknown: item.taxUnknown,
+        amountIncludesTaxes: item.amountIncludesTaxes,
+        amountExcludesTaxes: item.amountExcludesTaxes,
         hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
         buhConfirmed: item.validationSkipped ? true : item.buhConfirmed ?? false,
         validationSkipped: item.validationSkipped,
       })),
     [contractors, internalSpecialists],
   );
-  const contestHasSpecialists = useMemo(
+  const requestHasSpecialists = useMemo(
     () =>
-      category === "Конкурсное задание" &&
+      requestSupportsSpecialists &&
       specialistsPayload.some(
         (item) =>
-          item.name || item.department || item.hours !== undefined || item.directCost !== undefined,
+          item.name ||
+          item.department ||
+          item.hours !== undefined ||
+          item.directCost !== undefined ||
+          item.taxAmount !== undefined ||
+          (item.contractorTypes?.length ?? 0) > 0 ||
+          item.taxUnknown ||
+          item.amountIncludesTaxes ||
+          item.amountExcludesTaxes,
       ),
-    [category, specialistsPayload],
+    [requestSupportsSpecialists, specialistsPayload],
   );
-  const isContestCategory =
-    category === "Конкурсное задание" ||
-    data?.request?.category === "Конкурсное задание" ||
-    [...internalSpecialists, ...contractors].some(
-      (item) =>
-        item.name.trim() ||
-        item.department.trim() ||
-        item.hours.trim() ||
-        item.directCost.trim() ||
-        item.hodConfirmed ||
-        item.validationSkipped,
-    );
-  const contestAmount = useMemo(
+  const specialistAmount = useMemo(
     () =>
-      specialistsPayload.reduce((sum, item) => sum + (item.directCost ?? 0), 0),
+      specialistsPayload.reduce((sum, item) => sum + getSpecialistEffectiveCost(item), 0),
     [specialistsPayload],
   );
   const autoRequiredHodDepartments = useMemo(
@@ -395,16 +406,20 @@ export default function NewRequestPage() {
         new Set(
           [
             "Финансово-юридический отдел",
-            ...(category === "Конкурсное задание"
+            ...(requestSupportsSpecialists
               ? specialistsPayload
                   .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
                   .map((item) => item.department as string)
+              : []),
+            ...(requestSupportsSpecialists &&
+            specialistsPayload.some((item) => specialistNeedsHrValidation(item))
+              ? [HR_DEPARTMENT]
               : []),
             ...(isHodSelectableCategory(category) && selectedDepartment ? [selectedDepartment] : []),
           ],
         ),
       ),
-    [category, selectedDepartment, specialistsPayload],
+    [category, requestSupportsSpecialists, selectedDepartment, specialistsPayload],
   );
   const effectiveRequiredHodDepartments = useMemo(
     () => Array.from(new Set([...requiredHodDepartments, ...autoRequiredHodDepartments])),
@@ -412,10 +427,10 @@ export default function NewRequestPage() {
   );
   const effectiveAmountWithoutVatInput = useMemo(
     () =>
-      contestHasSpecialists
-        ? contestAmount
+      requestHasSpecialists
+        ? specialistAmount
         : parseMoneyInput(amount),
-    [amount, contestAmount, contestHasSpecialists],
+    [amount, requestHasSpecialists, specialistAmount],
   );
   const financeLinksList = useMemo(
     () =>
@@ -589,7 +604,7 @@ export default function NewRequestPage() {
   }, [paymentMethod, paymentMethodOptions]);
 
   useEffect(() => {
-    if (!contestHasSpecialists) {
+    if (!requestHasSpecialists) {
       return;
     }
     const synced = syncVatInputPair({
@@ -605,7 +620,7 @@ export default function NewRequestPage() {
     if (vatInputSource !== "without") {
       setVatInputSource("without");
     }
-  }, [amountWithVat, contestHasSpecialists, effectiveAmountWithoutVatInput, vatInputSource, vatRate]);
+  }, [amountWithVat, requestHasSpecialists, effectiveAmountWithoutVatInput, vatInputSource, vatRate]);
 
   useEffect(() => {
     if (autoRequiredHodDepartments.length === 0) {
@@ -824,7 +839,7 @@ export default function NewRequestPage() {
         contacts: [],
         relatedRequests: relatedRequestsList,
         links: [],
-        specialists: category === "Конкурсное задание" ? specialistsPayload : undefined,
+        specialists: requestSupportsSpecialists ? specialistsPayload : undefined,
         financePlanLinks:
           showTransitFields && financeLinksList.length
             ? financeLinksList
@@ -992,25 +1007,26 @@ export default function NewRequestPage() {
                 </div>
               </div>
 
-              {isContestCategory ? (
+              {requestSupportsSpecialists ? (
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
-                    Для конкурсного задания сначала укажите внутренних специалистов и подрядчиков.
-                    Общая сумма соберется из их прямых затрат автоматически.
+                    Добавьте штатных специалистов и подрядчиков, если затрата связана с ними.
+                    Общая сумма соберется из прямых затрат и налогов автоматически.
                   </p>
                   <ContestParticipantsEditor
-                    addLabel="+ Добавить внутреннего специалиста"
+                    addLabel="+ Добавить штатного специалиста"
                     emptyNamePlaceholder="Специалист"
-                    label="Внутренние специалисты"
+                    label="Штатные специалисты"
                     rows={internalSpecialists}
                     setRows={setInternalSpecialists}
                   />
                   <ContestParticipantsEditor
                     addLabel="+ Добавить подрядчика"
                     emptyNamePlaceholder="Подрядчик"
-                    label="Подрядчики"
+                    label="Подрядчики, ГПХ, ИП, СЗ"
                     rows={contractors}
                     setRows={setContractors}
+                    showContractorTypes
                   />
                 </div>
               ) : null}
@@ -1024,7 +1040,7 @@ export default function NewRequestPage() {
                     id="amount"
                     type="text"
                     inputMode="decimal"
-                    value={contestHasSpecialists ? String(contestAmount) : amount}
+                    value={requestHasSpecialists ? String(specialistAmount) : amount}
                     onChange={(event) => {
                       const nextAmount = sanitizeNumericInput(event.target.value);
                       setVatInputSource("without");
@@ -1038,11 +1054,11 @@ export default function NewRequestPage() {
                       setAmountWithVat(synced.amountWithVatInput);
                     }}
                     aria-invalid={amountInvalid ? true : undefined}
-                    disabled={contestHasSpecialists}
+                    disabled={requestHasSpecialists}
                   />
-                  {contestHasSpecialists ? (
+                  {requestHasSpecialists ? (
                     <p className="text-xs text-muted-foreground">
-                      Сумма без НДС считается автоматически по прямым затратам внутренних специалистов и подрядчиков.
+                      Сумма без НДС считается автоматически по прямым затратам и налогам штатных специалистов и подрядчиков.
                     </p>
                   ) : null}
                 </div>
@@ -1057,7 +1073,7 @@ export default function NewRequestPage() {
                     value={amountWithVat}
                     onChange={(event) => {
                       const nextAmountWithVat = sanitizeNumericInput(event.target.value);
-                      if (contestHasSpecialists) {
+                      if (requestHasSpecialists) {
                         setAmountWithVat(nextAmountWithVat);
                         return;
                       }
@@ -1072,7 +1088,7 @@ export default function NewRequestPage() {
                       setAmount(synced.amountWithoutVatInput);
                     }}
                     aria-invalid={amountInvalid ? true : undefined}
-                    disabled={contestHasSpecialists}
+                    disabled={requestHasSpecialists}
                   />
                 </div>
                 <div className="space-y-2">
@@ -1086,10 +1102,10 @@ export default function NewRequestPage() {
                     onChange={(event) => {
                       const nextVatRate = sanitizeNumericInput(event.target.value);
                       setVatRate(nextVatRate);
-                      const source = contestHasSpecialists ? "without" : vatInputSource;
+                      const source = requestHasSpecialists ? "without" : vatInputSource;
                       const synced = syncVatInputPair({
                         amountWithoutVatInput:
-                          contestHasSpecialists
+                          requestHasSpecialists
                             ? effectiveAmountWithoutVatInput !== undefined
                               ? String(effectiveAmountWithoutVatInput)
                               : ""
@@ -1098,7 +1114,7 @@ export default function NewRequestPage() {
                         vatRateInput: nextVatRate,
                         source,
                       });
-                      if (!contestHasSpecialists) {
+                      if (!requestHasSpecialists) {
                         setAmount(synced.amountWithoutVatInput);
                       }
                       setAmountWithVat(synced.amountWithVatInput);

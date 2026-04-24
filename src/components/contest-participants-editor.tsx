@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { HOD_DEPARTMENTS } from "@/lib/constants";
+import { CONTRACTOR_TYPE_OPTIONS } from "@/lib/requestFields";
 import { sanitizeNumericInput } from "@/lib/vat";
 
 export type ContestParticipantDraft = {
@@ -15,6 +16,11 @@ export type ContestParticipantDraft = {
   department: string;
   hours: string;
   directCost: string;
+  taxAmount: string;
+  contractorTypes: string[];
+  taxUnknown: boolean;
+  amountIncludesTaxes: boolean;
+  amountExcludesTaxes: boolean;
   validationSkipped: boolean;
   hodConfirmed?: boolean;
   buhConfirmed?: boolean;
@@ -27,6 +33,11 @@ export function createContestParticipantDraft(): ContestParticipantDraft {
     department: "",
     hours: "",
     directCost: "",
+    taxAmount: "",
+    contractorTypes: [],
+    taxUnknown: false,
+    amountIncludesTaxes: false,
+    amountExcludesTaxes: false,
     validationSkipped: false,
   };
 }
@@ -38,6 +49,7 @@ type ContestParticipantsEditorProps = {
   label: string;
   rows: ContestParticipantDraft[];
   setRows: Dispatch<SetStateAction<ContestParticipantDraft[]>>;
+  showContractorTypes?: boolean;
 };
 
 export default function ContestParticipantsEditor({
@@ -47,7 +59,14 @@ export default function ContestParticipantsEditor({
   label,
   rows,
   setRows,
+  showContractorTypes = false,
 }: ContestParticipantsEditorProps) {
+  function updateRow(id: string, updater: (row: ContestParticipantDraft) => ContestParticipantDraft) {
+    setRows((current) =>
+      current.map((row) => (row.id === id ? updater(row) : row)),
+    );
+  }
+
   return (
     <div className="space-y-3 rounded-lg border border-border p-4">
       <div className="space-y-1">
@@ -57,85 +76,154 @@ export default function ContestParticipantsEditor({
       {rows.map((item) => (
         <div
           key={item.id}
-          className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.7fr)_minmax(0,0.9fr)]"
+          className="space-y-3 rounded-lg border border-border p-3"
         >
-          <Input
-            className="min-w-0"
-            placeholder={emptyNamePlaceholder}
-            value={item.name}
-            onChange={(event) =>
-              setRows((current) =>
-                current.map((row) =>
-                  row.id === item.id ? { ...row, name: event.target.value } : row,
-                ),
-              )
-            }
-          />
-          <Select
-            value={item.department || "none"}
-            onValueChange={(value) =>
-              setRows((current) =>
-                current.map((row) =>
-                  row.id === item.id
-                    ? { ...row, department: value === "none" ? "" : value }
-                    : row,
-                ),
-              )
-            }
-          >
-            <SelectTrigger className="min-w-0 w-full">
-              <SelectValue placeholder="Цех" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Цех не выбран</SelectItem>
-              {HOD_DEPARTMENTS.map((department) => (
-                <SelectItem key={department} value={department}>
-                  {department}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input
-            className="min-w-0"
-            placeholder="Часы"
-            inputMode="decimal"
-            value={item.hours}
-            onChange={(event) =>
-              setRows((current) =>
-                current.map((row) =>
-                  row.id === item.id
-                    ? { ...row, hours: sanitizeNumericInput(event.target.value) }
-                    : row,
-                ),
-              )
-            }
-          />
-          <Input
-            className="min-w-0"
-            placeholder="Прямые затраты"
-            inputMode="decimal"
-            value={item.directCost}
-            onChange={(event) =>
-              setRows((current) =>
-                current.map((row) =>
-                  row.id === item.id
-                    ? { ...row, directCost: sanitizeNumericInput(event.target.value) }
-                    : row,
-                ),
-              )
-            }
-          />
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]">
+            <Input
+              className="min-w-0"
+              placeholder={emptyNamePlaceholder}
+              value={item.name}
+              onChange={(event) =>
+                updateRow(item.id, (row) => ({ ...row, name: event.target.value }))
+              }
+            />
+            <Select
+              value={item.department || "none"}
+              onValueChange={(value) =>
+                updateRow(item.id, (row) => ({
+                  ...row,
+                  department: value === "none" ? "" : value,
+                }))
+              }
+            >
+              <SelectTrigger className="min-w-0 w-full">
+                <SelectValue placeholder="Цех" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Цех не выбран</SelectItem>
+                {HOD_DEPARTMENTS.map((department) => (
+                  <SelectItem key={department} value={department}>
+                    {department}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              className="min-w-0"
+              placeholder="Часы"
+              inputMode="decimal"
+              value={item.hours}
+              onChange={(event) =>
+                updateRow(item.id, (row) => ({
+                  ...row,
+                  hours: sanitizeNumericInput(event.target.value),
+                }))
+              }
+            />
+            <Input
+              className="min-w-0"
+              placeholder="Прямые затраты"
+              inputMode="decimal"
+              value={item.directCost}
+              onChange={(event) =>
+                updateRow(item.id, (row) => ({
+                  ...row,
+                  directCost: sanitizeNumericInput(event.target.value),
+                }))
+              }
+            />
+            <Input
+              className="min-w-0"
+              placeholder="Налоги"
+              inputMode="decimal"
+              value={item.taxAmount}
+              onChange={(event) =>
+                updateRow(item.id, (row) => ({
+                  ...row,
+                  taxAmount: sanitizeNumericInput(event.target.value),
+                }))
+              }
+            />
+          </div>
+          {showContractorTypes ? (
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Тип подрядчика</div>
+              <div className="flex flex-wrap gap-3">
+                {CONTRACTOR_TYPE_OPTIONS.map((option) => {
+                  const checked = item.contractorTypes.includes(option);
+                  return (
+                    <label key={option} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(nextChecked) =>
+                          updateRow(item.id, (row) => ({
+                            ...row,
+                            contractorTypes:
+                              nextChecked === true
+                                ? Array.from(new Set([...row.contractorTypes, option]))
+                                : row.contractorTypes.filter((value) => value !== option),
+                          }))
+                        }
+                      />
+                      {option}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Налоги</div>
+            <div className="flex flex-wrap gap-3">
+              {[
+                {
+                  key: "taxUnknown",
+                  label: "Я не знаю, какие налоги",
+                },
+                {
+                  key: "amountIncludesTaxes",
+                  label: "Сумма уже с налогами",
+                },
+                {
+                  key: "amountExcludesTaxes",
+                  label: "Сумма не включает налоги",
+                },
+              ].map((option) => {
+                const selectedCount = [
+                  item.taxUnknown,
+                  item.amountIncludesTaxes,
+                  item.amountExcludesTaxes,
+                ].filter(Boolean).length;
+                const checked = Boolean(item[option.key as keyof ContestParticipantDraft]);
+                const disabled = !checked && selectedCount >= 2;
+                return (
+                  <label key={option.key} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={checked}
+                      disabled={disabled}
+                      onCheckedChange={(nextChecked) =>
+                        updateRow(item.id, (row) => ({
+                          ...row,
+                          [option.key]: nextChecked === true,
+                        }))
+                      }
+                    />
+                    {option.label}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
           <label className="sm:col-span-4 flex items-center gap-2 text-sm">
             <Checkbox
               checked={item.validationSkipped}
               onCheckedChange={(checked) =>
-                setRows((current) =>
-                  current.map((row) =>
-                    row.id === item.id
-                      ? { ...row, validationSkipped: checked === true, hodConfirmed: checked === true }
-                      : row,
-                  ),
-                )
+                updateRow(item.id, (row) => ({
+                  ...row,
+                  validationSkipped: checked === true,
+                  hodConfirmed: checked === true,
+                  buhConfirmed: checked === true,
+                }))
               }
             />
             Валидация не требуется

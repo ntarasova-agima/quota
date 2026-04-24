@@ -39,6 +39,12 @@ export const TRANSIT_REQUEST_CATEGORIES = [
   CLIENT_SERVICES_TRANSIT_CATEGORY,
 ] as const;
 
+export const SPECIALIST_REQUEST_CATEGORIES = [
+  "Конкурсное задание",
+  PURCHASE_CATEGORY,
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
+] as const;
+
 export const NEW_FUNDING_SOURCES = [
   AGIMA_QUOTAS_FUNDING_SOURCE,
   PROJECT_REVENUE_FUNDING_SOURCE,
@@ -145,6 +151,13 @@ export function isServiceRecipientCategory(category: string) {
 export function usesServiceRecipientLabel(category: string) {
   const normalizedCategory = normalizeRequestCategory(category);
   return normalizedCategory === PURCHASE_CATEGORY || isServiceRecipientCategory(category);
+}
+
+export function supportsRequestSpecialists(category: string) {
+  const normalizedCategory = normalizeRequestCategory(category);
+  return SPECIALIST_REQUEST_CATEGORIES.includes(
+    normalizedCategory as (typeof SPECIALIST_REQUEST_CATEGORIES)[number],
+  );
 }
 
 export function isHodSelectableCategory(category: string) {
