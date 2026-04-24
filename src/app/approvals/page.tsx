@@ -85,6 +85,7 @@ export default function ApprovalsPage() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [businessCategoryFilter, setBusinessCategoryFilter] = useState("all");
   const [fundingFilter, setFundingFilter] = useState("all");
+  const [specialistFilter, setSpecialistFilter] = useState("all");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [createdMonth, setCreatedMonth] = useState("");
@@ -177,6 +178,9 @@ export default function ApprovalsPage() {
     if (fundingFilter !== "all") {
       filtered = filtered.filter(({ request }) => request.fundingSource === fundingFilter);
     }
+    if (isFinanceRole && specialistFilter === "with_specialists") {
+      filtered = filtered.filter(({ request }) => (request.specialists?.length ?? 0) > 0);
+    }
     const createdFromTimestamp = toStartOfDay(createdFrom);
     const createdToTimestamp = toEndOfDay(createdTo);
     if (createdFromTimestamp !== undefined) {
@@ -229,6 +233,7 @@ export default function ApprovalsPage() {
     requestCodeQuery,
     sort,
     statusFilters,
+    specialistFilter,
     tagFilter,
     taskTypeFilter,
     todayStart,
@@ -403,6 +408,17 @@ export default function ApprovalsPage() {
                   searchPlaceholder="Найти автора"
                   onValueChange={setAuthorFilter}
                 />
+                {isFinanceRole ? (
+                  <Select value={specialistFilter} onValueChange={setSpecialistFilter}>
+                    <SelectTrigger className="w-[240px]">
+                      <SelectValue placeholder="Специалисты" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Все заявки</SelectItem>
+                      <SelectItem value="with_specialists">В заявке есть специалисты</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : null}
                 {canFilterByTags ? (
                   <SearchableSelect
                     className="w-[240px]"
