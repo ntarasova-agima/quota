@@ -2875,31 +2875,17 @@ export const cancelRequest = mutation({
     id: v.id("requests"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Not authenticated");
-    }
-    const email = await getCurrentEmail(ctx);
-    if (!email) {
-      throw new Error("Missing user email");
-    }
-    const request = await ctx.db.get(args.id);
-    if (!request) {
-      throw new Error("Request not found");
-    }
-    if (request.createdBy !== userId && request.createdByEmail !== email) {
-      throw new Error("Not authorized");
-    }
-    await ctx.db.patch(request._id, {
+    const access = await ensureCanManageRequestLifecycle(ctx, args.id);
+    await ctx.db.patch(access.request._id, {
       isCanceled: true,
       canceledAt: Date.now(),
       updatedAt: Date.now(),
     });
     await logTimelineEvent(ctx, {
-      requestId: request._id,
+      requestId: access.request._id,
       type: "request_canceled",
       title: "Заявка отменена",
-      actorEmail: email,
+      actorEmail: access.email,
     });
     return { canceled: true };
   },
@@ -2910,33 +2896,88 @@ export const resumeRequest = mutation({
     id: v.id("requests"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Not authenticated");
-    }
-    const email = await getCurrentEmail(ctx);
-    if (!email) {
-      throw new Error("Missing user email");
-    }
-    const request = await ctx.db.get(args.id);
-    if (!request) {
-      throw new Error("Request not found");
-    }
-    if (request.createdBy !== userId && request.createdByEmail !== email) {
-      throw new Error("Not authorized");
-    }
-    await ctx.db.patch(request._id, {
+    const access = await ensureCanManageRequestLifecycle(ctx, args.id);
+    await ctx.db.patch(access.request._id, {
       isCanceled: false,
       canceledAt: undefined,
       updatedAt: Date.now(),
     });
     await logTimelineEvent(ctx, {
-      requestId: request._id,
+      requestId: access.request._id,
       type: "request_resumed",
       title: "Заявка возобновлена",
-      actorEmail: email,
+      actorEmail: access.email,
     });
     return { resumed: true };
+  },
+});
+
+async function ensureCanManageRequestLifecycle(ctx: any, requestId: any) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) {
+    throw new Error("Not authenticated");
+  }
+  const email = await getCurrentEmail(ctx);
+  if (!email) {
+    throw new Error("Missing user email");
+  }
+  const request = await ctx.db.get(requestId);
+  if (!request) {
+    throw new Error("Request not found");
+  }
+  const record = await getRoleRecord(ctx, email);
+  const normalizedEmail = normalizeEmail(email);
+  const isCreator =
+    request.createdBy === userId || normalizeEmail(request.createdByEmail) === normalizedEmail;
+  const isAdmin = Boolean(record?.roles?.includes("ADMIN"));
+  if (!isCreator && !isAdmin) {
+    throw new Error("Not authorized");
+  }
+  return {
+    email,
+    request,
+    record,
+    isCreator,
+    isAdmin,
+  };
+}
+
+async function deleteRowsByRequestId(ctx: any, table: string, requestId: any) {
+  const rows = await ctx.db
+    .query(table)
+    .withIndex("by_request", (q: any) => q.eq("requestId", requestId))
+    .collect();
+  for (const row of rows) {
+    await ctx.db.delete(row._id);
+  }
+}
+
+export const deleteRequest = mutation({
+  args: {
+    id: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const access = await ensureCanManageRequestLifecycle(ctx, args.id);
+    const attachments = await ctx.db
+      .query("requestAttachments")
+      .withIndex("by_request", (q) => q.eq("requestId", args.id))
+      .collect();
+    for (const attachment of attachments) {
+      await ctx.db.delete(attachment._id);
+      try {
+        await ctx.storage.delete(attachment.storageId);
+      } catch {
+        // Best effort: the request should still be removable even if the file is already gone.
+      }
+    }
+    await deleteRowsByRequestId(ctx, "comments", args.id);
+    await deleteRowsByRequestId(ctx, "approvals", args.id);
+    await deleteRowsByRequestId(ctx, "requestChangeLogs", args.id);
+    await deleteRowsByRequestId(ctx, "requestTimelineEvents", args.id);
+    await deleteRowsByRequestId(ctx, "requestEmailLogs", args.id);
+    await deleteRowsByRequestId(ctx, "quotaChangeLogs", args.id);
+    await ctx.db.delete(access.request._id);
+    return { deleted: true };
   },
 });
 
@@ -3070,6 +3111,9 @@ export const updatePaymentStatus = mutation({
     const request = await ctx.db.get(args.id);
     if (!request) {
       throw new Error("Request not found");
+    }
+    if (request.isCanceled) {
+      throw new Error("Сначала возобновите заявку");
     }
 
     const actorName = record.fullName?.trim() || undefined;

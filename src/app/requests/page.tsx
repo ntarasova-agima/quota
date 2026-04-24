@@ -401,12 +401,14 @@ export default function RequestsPage() {
                           approval.status === "pending" && (myRoles ?? []).includes(approval.role),
                       );
                     const statusSummary =
-                      request.status === "pending" && !baseStatusSummary.label.startsWith("Частично согласовано")
+                      request.status === "pending" &&
+                      !request.isCanceled &&
+                      !baseStatusSummary.label.startsWith("Частично согласовано")
                         ? getPendingStatusPresentation(isActionableForViewer)
                         : baseStatusSummary;
-                    const canSendToPayment = request.status === "approved";
-                    const canCloseFromList = ["approved", "paid"].includes(request.status);
-                    const canReopenFromList = request.status === "closed";
+                    const canSendToPayment = !request.isCanceled && request.status === "approved";
+                    const canCloseFromList = !request.isCanceled && ["approved", "paid"].includes(request.status);
+                    const canReopenFromList = !request.isCanceled && request.status === "closed";
                     return (
                       <div
                         key={request._id}
@@ -797,7 +799,9 @@ export default function RequestsPage() {
                             approval.status === "pending" && (myRoles ?? []).includes(approval.role),
                         );
                       const statusSummary =
-                        request.status === "pending" && !baseStatusSummary.label.startsWith("Частично согласовано")
+                        request.status === "pending" &&
+                        !request.isCanceled &&
+                        !baseStatusSummary.label.startsWith("Частично согласовано")
                           ? getPendingStatusPresentation(isActionableForViewer)
                           : baseStatusSummary;
                       return (

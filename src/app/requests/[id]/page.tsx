@@ -543,6 +543,7 @@ export default function RequestDetailPage() {
   const adminApproveAsRole = useMutation(api.approvals.adminApproveAsRole);
   const cancelRequest = useMutation(api.requests.cancelRequest);
   const resumeRequest = useMutation(api.requests.resumeRequest);
+  const deleteRequest = useMutation(api.requests.deleteRequest);
   const assignCfdTag = useMutation(api.requests.assignCfdTag);
   const updatePaymentStatus = useMutation(api.requests.updatePaymentStatus);
   const cancelPaymentEntry = useMutation(api.requests.cancelPaymentEntry);
@@ -602,6 +603,7 @@ export default function RequestDetailPage() {
   const [previewAttachmentId, setPreviewAttachmentId] = useState<Id<"requestAttachments"> | null>(null);
   const [approvalReminderSent, setApprovalReminderSent] = useState(false);
   const [paymentReminderSent, setPaymentReminderSent] = useState(false);
+  const [deletingRequest, setDeletingRequest] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const newCommentRef = useRef<HTMLTextAreaElement | null>(null);
   const todayDate = useMemo(() => formatDateInputFromTimestamp(Date.now()), []);
@@ -939,7 +941,8 @@ export default function RequestDetailPage() {
       ? "Запланировать следующий платеж"
       : "Запланировать частичную оплату";
   const isCreator = data.isCreator;
-  const canCancel = isCreator;
+  const canCancel = isCreator || isAdmin;
+  const canDeleteRequest = isCreator || isAdmin;
   const hasPendingHodValidation = Boolean(
     request.status === "hod_pending" &&
       myRoles.includes("HOD") &&
@@ -1046,7 +1049,9 @@ export default function RequestDetailPage() {
     request.status === "pending" &&
     approvals.some((approval) => approval.status === "pending" && canCurrentUserDecideApproval(approval));
   const statusSummary =
-    request.status === "pending" && !baseStatusSummary.label.startsWith("Частично согласовано")
+    request.status === "pending" &&
+    !request.isCanceled &&
+    !baseStatusSummary.label.startsWith("Частично согласовано")
       ? getPendingStatusPresentation(isActionableForViewer)
       : baseStatusSummary;
   const contextualHint = hasPendingHodValidation
@@ -1600,11 +1605,12 @@ export default function RequestDetailPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
-              {canCancel && (
-                <div>
+              {(canCancel || canDeleteRequest) && (
+                <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
                     variant={request.isCanceled ? "outline" : "destructive"}
+                    disabled={deletingRequest}
                     onClick={async () => {
                       setError(null);
                       try {
@@ -1621,6 +1627,33 @@ export default function RequestDetailPage() {
                   >
                     {request.isCanceled ? "Возобновить заявку" : "Отменить заявку"}
                   </Button>
+                  {canDeleteRequest ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={deletingRequest}
+                      onClick={async () => {
+                        setError(null);
+                        const confirmed = window.confirm(
+                          "Удалить заявку безвозвратно? Будут удалены комментарии, файлы, история изменений и согласования.",
+                        );
+                        if (!confirmed) {
+                          return;
+                        }
+                        setDeletingRequest(true);
+                        try {
+                          await deleteRequest({ id: request._id });
+                          router.replace("/requests");
+                          router.refresh();
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "Не удалось удалить заявку");
+                          setDeletingRequest(false);
+                        }
+                      }}
+                    >
+                      {deletingRequest ? "Удаляем..." : "Удалить заявку"}
+                    </Button>
+                  ) : null}
                 </div>
               )}
               <div className="flex flex-wrap gap-3">
