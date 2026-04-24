@@ -9,9 +9,20 @@ export const CONTEST_SPECIALIST_SOURCES = ["internal", "contractor"] as const;
 export type ContestSpecialistSource = (typeof CONTEST_SPECIALIST_SOURCES)[number];
 
 export const CONTEST_SPECIALIST_SOURCE_LABELS: Record<ContestSpecialistSource, string> = {
-  internal: "Внутренние специалисты",
-  contractor: "Подрядчики",
+  internal: "Штатные специалисты",
+  contractor: "Подрядчики, ГПХ, ИП, СЗ",
 };
+
+export const CONTRACTOR_TYPE_OPTIONS = ["ООО", "ИП", "ГПХ", "СЗ", "другое"] as const;
+export type ContractorTypeOption = (typeof CONTRACTOR_TYPE_OPTIONS)[number];
+
+export const SPECIALIST_TAX_FLAG_OPTIONS = [
+  "Я не знаю, какие налоги",
+  "Сумма уже с налогами",
+  "Сумма не включает налоги",
+] as const;
+
+export const HR_DEPARTMENT = "Отдел кадров";
 
 export const SHIPMENT_MONTH_NAMES = [
   "январь",
@@ -51,6 +62,7 @@ export function requiresContestSpecialistValidation(item: {
 export function isContestSpecialistValidated(item: {
   department?: string;
   directCost?: number;
+  taxAmount?: number;
   hodConfirmed?: boolean;
   buhConfirmed?: boolean;
   validationSkipped?: boolean;
@@ -63,6 +75,40 @@ export function isContestSpecialistValidated(item: {
       typeof item.directCost === "number" &&
       Number.isFinite(item.directCost),
   );
+}
+
+export function specialistNeedsHrValidation(item: {
+  sourceType?: string;
+  contractorTypes?: string[];
+  validationSkipped?: boolean;
+}) {
+  if (item.validationSkipped) {
+    return false;
+  }
+  const sourceType = normalizeContestSpecialistSource(item.sourceType);
+  if (sourceType === "internal") {
+    return true;
+  }
+  return (item.contractorTypes ?? []).includes("ГПХ");
+}
+
+export function getSpecialistEffectiveCost(item: {
+  directCost?: number;
+  taxAmount?: number;
+  amountIncludesTaxes?: boolean;
+}) {
+  const directCost =
+    typeof item.directCost === "number" && Number.isFinite(item.directCost)
+      ? item.directCost
+      : 0;
+  const taxAmount =
+    typeof item.taxAmount === "number" && Number.isFinite(item.taxAmount)
+      ? item.taxAmount
+      : 0;
+  if (item.amountIncludesTaxes) {
+    return directCost;
+  }
+  return directCost + taxAmount;
 }
 
 export function calculateIncomingRatio(params: {

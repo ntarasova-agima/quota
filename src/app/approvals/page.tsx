@@ -5,14 +5,25 @@ import { useQuery } from "convex/react";
 import { useMemo, useState } from "react";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
+import DateRangeFilter from "@/components/date-range-filter";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import { getBuhPaymentStatusSummary, getUnallocatedPaymentAmounts } from "@/lib/requestStatus";
 import { formatAmountPair } from "@/lib/vat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { HoverHint } from "@/components/ui/hover-hint";
+import { Input } from "@/components/ui/input";
+import SearchableSelect from "@/components/searchable-select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/convex";
 import { normalizeRequestCategory } from "@/lib/requestRules";
+import { EMPTY_BUSINESS_CATEGORY, EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
 
 function getRequestDisplayTitle(request: {
   title?: string;
@@ -22,11 +33,65 @@ function getRequestDisplayTitle(request: {
   return request.title?.trim() || `${request.clientName} :: ${normalizeRequestCategory(request.category)}`;
 }
 
+const statusOptions = [
+  { value: "all", label: "Все" },
+  { value: "draft", label: "Черновик" },
+  { value: "hod_pending", label: "Ждет валидации цеха" },
+  { value: "pending", label: "Ожидает согласования" },
+  { value: "approved", label: "Согласовано" },
+  { value: "rejected", label: "Отклонено" },
+  { value: "awaiting_payment", label: "Требуется оплата" },
+  { value: "payment_planned", label: "Запланирована оплата" },
+  { value: "partially_paid", label: "Частично оплачено" },
+  { value: "paid", label: "Оплачено" },
+  { value: "closed", label: "Заявка закрыта" },
+];
+
+function summarizeStatuses(statusFilters: string[]) {
+  if (statusFilters.length === 0) {
+    return "Все статусы";
+  }
+  if (statusFilters.length === 1) {
+    return statusOptions.find((item) => item.value === statusFilters[0])?.label ?? "1 статус";
+  }
+  return `Статусы: ${statusFilters.length}`;
+}
+
+function toStartOfDay(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+  return new Date(`${value}T00:00:00`).getTime();
+}
+
+function toEndOfDay(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+  return new Date(`${value}T23:59:59.999`).getTime();
+}
+
 export default function ApprovalsPage() {
   const items = useQuery(api.approvals.listPendingForMe);
   const myRoles = useQuery(api.roles.myRoles);
+  const adContacts = useQuery(api.roles.listAdContacts);
+  const cfdTags = useQuery(api.cfdTags.list, {});
+  const businessCategories = useQuery(api.businessCategories.list, {});
   const [taskTypeFilter, setTaskTypeFilter] = useState<"all" | "approval" | "payment">("all");
   const [buhQuickFilter, setBuhQuickFilter] = useState<"all" | "today" | "overdue">("all");
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);
+  const [authorFilter, setAuthorFilter] = useState("all");
+  const [tagFilter, setTagFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [businessCategoryFilter, setBusinessCategoryFilter] = useState("all");
+  const [fundingFilter, setFundingFilter] = useState("all");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
+  const [createdMonth, setCreatedMonth] = useState("");
+  const [requestCodeQuery, setRequestCodeQuery] = useState("");
+  const [sort, setSort] = useState("updated_desc");
+  const isFinanceRole = myRoles?.some((role) => ["BUH", "CFD"].includes(role));
+  const canFilterByTags = myRoles?.some((role) => ["CFD", "BUH", "COO", "ADMIN"].includes(role));
   const todayStart = useMemo(() => {
     const value = new Date();
     value.setHours(0, 0, 0, 0);
@@ -37,31 +102,138 @@ export default function ApprovalsPage() {
     value.setDate(value.getDate() + 1);
     return value.getTime();
   }, [todayStart]);
+  const businessCategoryOptions = businessCategories ?? [
+    { _id: "empty", name: EMPTY_BUSINESS_CATEGORY },
+  ];
+  const authorOptions = useMemo(
+    () => [
+      { value: "all", label: "Все авторы", searchText: "все авторы" },
+      ...((adContacts ?? []).map((contact) => ({
+        value: contact.email,
+        label: contact.fullName || contact.email,
+        subtitle: [contact.creatorTitle, contact.email].filter(Boolean).join(" · "),
+        searchText: [contact.fullName, contact.creatorTitle, contact.email].filter(Boolean).join(" "),
+      }))),
+    ],
+    [adContacts],
+  );
+  const tagOptions = useMemo(
+    () => [
+      { value: "all", label: "Все теги", searchText: "все теги" },
+      { value: "without_tag", label: "Без тега", searchText: "без тега" },
+      ...((cfdTags ?? []).map((tag) => ({
+        value: tag.name,
+        label: tag.name,
+        subtitle: tag.department || undefined,
+        searchText: `${tag.name} ${tag.department ?? ""}`,
+      }))),
+    ],
+    [cfdTags],
+  );
   const visibleItems = useMemo(() => {
-    if (!items?.length) {
-      return items ?? [];
+    if (!items) {
+      return [];
     }
-    const isFinanceRole = myRoles?.some((role) => ["BUH", "CFD"].includes(role));
-    let filtered = items;
+    let filtered = [...items];
     if (taskTypeFilter !== "all") {
       filtered = filtered.filter(({ kind }) =>
         taskTypeFilter === "payment" ? kind === "payment" : kind !== "payment",
       );
     }
-    if (!isFinanceRole || buhQuickFilter === "all") {
-      return filtered;
+    if (isFinanceRole && buhQuickFilter !== "all") {
+      filtered = filtered.filter(({ kind, request }) => {
+        if (kind !== "payment" || !request.neededBy) {
+          return false;
+        }
+        if (buhQuickFilter === "today") {
+          return request.neededBy >= todayStart && request.neededBy < tomorrowStart;
+        }
+        return request.neededBy < todayStart;
+      });
     }
-    return filtered.filter(({ kind, request }) => {
-      if (kind !== "payment" || !request.neededBy) {
-        return taskTypeFilter === "approval";
+    if (statusFilters.length > 0) {
+      filtered = filtered.filter(({ request }) => statusFilters.includes(request.status));
+    }
+    if (authorFilter !== "all") {
+      filtered = filtered.filter(({ request }) => request.createdByEmail === authorFilter);
+    }
+    if (tagFilter !== "all") {
+      filtered = filtered.filter(({ request }) =>
+        tagFilter === "without_tag" ? !request.cfdTag?.trim() : request.cfdTag === tagFilter,
+      );
+    }
+    if (categoryFilter !== "all") {
+      filtered = filtered.filter(
+        ({ request }) =>
+          normalizeRequestCategory(request.category) === normalizeRequestCategory(categoryFilter),
+      );
+    }
+    if (businessCategoryFilter !== "all") {
+      filtered = filtered.filter(
+        ({ request }) =>
+          (request.businessCategory ?? EMPTY_BUSINESS_CATEGORY) === businessCategoryFilter,
+      );
+    }
+    if (fundingFilter !== "all") {
+      filtered = filtered.filter(({ request }) => request.fundingSource === fundingFilter);
+    }
+    const createdFromTimestamp = toStartOfDay(createdFrom);
+    const createdToTimestamp = toEndOfDay(createdTo);
+    if (createdFromTimestamp !== undefined) {
+      filtered = filtered.filter(({ request }) => request.createdAt >= createdFromTimestamp);
+    }
+    if (createdToTimestamp !== undefined) {
+      filtered = filtered.filter(({ request }) => request.createdAt <= createdToTimestamp);
+    }
+    if (requestCodeQuery.trim()) {
+      const normalizedQuery = requestCodeQuery.trim().toLowerCase();
+      filtered = filtered.filter(({ request }) =>
+        (request.requestCode ?? "").toLowerCase().includes(normalizedQuery),
+      );
+    }
+    filtered.sort((left, right) => {
+      if (sort === "updated_asc") return left.request.updatedAt - right.request.updatedAt;
+      if (sort === "created_desc") return right.request.createdAt - left.request.createdAt;
+      if (sort === "created_asc") return left.request.createdAt - right.request.createdAt;
+      if (sort === "deadline_asc") {
+        return (left.request.approvalDeadline ?? Number.MAX_SAFE_INTEGER) - (right.request.approvalDeadline ?? Number.MAX_SAFE_INTEGER);
       }
-      if (buhQuickFilter === "today") {
-        return request.neededBy >= todayStart && request.neededBy < tomorrowStart;
+      if (sort === "deadline_desc") {
+        return (right.request.approvalDeadline ?? 0) - (left.request.approvalDeadline ?? 0);
       }
-      return request.neededBy < todayStart;
+      if (sort === "business_category_asc") {
+        return (left.request.businessCategory ?? "").localeCompare(
+          right.request.businessCategory ?? "",
+          "ru",
+        );
+      }
+      if (sort === "business_category_desc") {
+        return (right.request.businessCategory ?? "").localeCompare(
+          left.request.businessCategory ?? "",
+          "ru",
+        );
+      }
+      return right.request.updatedAt - left.request.updatedAt;
     });
-  }, [buhQuickFilter, items, myRoles, taskTypeFilter, todayStart, tomorrowStart]);
-  const isFinanceRole = myRoles?.some((role) => ["BUH", "CFD"].includes(role));
+    return filtered;
+  }, [
+    authorFilter,
+    buhQuickFilter,
+    businessCategoryFilter,
+    categoryFilter,
+    createdFrom,
+    createdTo,
+    fundingFilter,
+    isFinanceRole,
+    items,
+    requestCodeQuery,
+    sort,
+    statusFilters,
+    tagFilter,
+    taskTypeFilter,
+    todayStart,
+    tomorrowStart,
+  ]);
 
   return (
     <RequireAuth>
@@ -135,6 +307,126 @@ export default function ApprovalsPage() {
               </div>
             </CardHeader>
             <CardContent>
+              <div className="mb-4 flex flex-wrap gap-3">
+                <Select value={sort} onValueChange={setSort}>
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder="Сортировка" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="updated_desc">По дате изменения: новые</SelectItem>
+                    <SelectItem value="updated_asc">По дате изменения: старые</SelectItem>
+                    <SelectItem value="created_desc">По дате создания: новые</SelectItem>
+                    <SelectItem value="created_asc">По дате создания: старые</SelectItem>
+                    <SelectItem value="deadline_asc">По дедлайну: ближе</SelectItem>
+                    <SelectItem value="deadline_desc">По дедлайну: дальше</SelectItem>
+                    <SelectItem value="business_category_asc">По категории: А-Я</SelectItem>
+                    <SelectItem value="business_category_desc">По категории: Я-А</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  className="w-[200px]"
+                  placeholder="Поиск по номеру"
+                  value={requestCodeQuery}
+                  onChange={(event) => setRequestCodeQuery(event.target.value)}
+                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button type="button" variant="outline" className="w-[220px] justify-between">
+                      <span className="truncate">{summarizeStatuses(statusFilters)}</span>
+                      <span className="text-xs text-muted-foreground">{statusFilters.length || "Все"}</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[240px]">
+                    {statusOptions
+                      .filter((option) => option.value !== "all")
+                      .map((option) => (
+                        <DropdownMenuCheckboxItem
+                          key={option.value}
+                          checked={statusFilters.includes(option.value)}
+                          onCheckedChange={(checked) =>
+                            setStatusFilters((current) =>
+                              checked
+                                ? [...current, option.value]
+                                : current.filter((value) => value !== option.value),
+                            )
+                          }
+                        >
+                          {option.label}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder="Тип заявки" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Все типы заявок</SelectItem>
+                    {EXPENSE_CATEGORIES.map((category) => (
+                      <SelectItem key={category} value={category}>
+                        {category}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={businessCategoryFilter} onValueChange={setBusinessCategoryFilter}>
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder="Категория" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Все категории</SelectItem>
+                    {businessCategoryOptions.map((category) => (
+                      <SelectItem key={category._id} value={category.name}>
+                        {category.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={fundingFilter} onValueChange={setFundingFilter}>
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder="Источник" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Все источники</SelectItem>
+                    {FUNDING_SOURCES.map((source) => (
+                      <SelectItem key={source} value={source}>
+                        {source}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <SearchableSelect
+                  className="w-[240px]"
+                  value={authorFilter}
+                  options={authorOptions}
+                  placeholder="Автор"
+                  searchPlaceholder="Найти автора"
+                  onValueChange={setAuthorFilter}
+                />
+                {canFilterByTags ? (
+                  <SearchableSelect
+                    className="w-[240px]"
+                    value={tagFilter}
+                    options={tagOptions}
+                    placeholder="Тег CFD"
+                    searchPlaceholder="Найти тег"
+                    onValueChange={setTagFilter}
+                  />
+                ) : null}
+                <DateRangeFilter
+                  className="w-[250px]"
+                  value={{
+                    from: createdFrom,
+                    to: createdTo,
+                    monthKey: createdMonth,
+                  }}
+                  onChange={(nextValue) => {
+                    setCreatedMonth(nextValue.monthKey);
+                    setCreatedFrom(nextValue.from);
+                    setCreatedTo(nextValue.to);
+                  }}
+                />
+              </div>
               <div className="space-y-3">
                 {visibleItems.length ? (
                   visibleItems.map(({ request, kind }) => (

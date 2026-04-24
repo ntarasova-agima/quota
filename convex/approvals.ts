@@ -4,11 +4,10 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
 import { logTimelineEvent } from "./timelineHelpers";
-import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
 import {
   buildApprovalTargets,
   getApprovalIdentity,
-  getPendingContestValidationDepartments,
+  getPendingSpecialistValidationDepartments,
   getRequestApprovalStatus,
 } from "./requestWorkflow";
 
@@ -87,7 +86,7 @@ export const listPendingForMe = query({
       }
       const kind =
         approval.role === "HOD" &&
-        getPendingContestValidationDepartments({
+        getPendingSpecialistValidationDepartments({
           category: request.category,
           specialists: request.specialists,
           requiredHodDepartments: request.requiredHodDepartments,
@@ -139,7 +138,7 @@ export const listPendingForMe = query({
         if (seen.has(request._id) || request.isCanceled) {
           continue;
         }
-        const pendingDepartments = getPendingContestValidationDepartments({
+        const pendingDepartments = getPendingSpecialistValidationDepartments({
           category: request.category,
           specialists: request.specialists,
           requiredHodDepartments: request.requiredHodDepartments,

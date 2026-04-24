@@ -21,7 +21,7 @@ import {
   getEffectiveRequiredHodDepartments,
   getEffectiveRequiredRoles,
   getRequestApprovalStatus,
-  getRequiredContestHodDepartments,
+  getRequiredSpecialistHodDepartments,
   normalizeDepartmentList,
 } from "./requestWorkflow";
 import {
@@ -44,6 +44,7 @@ import {
   normalizeFundingSource,
   normalizeRequestCategory,
   shouldSkipQuotaByTag,
+  supportsRequestSpecialists,
   usesServiceRecipientLabel,
 } from "../src/lib/requestRules";
 import {
@@ -54,11 +55,14 @@ import {
   calculateIncomingRatio,
   formatMonthKeyLabel,
   getPaymentMethodOptions,
+  getSpecialistEffectiveCost,
+  HR_DEPARTMENT,
   isPaidByDateAllowed,
   isContestSpecialistValidated,
   isPaidByTimestampAllowed,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
+  specialistNeedsHrValidation,
 } from "../src/lib/requestFields";
 import { isAgimaEmail, normalizeEmail } from "../src/lib/authRules";
 import {
@@ -162,9 +166,14 @@ function normalizeSpecialists(
     id: string;
     name: string;
     sourceType?: string;
+    contractorTypes?: string[];
     department?: string;
     hours?: number;
     directCost?: number;
+    taxAmount?: number;
+    taxUnknown?: boolean;
+    amountIncludesTaxes?: boolean;
+    amountExcludesTaxes?: boolean;
     hodConfirmed?: boolean;
     buhConfirmed?: boolean;
     validationSkipped?: boolean;
@@ -175,6 +184,13 @@ function normalizeSpecialists(
       id: item.id,
       name: item.name?.trim() ?? "",
       sourceType: normalizeContestSpecialistSource(item.sourceType),
+      contractorTypes: Array.from(
+        new Set(
+          (item.contractorTypes ?? [])
+            .map((value) => value?.trim())
+            .filter(Boolean) as string[],
+        ),
+      ),
       department: normalizeHodDepartment(item.department),
       hours:
         typeof item.hours === "number" && Number.isFinite(item.hours)
@@ -184,6 +200,13 @@ function normalizeSpecialists(
         typeof item.directCost === "number" && Number.isFinite(item.directCost)
           ? item.directCost
           : undefined,
+      taxAmount:
+        typeof item.taxAmount === "number" && Number.isFinite(item.taxAmount)
+          ? item.taxAmount
+          : undefined,
+      taxUnknown: item.taxUnknown ?? false,
+      amountIncludesTaxes: item.amountIncludesTaxes ?? false,
+      amountExcludesTaxes: item.amountExcludesTaxes ?? false,
       hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
       buhConfirmed: item.validationSkipped ? true : item.buhConfirmed ?? false,
       validationSkipped: item.validationSkipped ?? false,
@@ -194,24 +217,45 @@ function normalizeSpecialists(
         item.department ||
         item.hours !== undefined ||
         item.directCost !== undefined ||
+        item.taxAmount !== undefined ||
+        item.contractorTypes.length > 0 ||
+        item.taxUnknown ||
+        item.amountIncludesTaxes ||
+        item.amountExcludesTaxes ||
         item.validationSkipped,
     );
 }
 
-function hasContestSpecialists(specialists: Array<{ name: string; department?: string; hours?: number; directCost?: number }>) {
+function hasContestSpecialists(
+  specialists: Array<{
+    name: string;
+    department?: string;
+    hours?: number;
+    directCost?: number;
+    taxAmount?: number;
+  }>,
+) {
   return specialists.some(
     (item) =>
       item.name ||
       item.department ||
       item.hours !== undefined ||
-      item.directCost !== undefined,
+      item.directCost !== undefined ||
+      item.taxAmount !== undefined,
   );
 }
 
 function hasContestDepartments(
-  specialists: Array<{ department?: string; validationSkipped?: boolean }>,
+  specialists: Array<{
+    sourceType?: string;
+    contractorTypes?: string[];
+    department?: string;
+    validationSkipped?: boolean;
+  }>,
 ) {
-  return specialists.some((item) => requiresContestSpecialistValidation(item));
+  return specialists.some(
+    (item) => requiresContestSpecialistValidation(item) || specialistNeedsHrValidation(item),
+  );
 }
 
 function isDepartmentSpecialistReady(
@@ -228,15 +272,18 @@ function isDepartmentSpecialistReady(
 
 function areContestDepartmentsValidated(
   specialists: Array<{
+    sourceType?: string;
+    contractorTypes?: string[];
     department?: string;
     directCost?: number;
+    taxAmount?: number;
     hodConfirmed?: boolean;
     buhConfirmed?: boolean;
     validationSkipped?: boolean;
   }>,
 ) {
   const departmentalSpecialists = specialists.filter((item) =>
-    requiresContestSpecialistValidation(item),
+    requiresContestSpecialistValidation(item) || specialistNeedsHrValidation(item),
   );
   if (!departmentalSpecialists.length) {
     return true;
@@ -246,16 +293,15 @@ function areContestDepartmentsValidated(
 
 function calculateContestAmount(
   category: string,
-  specialists: Array<{ directCost?: number }> = [],
+  specialists: Array<{ directCost?: number; taxAmount?: number; amountIncludesTaxes?: boolean }> = [],
   fallbackAmount: number,
 ) {
-  if (category !== "Конкурсное задание" || !hasContestSpecialists(specialists as any)) {
+  if (!supportsRequestSpecialists(category) || !hasContestSpecialists(specialists as any)) {
     return fallbackAmount;
   }
   return specialists.reduce(
     (sum, item) =>
-      sum +
-      (typeof item.directCost === "number" && Number.isFinite(item.directCost) ? item.directCost : 0),
+      sum + getSpecialistEffectiveCost(item),
     0,
   );
 }
@@ -730,7 +776,7 @@ function resolveRequestAmounts(
     amountWithVat?: number;
     vatRate?: number;
   },
-  specialists: Array<{ directCost?: number }> = [],
+  specialists: Array<{ directCost?: number; taxAmount?: number; amountIncludesTaxes?: boolean }> = [],
 ) {
   const amountWithoutVat = calculateContestAmount(
     params.category,
@@ -778,9 +824,14 @@ const specialistValidator = v.object({
   id: v.string(),
   name: v.string(),
   sourceType: v.optional(v.string()),
+  contractorTypes: v.optional(v.array(v.string())),
   department: v.optional(v.string()),
   hours: v.optional(v.number()),
   directCost: v.optional(v.number()),
+  taxAmount: v.optional(v.number()),
+  taxUnknown: v.optional(v.boolean()),
+  amountIncludesTaxes: v.optional(v.boolean()),
+  amountExcludesTaxes: v.optional(v.boolean()),
   hodConfirmed: v.optional(v.boolean()),
   buhConfirmed: v.optional(v.boolean()),
   validationSkipped: v.optional(v.boolean()),
@@ -862,7 +913,7 @@ const requestFieldLabels: Record<string, string> = {
   shipmentDate: "Дата отгрузки",
   shipmentMonth: "Дата отгрузки",
   requiredHodDepartments: "Руководители цехов",
-  specialists: "Участники конкурсного задания",
+  specialists: "Специалисты",
   approvalDeadline: "Дедлайн согласования",
   neededBy: "Ожидание затраты",
   paidBy: "Когда платят нам",
@@ -904,11 +955,18 @@ function formatValueForHistory(field: string, value: unknown) {
         if (item && typeof item === "object") {
           const specialist = item as any;
           const parts = [
-            specialist.sourceType === "contractor" ? "Подрядчик" : "Внутренний специалист",
+            specialist.sourceType === "contractor"
+              ? "Подрядчик, ГПХ, ИП, СЗ"
+              : "Штатный специалист",
             specialist.name,
+            specialist.contractorTypes?.length ? specialist.contractorTypes.join(", ") : undefined,
             specialist.department,
             specialist.hours !== undefined ? `${specialist.hours} ч` : undefined,
             specialist.directCost !== undefined ? `${specialist.directCost}` : undefined,
+            specialist.taxAmount !== undefined ? `налоги ${specialist.taxAmount}` : undefined,
+            specialist.taxUnknown ? "налоги не определены" : undefined,
+            specialist.amountIncludesTaxes ? "сумма уже с налогами" : undefined,
+            specialist.amountExcludesTaxes ? "сумма без налогов" : undefined,
             specialist.validationSkipped ? "валидация не требуется" : undefined,
             specialist.hodConfirmed ? "подтверждено HoD" : undefined,
             specialist.buhConfirmed ? "подтверждено BUH" : undefined,
@@ -1143,8 +1201,8 @@ function validateRequestPayload(args: any) {
     requiredRoles: args.requiredRoles as any,
     requiredHodDepartments: effectiveRequiredHodDepartments,
   });
-  const contestWithSpecialists =
-    args.category === "Конкурсное задание" && hasContestSpecialists(normalizedSpecialists);
+  const requestWithSpecialists =
+    supportsRequestSpecialists(args.category) && hasContestSpecialists(normalizedSpecialists);
   const allowedPaymentMethods = getPaymentMethodOptions(args.category);
   validateOptionalVatRate(args.vatRate);
   validateOptionalMoney(args.amount, "Сумма без НДС");
@@ -1180,7 +1238,7 @@ function validateRequestPayload(args: any) {
   const effectiveAmount = effectiveAmounts.amount;
   if (
     (!Number.isFinite(effectiveAmount) || effectiveAmount <= 0) &&
-    !(contestWithSpecialists && effectiveAmount === 0)
+    !(requestWithSpecialists && effectiveAmount === 0)
   ) {
     throw new Error("Amount must be greater than 0");
   }
@@ -2248,9 +2306,9 @@ export const editRequest = mutation({
       vatRate: args.vatRate,
       autoCalculateAmountWithVat: true,
     });
-    const contestNeedsHodValidation =
-      normalizedCategory === "Конкурсное задание" &&
-      getRequiredContestHodDepartments(normalizedSpecialists).length > 0 &&
+    const specialistNeedsHodValidation =
+      supportsRequestSpecialists(normalizedCategory) &&
+      getRequiredSpecialistHodDepartments(normalizedSpecialists).length > 0 &&
       !areContestDepartmentsValidated(normalizedSpecialists);
     const now = Date.now();
 
@@ -2369,7 +2427,7 @@ export const editRequest = mutation({
                 approvals: updatedApprovals,
               });
       }
-      if (request.status === "draft" && args.submit && pendingRoles.length === 0 && !contestNeedsHodValidation) {
+      if (request.status === "draft" && args.submit && pendingRoles.length === 0 && !specialistNeedsHodValidation) {
         nextStatus = "approved";
       }
     }
@@ -2478,7 +2536,7 @@ export const editRequest = mutation({
       });
     }
 
-    if (submitDraft && !contestNeedsHodValidation) {
+    if (submitDraft && !specialistNeedsHodValidation) {
       await ctx.scheduler.runAfter(0, internal.emails.sendRequestSubmitted, {
         requestId: args.id,
       });
@@ -2547,7 +2605,7 @@ export const editRequest = mutation({
         });
       }
     }
-    if (contestNeedsHodValidation) {
+    if (specialistNeedsHodValidation) {
       await ctx.scheduler.runAfter(0, internal.emails.sendHodValidationRequest, {
         requestId: args.id,
       });
@@ -2605,9 +2663,9 @@ export const createRequest = mutation({
       requiredHodDepartments: effectiveRequiredHodDepartments,
     });
     const autoApprovedRoles = effectiveRequiredRoles.filter((role) => creatorRoles.includes(role));
-    const contestNeedsHodValidation =
-      normalizedCategory === "Конкурсное задание" &&
-      getRequiredContestHodDepartments(normalizedSpecialists).length > 0 &&
+    const specialistNeedsHodValidation =
+      supportsRequestSpecialists(normalizedCategory) &&
+      getRequiredSpecialistHodDepartments(normalizedSpecialists).length > 0 &&
       !areContestDepartmentsValidated(normalizedSpecialists);
     const approvalTargets = buildApprovalTargets({
       requiredRoles: effectiveRequiredRoles as any,
@@ -2756,8 +2814,13 @@ export const updateContestSpecialist = mutation({
     specialistId: v.string(),
     name: v.string(),
     department: v.optional(v.string()),
+    contractorTypes: v.optional(v.array(v.string())),
     hours: v.optional(v.number()),
     directCost: v.optional(v.number()),
+    taxAmount: v.optional(v.number()),
+    taxUnknown: v.optional(v.boolean()),
+    amountIncludesTaxes: v.optional(v.boolean()),
+    amountExcludesTaxes: v.optional(v.boolean()),
     hodConfirmed: v.optional(v.boolean()),
     buhConfirmed: v.optional(v.boolean()),
   },
@@ -2775,11 +2838,14 @@ export const updateContestSpecialist = mutation({
     if (!request) {
       throw new Error("Request not found");
     }
-    if (request.category !== "Конкурсное задание") {
-      throw new Error("Редактирование специалистов доступно только для конкурсного задания");
+    if (!supportsRequestSpecialists(request.category)) {
+      throw new Error("Редактирование специалистов доступно только для заявок со специалистами");
     }
-    const isBuh = roleRecord?.roles?.includes("BUH");
-    if (!hasHodAccessToRequest(roleRecord, request) && !roleRecord?.roles?.includes("ADMIN") && !isBuh) {
+    const isFinanceEditor = Boolean(
+      roleRecord?.roles?.some((role: string) => ["BUH", "CFD"].includes(role)),
+    );
+    const isAdmin = Boolean(roleRecord?.roles?.includes("ADMIN"));
+    if (!hasHodAccessToRequest(roleRecord, request) && !isAdmin && !isFinanceEditor) {
       throw new Error("Not authorized");
     }
     const specialists = [...(request.specialists ?? [])];
@@ -2790,19 +2856,25 @@ export const updateContestSpecialist = mutation({
     const current = specialists[index];
     const hodDepartments = roleRecord?.hodDepartments ?? [];
     const nextDepartment = args.department?.trim() || undefined;
+    const isHrHod =
+      roleRecord?.roles?.includes("HOD") &&
+      hodDepartments.includes(HR_DEPARTMENT) &&
+      specialistNeedsHrValidation(current);
     const allowedDepartment =
-      roleRecord?.roles?.includes("ADMIN") ||
-      isBuh ||
+      isAdmin ||
+      isFinanceEditor ||
       hodDepartments.includes(current.department ?? "") ||
-      (current.department === undefined && nextDepartment && hodDepartments.includes(nextDepartment));
+      (current.department === undefined && nextDepartment && hodDepartments.includes(nextDepartment)) ||
+      Boolean(isHrHod);
     if (!allowedDepartment) {
       throw new Error("Можно редактировать только специалистов своего цеха");
     }
     if (
       nextDepartment &&
-      !roleRecord?.roles?.includes("ADMIN") &&
-      !isBuh &&
-      !hodDepartments.includes(nextDepartment)
+      !isAdmin &&
+      !isFinanceEditor &&
+      !hodDepartments.includes(nextDepartment) &&
+      !(isHrHod && nextDepartment === current.department)
     ) {
       throw new Error("Можно выбирать только свои цеха");
     }
@@ -2810,6 +2882,13 @@ export const updateContestSpecialist = mutation({
       ...current,
       name: args.name.trim(),
       department: nextDepartment,
+      contractorTypes: Array.from(
+        new Set(
+          (args.contractorTypes ?? current.contractorTypes ?? [])
+            .map((value) => value?.trim())
+            .filter(Boolean) as string[],
+        ),
+      ),
       hours:
         typeof args.hours === "number" && Number.isFinite(args.hours)
           ? args.hours
@@ -2818,11 +2897,18 @@ export const updateContestSpecialist = mutation({
         typeof args.directCost === "number" && Number.isFinite(args.directCost)
           ? args.directCost
           : undefined,
+      taxAmount:
+        typeof args.taxAmount === "number" && Number.isFinite(args.taxAmount)
+          ? args.taxAmount
+          : undefined,
+      taxUnknown: args.taxUnknown ?? current.taxUnknown ?? false,
+      amountIncludesTaxes: args.amountIncludesTaxes ?? current.amountIncludesTaxes ?? false,
+      amountExcludesTaxes: args.amountExcludesTaxes ?? current.amountExcludesTaxes ?? false,
       hodConfirmed: args.hodConfirmed ?? current.hodConfirmed ?? false,
       buhConfirmed: args.buhConfirmed ?? current.buhConfirmed ?? false,
     };
     specialists[index] = nextSpecialist;
-    const nextAmount = calculateContestAmount("Конкурсное задание", specialists, request.amount);
+    const nextAmount = calculateContestAmount(request.category, specialists, request.amount);
     const nextAmountWithVat = getAmountWithVat(nextAmount, undefined, request.vatRate);
     const updatedApprovals = await ctx.db
       .query("approvals")

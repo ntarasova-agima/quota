@@ -1,8 +1,14 @@
-import { normalizeContestSpecialistSource, requiresContestSpecialistValidation } from "../src/lib/requestFields";
+import {
+  HR_DEPARTMENT,
+  normalizeContestSpecialistSource,
+  requiresContestSpecialistValidation,
+  specialistNeedsHrValidation,
+} from "../src/lib/requestFields";
 import { normalizeHodDepartment } from "../src/lib/departments";
 import {
   isHodSelectableCategory,
   normalizeRequestCategory,
+  supportsRequestSpecialists,
 } from "../src/lib/requestRules";
 
 const FINANCE_LEGAL_DEPARTMENT = "Финансово-юридический отдел";
@@ -15,8 +21,13 @@ export type ApprovalEntryLike = {
 
 export type SpecialistEntryLike = {
   sourceType?: string;
+  contractorTypes?: string[];
   department?: string;
   directCost?: number;
+  taxAmount?: number;
+  taxUnknown?: boolean;
+  amountIncludesTaxes?: boolean;
+  amountExcludesTaxes?: boolean;
   hodConfirmed?: boolean;
   buhConfirmed?: boolean;
   validationSkipped?: boolean;
@@ -33,15 +44,17 @@ export function normalizeDepartmentList(departments: Array<string | undefined | 
   return Array.from(new Set(normalized));
 }
 
-export function getRequiredContestHodDepartments(
+export function getRequiredSpecialistHodDepartments(
   specialists: SpecialistEntryLike[] = [],
 ) {
-  return normalizeDepartmentList(
-    specialists
-      .filter((item) => normalizeContestSpecialistSource(item.sourceType) === "internal")
-      .filter((item) => requiresContestSpecialistValidation(item))
-      .map((item) => item.department),
-  );
+  const departments = specialists
+    .filter((item) => normalizeContestSpecialistSource(item.sourceType) === "internal")
+    .filter((item) => requiresContestSpecialistValidation(item))
+    .map((item) => item.department);
+  if (specialists.some((item) => specialistNeedsHrValidation(item))) {
+    departments.push(HR_DEPARTMENT);
+  }
+  return normalizeDepartmentList(departments);
 }
 
 export function getEffectiveRequiredHodDepartments(params: {
@@ -56,8 +69,8 @@ export function getEffectiveRequiredHodDepartments(params: {
   return normalizeDepartmentList([
     FINANCE_LEGAL_DEPARTMENT,
     ...(params.requiredHodDepartments ?? []),
-    ...(normalizedCategory === "Конкурсное задание"
-      ? getRequiredContestHodDepartments(params.specialists)
+    ...(supportsRequestSpecialists(normalizedCategory)
+      ? getRequiredSpecialistHodDepartments(params.specialists)
       : []),
   ]);
 }
@@ -98,23 +111,44 @@ export function buildApprovalTargets(params: {
   return targets;
 }
 
-export function hasPendingContestValidationForDepartment(
+export function canDepartmentValidateSpecialist(
+  specialist: SpecialistEntryLike,
+  department: string,
+) {
+  const normalizedDepartment = normalizeHodDepartment(department);
+  if (!normalizedDepartment || specialist.validationSkipped) {
+    return false;
+  }
+  if (normalizedDepartment === HR_DEPARTMENT && specialistNeedsHrValidation(specialist)) {
+    return true;
+  }
+  if (!requiresContestSpecialistValidation(specialist)) {
+    return false;
+  }
+  if (
+    normalizeContestSpecialistSource(specialist.sourceType) === "internal" &&
+    normalizeHodDepartment(specialist.department) === normalizedDepartment
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function hasPendingSpecialistValidationForDepartment(
   request: { category: string; specialists?: SpecialistEntryLike[] },
   department: string,
 ) {
-  if (normalizeRequestCategory(request.category) !== "Конкурсное задание") {
+  if (!supportsRequestSpecialists(request.category)) {
     return false;
   }
   return (request.specialists ?? []).some(
     (item) =>
-      normalizeContestSpecialistSource(item.sourceType) === "internal" &&
-      requiresContestSpecialistValidation(item) &&
-      normalizeHodDepartment(item.department) === normalizeHodDepartment(department) &&
+      canDepartmentValidateSpecialist(item, department) &&
       (!(item.hodConfirmed || item.buhConfirmed) || item.directCost === undefined),
   );
 }
 
-export function getPendingContestValidationDepartments(
+export function getPendingSpecialistValidationDepartments(
   request: { category: string; specialists?: SpecialistEntryLike[]; requiredHodDepartments?: string[] },
 ) {
   const relevantDepartments = getEffectiveRequiredHodDepartments({
@@ -123,7 +157,7 @@ export function getPendingContestValidationDepartments(
     specialists: request.specialists,
   });
   return relevantDepartments.filter((department) =>
-    hasPendingContestValidationForDepartment(request, department),
+    hasPendingSpecialistValidationForDepartment(request, department),
   );
 }
 
@@ -137,8 +171,8 @@ export function getRequestApprovalStatus(params: {
     return "rejected" as const;
   }
   if (
-    normalizeRequestCategory(params.category) === "Конкурсное задание" &&
-    getPendingContestValidationDepartments({
+    supportsRequestSpecialists(params.category) &&
+    getPendingSpecialistValidationDepartments({
       category: params.category,
       specialists: params.specialists,
       requiredHodDepartments: params.requiredHodDepartments,
