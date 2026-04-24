@@ -36,20 +36,32 @@ export default function ProfileClient() {
     setEmail(profile.email ?? "");
   }, [profile]);
 
+  function clearStoredAuthState() {
+    if (typeof window === "undefined") {
+      return;
+    }
+    sessionStorage.removeItem("auth_code");
+    sessionStorage.removeItem("auth_email");
+  }
+
+  function redirectToSignIn() {
+    if (typeof window !== "undefined") {
+      window.location.replace("/sign-in");
+      return;
+    }
+    router.replace("/sign-in");
+  }
+
   async function handleSignOut() {
     setLoading(true);
     setError(null);
     try {
       await signOut();
-      if (typeof window !== "undefined") {
-        sessionStorage.removeItem("auth_code");
-        sessionStorage.removeItem("auth_email");
-      }
-      router.replace("/sign-in");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось выйти");
+      console.error("Aurum sign-out failed, falling back to local redirect", err);
     } finally {
-      setLoading(false);
+      clearStoredAuthState();
+      redirectToSignIn();
     }
   }
 
