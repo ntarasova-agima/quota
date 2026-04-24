@@ -2838,6 +2838,9 @@ export const updateContestSpecialist = mutation({
     if (!request) {
       throw new Error("Request not found");
     }
+    if (request.isCanceled) {
+      throw new Error("Сначала возобновите заявку");
+    }
     if (!supportsRequestSpecialists(request.category)) {
       throw new Error("Редактирование специалистов доступно только для заявок со специалистами");
     }
@@ -2914,12 +2917,20 @@ export const updateContestSpecialist = mutation({
       .query("approvals")
       .withIndex("by_request", (q) => q.eq("requestId", request._id))
       .collect();
-    const nextStatus = getRequestApprovalStatus({
+    const approvalStatus = getRequestApprovalStatus({
       category: request.category,
       specialists,
       requiredHodDepartments: request.requiredHodDepartments,
       approvals: updatedApprovals,
     });
+    const preservesPaymentStatus = [
+      "awaiting_payment",
+      "payment_planned",
+      "partially_paid",
+      "paid",
+      "closed",
+    ].includes(request.status);
+    const nextStatus = preservesPaymentStatus ? request.status : approvalStatus;
     const releasedFromHodPending = request.status === "hod_pending" && nextStatus !== "hod_pending";
     await ctx.db.patch(request._id, {
       specialists,
