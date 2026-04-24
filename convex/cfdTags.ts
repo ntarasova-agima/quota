@@ -5,8 +5,8 @@ import { getCurrentEmail } from "./authHelpers";
 import { HOD_DEPARTMENTS, normalizeHodDepartment } from "../src/lib/departments";
 import {
   ACCOUNTING_REQUEST_AREA,
-  TRANSIT_DEPARTMENT,
   TRANSIT_TAG_NAME,
+  getRequestAreaForDepartment,
 } from "../src/lib/requestRules";
 
 async function getTagAccess(ctx: any) {
@@ -97,25 +97,44 @@ export const list = query({
         ...row,
         department: normalizeHodDepartment(row.department),
       }));
-    const shouldIncludeTransit =
-      !normalizedDepartment || normalizedDepartment === TRANSIT_DEPARTMENT;
-    const hasTransit = result.some(
-      (row) =>
-        row.name === TRANSIT_TAG_NAME &&
-        normalizeHodDepartment(row.department) === TRANSIT_DEPARTMENT,
-    );
-    if (shouldIncludeTransit && !hasTransit) {
+    const systemTransitDepartments =
+      normalizedDepartment &&
+      HOD_DEPARTMENTS.includes(normalizedDepartment as any) &&
+      (access.canViewAll || access.visibleDepartments.includes(normalizedDepartment))
+        ? [normalizedDepartment]
+        : [];
+    if (!normalizedDepartment && !result.some((row) => row.name === TRANSIT_TAG_NAME)) {
       result.push({
         _id: "system-transit-tag" as any,
         _creationTime: 0,
         name: TRANSIT_TAG_NAME,
-        requestArea: ACCOUNTING_REQUEST_AREA,
-        department: TRANSIT_DEPARTMENT,
+        requestArea: undefined,
+        department: undefined,
         active: true,
         createdAt: 0,
         updatedAt: 0,
         isSystem: true,
       });
+    }
+    for (const department of systemTransitDepartments) {
+      const hasTransit = result.some(
+        (row) =>
+          row.name === TRANSIT_TAG_NAME &&
+          normalizeHodDepartment(row.department) === department,
+      );
+      if (!hasTransit) {
+        result.push({
+          _id: `system-transit-tag-${department}` as any,
+          _creationTime: 0,
+          name: TRANSIT_TAG_NAME,
+          requestArea: getRequestAreaForDepartment(department),
+          department,
+          active: true,
+          createdAt: 0,
+          updatedAt: 0,
+          isSystem: true,
+        });
+      }
     }
     return result.sort((a, b) => {
       const departmentCompare = (a.department ?? "").localeCompare(b.department ?? "", "ru");

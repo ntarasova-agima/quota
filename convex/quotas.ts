@@ -6,7 +6,6 @@ import { sumQuotaUsageByMonth, sumQuotaUsageByMonthAndTag } from "./quotaUsage";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
-  TRANSIT_TAG_NAME,
   isAgimaQuotaFundingSource,
   isAiToolsFundingSource,
   normalizeRequestCategory,
@@ -702,11 +701,6 @@ export const listAdministrationByMonthKeys = query({
         list.push(tag.name);
       }
       activeTagsByDepartment.set(department, list);
-    }
-    const transitTags = activeTagsByDepartment.get("Транзит") ?? [];
-    if (!transitTags.includes(TRANSIT_TAG_NAME)) {
-      transitTags.push(TRANSIT_TAG_NAME);
-      activeTagsByDepartment.set("Транзит", transitTags);
     }
     return args.monthKeys.map((key) => {
       const { year, month } = monthInfoFromKey(key);

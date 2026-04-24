@@ -19,7 +19,6 @@ export const PURCHASE_CATEGORY = "Закупка";
 export const CONTRACTOR_PAYMENT_CATEGORY = "Оплата подрядчика";
 export const ACCOUNTING_REQUEST_AREA = "Аккаунтинг";
 export const ADMINISTRATION_REQUEST_AREA = "Администрация";
-export const TRANSIT_DEPARTMENT = "Транзит";
 export const TRANSIT_TAG_NAME = "Транзит";
 
 export const ACCOUNTING_REQUEST_CATEGORIES = [
@@ -102,18 +101,18 @@ export function normalizeRequestCategory(category: string) {
 export function getRequestAreaForCategory(category: string) {
   const normalizedCategory = normalizeRequestCategory(category);
   if (
-    ACCOUNTING_REQUEST_CATEGORIES.includes(
-      normalizedCategory as (typeof ACCOUNTING_REQUEST_CATEGORIES)[number],
+    TRANSIT_REQUEST_CATEGORIES.includes(
+      normalizedCategory as (typeof TRANSIT_REQUEST_CATEGORIES)[number],
     )
   ) {
     return ACCOUNTING_REQUEST_AREA;
   }
   if (
-    TRANSIT_REQUEST_CATEGORIES.includes(
-      normalizedCategory as (typeof TRANSIT_REQUEST_CATEGORIES)[number],
+    ACCOUNTING_REQUEST_CATEGORIES.includes(
+      normalizedCategory as (typeof ACCOUNTING_REQUEST_CATEGORIES)[number],
     )
   ) {
-    return TRANSIT_DEPARTMENT;
+    return ACCOUNTING_REQUEST_AREA;
   }
   if (
     ADMINISTRATION_REQUEST_CATEGORIES.includes(
@@ -201,20 +200,14 @@ export function isFundingSourceAllowedForCategory(category: string, fundingSourc
 
 export function getCategoriesForDepartment(department: string) {
   if (department === ACCOUNTING_REQUEST_AREA) {
-    return ACCOUNTING_REQUEST_CATEGORIES;
+    return [...ACCOUNTING_REQUEST_CATEGORIES, ...TRANSIT_REQUEST_CATEGORIES] as const;
   }
-  if (department === TRANSIT_DEPARTMENT) {
-    return TRANSIT_REQUEST_CATEGORIES;
-  }
-  return ADMINISTRATION_REQUEST_CATEGORIES;
+  return [...ADMINISTRATION_REQUEST_CATEGORIES, ...TRANSIT_REQUEST_CATEGORIES] as const;
 }
 
 export function getRequestAreaForDepartment(department?: string | null) {
   if (department === ACCOUNTING_REQUEST_AREA) {
     return ACCOUNTING_REQUEST_AREA;
-  }
-  if (department === TRANSIT_DEPARTMENT) {
-    return TRANSIT_DEPARTMENT;
   }
   return ADMINISTRATION_REQUEST_AREA;
 }
