@@ -1,8 +1,8 @@
 import {
-  HR_DEPARTMENT,
+  PERSONNEL_DEPARTMENT,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
-  specialistNeedsHrValidation,
+  specialistNeedsPersonnelValidation,
 } from "../src/lib/requestFields";
 import { normalizeHodDepartment } from "../src/lib/departments";
 import {
@@ -51,8 +51,8 @@ export function getRequiredSpecialistHodDepartments(
     .filter((item) => normalizeContestSpecialistSource(item.sourceType) === "internal")
     .filter((item) => requiresContestSpecialistValidation(item))
     .map((item) => item.department);
-  if (specialists.some((item) => specialistNeedsHrValidation(item))) {
-    departments.push(HR_DEPARTMENT);
+  if (specialists.some((item) => specialistNeedsPersonnelValidation(item))) {
+    departments.push(PERSONNEL_DEPARTMENT);
   }
   return normalizeDepartmentList(departments);
 }
@@ -119,7 +119,7 @@ export function canDepartmentValidateSpecialist(
   if (!normalizedDepartment || specialist.validationSkipped) {
     return false;
   }
-  if (normalizedDepartment === HR_DEPARTMENT && specialistNeedsHrValidation(specialist)) {
+  if (normalizedDepartment === PERSONNEL_DEPARTMENT && specialistNeedsPersonnelValidation(specialist)) {
     return true;
   }
   if (!requiresContestSpecialistValidation(specialist)) {

@@ -202,10 +202,19 @@ export default function ContestParticipantsEditor({
                       checked={checked}
                       disabled={disabled}
                       onCheckedChange={(nextChecked) =>
-                        updateRow(item.id, (row) => ({
-                          ...row,
-                          [option.key]: nextChecked === true,
-                        }))
+                        updateRow(item.id, (row) => {
+                          const nextRow = {
+                            ...row,
+                            [option.key]: nextChecked === true,
+                          };
+                          if (option.key === "amountIncludesTaxes" && nextChecked === true) {
+                            nextRow.amountExcludesTaxes = false;
+                          }
+                          if (option.key === "amountExcludesTaxes" && nextChecked === true) {
+                            nextRow.amountIncludesTaxes = false;
+                          }
+                          return nextRow;
+                        })
                       }
                     />
                     {option.label}

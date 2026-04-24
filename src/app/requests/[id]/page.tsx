@@ -28,10 +28,10 @@ import {
   formatIncomingRatio,
   formatMonthKeyLabel,
   getSpecialistEffectiveCost,
-  HR_DEPARTMENT,
+  PERSONNEL_DEPARTMENT,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
-  specialistNeedsHrValidation,
+  specialistNeedsPersonnelValidation,
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
@@ -959,10 +959,10 @@ export default function RequestDetailPage() {
       (request.specialists ?? []).some(
         (item) =>
           (requiresContestSpecialistValidation(item) ||
-            specialistNeedsHrValidation(item)) &&
+            specialistNeedsPersonnelValidation(item)) &&
           (
             (item.department && (data.hodDepartments ?? []).includes(item.department)) ||
-            (data.hodDepartments ?? []).includes(HR_DEPARTMENT)
+            (data.hodDepartments ?? []).includes(PERSONNEL_DEPARTMENT)
           ) &&
           (!item.hodConfirmed || item.directCost === undefined),
       ),
@@ -2954,16 +2954,16 @@ export default function RequestDetailPage() {
                           const canBuhValidateThis =
                             !item.validationSkipped &&
                             (myRoles.includes("BUH") || myRoles.includes("CFD") || isAdmin);
-                          const canHrValidateThis =
+                          const canPersonnelValidateThis =
                             !item.validationSkipped &&
                             data.canHodEditSpecialists &&
-                            (data.hodDepartments ?? []).includes(HR_DEPARTMENT) &&
-                            specialistNeedsHrValidation(item);
+                            (data.hodDepartments ?? []).includes(PERSONNEL_DEPARTMENT) &&
+                            specialistNeedsPersonnelValidation(item);
                           const canHodValidateThis =
                             !item.validationSkipped &&
                             data.canHodEditSpecialists &&
                             (
-                              canHrValidateThis ||
+                              canPersonnelValidateThis ||
                               (item.department
                                 ? (data.hodDepartments ?? []).includes(item.department)
                                 : true)
@@ -3125,10 +3125,19 @@ export default function RequestDetailPage() {
                                           onCheckedChange={(checkedValue) =>
                                             setSpecialistDrafts((current) => ({
                                               ...current,
-                                              [item.id]: {
-                                                ...draft,
-                                                [option.key]: checkedValue === true,
-                                              },
+                                              [item.id]: (() => {
+                                                const nextDraft = {
+                                                  ...draft,
+                                                  [option.key]: checkedValue === true,
+                                                };
+                                                if (option.key === "amountIncludesTaxes" && checkedValue === true) {
+                                                  nextDraft.amountExcludesTaxes = false;
+                                                }
+                                                if (option.key === "amountExcludesTaxes" && checkedValue === true) {
+                                                  nextDraft.amountIncludesTaxes = false;
+                                                }
+                                                return nextDraft;
+                                              })(),
                                             }))
                                           }
                                         />
@@ -3248,7 +3257,7 @@ export default function RequestDetailPage() {
                                   ? "Цех не получает задачу на валидацию по этой записи."
                                   : item.hodConfirmed || item.buhConfirmed
                                     ? `Прямые затраты подтверждены${item.hodConfirmed ? " руководителем цеха" : ""}${item.hodConfirmed && item.buhConfirmed ? " и" : ""}${item.buhConfirmed ? " BUH" : ""}.`
-                                    : canHrValidateThis
+                                    : canPersonnelValidateThis
                                       ? "Ждет валидации руководителя цеха, Отдела кадров или BUH."
                                       : "Ждет валидации руководителя цеха или BUH."}
                               </div>

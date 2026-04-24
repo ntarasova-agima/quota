@@ -37,11 +37,11 @@ import {
   formatIncomingRatio,
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
-  HR_DEPARTMENT,
+  PERSONNEL_DEPARTMENT,
   isPaidByDateAllowed,
   monthKeyToDateInput,
   normalizeContestSpecialistSource,
-  specialistNeedsHrValidation,
+  specialistNeedsPersonnelValidation,
   timestampToDateInput,
 } from "@/lib/requestFields";
 import {
@@ -412,8 +412,8 @@ export default function NewRequestPage() {
                   .map((item) => item.department as string)
               : []),
             ...(requestSupportsSpecialists &&
-            specialistsPayload.some((item) => specialistNeedsHrValidation(item))
-              ? [HR_DEPARTMENT]
+            specialistsPayload.some((item) => specialistNeedsPersonnelValidation(item))
+              ? [PERSONNEL_DEPARTMENT]
               : []),
             ...(isHodSelectableCategory(category) && selectedDepartment ? [selectedDepartment] : []),
           ],

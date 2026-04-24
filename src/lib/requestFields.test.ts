@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isContestSpecialistValidated } from "./requestFields";
+import { hasConflictingSpecialistTaxFlags, isContestSpecialistValidated } from "./requestFields";
 
 describe("requestFields", () => {
-  it("requires HR validation for GPH contractors even without a department", () => {
+  it("requires personnel department validation for GPH contractors even without a department", () => {
     expect(
       isContestSpecialistValidated({
         sourceType: "contractor",
@@ -19,5 +19,19 @@ describe("requestFields", () => {
         hodConfirmed: true,
       }),
     ).toBe(true);
+  });
+
+  it("keeps known tax composition mutually exclusive", () => {
+    expect(
+      hasConflictingSpecialistTaxFlags({
+        amountIncludesTaxes: true,
+        amountExcludesTaxes: true,
+      }),
+    ).toBe(true);
+    expect(
+      hasConflictingSpecialistTaxFlags({
+        amountIncludesTaxes: true,
+      }),
+    ).toBe(false);
   });
 });

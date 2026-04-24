@@ -37,9 +37,9 @@ import {
   formatIncomingRatio,
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
-  HR_DEPARTMENT,
+  PERSONNEL_DEPARTMENT,
   isPaidByDateAllowed,
-  specialistNeedsHrValidation,
+  specialistNeedsPersonnelValidation,
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
@@ -288,8 +288,8 @@ export default function NewRequestPage() {
                   .map((item) => item.department as string)
               : []),
             ...(requestSupportsSpecialists &&
-            specialistsPayload.some((item) => specialistNeedsHrValidation(item))
-              ? [HR_DEPARTMENT]
+            specialistsPayload.some((item) => specialistNeedsPersonnelValidation(item))
+              ? [PERSONNEL_DEPARTMENT]
               : []),
             ...(isHodSelectableCategory(category) && selectedDepartment ? [selectedDepartment] : []),
           ],
