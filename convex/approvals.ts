@@ -240,6 +240,9 @@ export const decide = mutation({
     if (!request) {
       throw new Error("Request not found");
     }
+    if (request.isCanceled) {
+      throw new Error("Сначала возобновите заявку");
+    }
     if (request.status === "draft") {
       throw new Error("Cannot decide on a draft request");
     }
@@ -521,6 +524,9 @@ export const adminApproveAsRole = mutation({
     const request = await ctx.db.get(args.requestId);
     if (!request) {
       throw new Error("Request not found");
+    }
+    if (request.isCanceled) {
+      throw new Error("Сначала возобновите заявку");
     }
     if (!request.requiredRoles.includes(args.role)) {
       throw new Error("Role not required for this request");
