@@ -54,6 +54,7 @@ import {
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
+  usesServiceRecipientLabel,
 } from "@/lib/requestRules";
 import { normalizeHodDepartment } from "@/lib/departments";
 import {
@@ -217,6 +218,7 @@ export default function NewRequestPage() {
     "h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left *:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:pr-6 *:data-[slot=select-value]:whitespace-normal *:data-[slot=select-value]:break-words *:data-[slot=select-value]:leading-snug";
   const headerFieldLabelClass = "min-h-11 items-start leading-snug";
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
+  const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(category), [category]);
   const selectedDepartment = requestArea;
   const categoryOptions = useMemo(
     () => getCategoriesForDepartment(selectedDepartment),
@@ -974,9 +976,9 @@ export default function NewRequestPage() {
                 </div>
                 <div className="space-y-2 sm:col-span-3">
                   <FieldLabel htmlFor="clientName" required>
-                    {isServiceCategory ? "Получатель сервиса" : "Клиент"}
+                    {usesServiceRecipient ? "Получатель сервиса" : "Клиент"}
                   </FieldLabel>
-                  {isServiceCategory ? (
+                  {usesServiceRecipient ? (
                     <p className="text-xs text-muted-foreground">
                       Имя сотрудника или наименование отдела
                     </p>

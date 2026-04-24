@@ -9,7 +9,7 @@ import {
   TRANSIT_TAG_NAME,
 } from "../src/lib/requestRules";
 
-async function ensureCfdOrAdmin(ctx: any) {
+async function getTagAccess(ctx: any) {
   const userId = await getAuthUserId(ctx);
   if (!userId) {
     throw new Error("Not authenticated");
@@ -22,10 +22,22 @@ async function ensureCfdOrAdmin(ctx: any) {
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const canManage = record?.roles?.some((role: string) => ["CFD", "ADMIN", "BUH"].includes(role));
-  if (!canManage) {
+  const canManageAll = record?.roles?.some((role: string) => ["CFD", "ADMIN", "BUH", "COO"].includes(role));
+  const managedDepartments = (record?.hodDepartments ?? [])
+    .map((department: string) => normalizeHodDepartment(department))
+    .filter((department: string | undefined): department is string =>
+      Boolean(department && HOD_DEPARTMENTS.includes(department as any)),
+    );
+  const canManageOwnDepartments = record?.roles?.includes("HOD") && managedDepartments.length > 0;
+  if (!canManageAll && !canManageOwnDepartments) {
     throw new Error("Not authorized");
   }
+  return {
+    email,
+    record,
+    canManageAll: Boolean(canManageAll),
+    managedDepartments,
+  };
 }
 
 async function ensureCanViewTags(ctx: any) {
@@ -47,6 +59,17 @@ async function ensureCanViewTags(ctx: any) {
   if (!canView) {
     throw new Error("Not authorized");
   }
+  return {
+    record,
+    canViewAll: record?.roles?.some((role: string) => ["CFD", "ADMIN", "COO", "BUH"].includes(role)),
+    visibleDepartments: record?.roles?.some((role: string) => ["CFD", "ADMIN", "COO", "BUH"].includes(role))
+      ? HOD_DEPARTMENTS
+      : (record?.hodDepartments ?? [])
+          .map((department: string) => normalizeHodDepartment(department))
+          .filter((department: string | undefined): department is string =>
+            Boolean(department && HOD_DEPARTMENTS.includes(department as any)),
+          ),
+  };
 }
 
 export const list = query({
@@ -55,16 +78,20 @@ export const list = query({
     department: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ensureCanViewTags(ctx);
+    const access = await ensureCanViewTags(ctx);
     const normalizedDepartment = normalizeHodDepartment(args.department);
     const rows = await ctx.db.query("cfdTags").withIndex("by_name").collect();
     const result: any[] = rows
       .filter((row) => row.active)
       .filter((row) => {
+        const department = normalizeHodDepartment(row.department);
+        if (!access.canViewAll && department && !access.visibleDepartments.includes(department)) {
+          return false;
+        }
         if (!normalizedDepartment) {
           return true;
         }
-        return normalizeHodDepartment(row.department) === normalizedDepartment;
+        return department === normalizedDepartment;
       })
       .map((row) => ({
         ...row,
@@ -104,7 +131,7 @@ export const create = mutation({
     department: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ensureCfdOrAdmin(ctx);
+    const access = await getTagAccess(ctx);
     const name = args.name.trim();
     const department = normalizeHodDepartment(args.department);
     const requestArea = args.requestArea?.trim() || ACCOUNTING_REQUEST_AREA;
@@ -113,6 +140,9 @@ export const create = mutation({
     }
     if (!department || !HOD_DEPARTMENTS.includes(department as any)) {
       throw new Error("Укажите цех для тега");
+    }
+    if (!access.canManageAll && !access.managedDepartments.includes(department)) {
+      throw new Error("Недостаточно прав для этого цеха");
     }
     const now = Date.now();
     const existing = (await ctx.db.query("cfdTags").collect()).find(
@@ -145,10 +175,18 @@ export const remove = mutation({
     id: v.id("cfdTags"),
   },
   handler: async (ctx, args) => {
-    await ensureCfdOrAdmin(ctx);
+    const access = await getTagAccess(ctx);
     const existing = await ctx.db.get(args.id);
     if (!existing) {
       return { deleted: false };
+    }
+    const department = normalizeHodDepartment(existing.department);
+    if (
+      department &&
+      !access.canManageAll &&
+      !access.managedDepartments.includes(department)
+    ) {
+      throw new Error("Недостаточно прав для этого цеха");
     }
     await ctx.db.patch(args.id, {
       active: false,

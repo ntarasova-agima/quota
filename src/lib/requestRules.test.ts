@@ -28,6 +28,7 @@ import {
   normalizeFundingSource,
   normalizeRequestCategory,
   shouldSkipQuotaByTag,
+  usesServiceRecipientLabel,
 } from "./requestRules";
 
 describe("requestRules", () => {
@@ -92,8 +93,10 @@ describe("requestRules", () => {
 
   it("recognizes service recipient and legacy AI categories", () => {
     expect(isServiceRecipientCategory(PURCHASE_CATEGORY)).toBe(false);
+    expect(usesServiceRecipientLabel(PURCHASE_CATEGORY)).toBe(true);
     expect(isServiceRecipientCategory(LEGACY_SERVICE_PURCHASE_CATEGORY)).toBe(true);
     expect(isServiceRecipientCategory(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(false);
+    expect(usesServiceRecipientLabel(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(false);
     expect(isAiToolsRequestCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe(true);
     expect(isAiToolsRequestCategory(PURCHASE_CATEGORY)).toBe(false);
   });

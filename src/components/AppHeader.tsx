@@ -34,7 +34,7 @@ export default function AppHeader({
   const isBuh = profile?.roles?.includes("BUH");
   const isHod = profile?.roles?.includes("HOD");
   const isAdmin = profile?.roles?.includes("ADMIN");
-  const canManageTags = Boolean(isCfd || isBuh || isAdmin);
+  const canManageTags = Boolean(isCfd || isBuh || isCoo || isHod || isAdmin);
   const canSeeAdministrationQuota = Boolean(isCfd || isBuh || isCoo || isHod || isAdmin);
   const requestView = searchParams.get("view") ?? "my";
 

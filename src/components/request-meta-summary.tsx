@@ -1,7 +1,7 @@
 "use client";
 
 import { HoverHint } from "@/components/ui/hover-hint";
-import { isServiceRecipientCategory, normalizeRequestCategory } from "@/lib/requestRules";
+import { normalizeRequestCategory, usesServiceRecipientLabel } from "@/lib/requestRules";
 import { formatAmountPair } from "@/lib/vat";
 import { cn } from "@/lib/utils";
 
@@ -27,7 +27,7 @@ export default function RequestMetaSummary({
   className,
 }: RequestMetaSummaryProps) {
   const normalizedCategory = normalizeRequestCategory(category);
-  const ownerLabel = isServiceRecipientCategory(category) ? "Получатель сервиса" : "Клиент";
+  const ownerLabel = usesServiceRecipientLabel(category) ? "Получатель сервиса" : "Клиент";
 
   return (
     <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground", className)}>

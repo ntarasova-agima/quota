@@ -7,7 +7,7 @@ import {
   getApprovalRecipientsForTargets,
 } from "../src/lib/approvalRecipients";
 import { normalizeContestSpecialistSource, requiresContestSpecialistValidation } from "../src/lib/requestFields";
-import { isServiceRecipientCategory } from "../src/lib/requestRules";
+import { usesServiceRecipientLabel } from "../src/lib/requestRules";
 import { formatAmountPair } from "../src/lib/vat";
 
 const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
@@ -54,7 +54,7 @@ function formatApprovalStatusLabel(status: string) {
 }
 
 function getRequestOwnerLabel(request: { category: string; clientName: string }) {
-  return isServiceRecipientCategory(request.category)
+  return usesServiceRecipientLabel(request.category)
     ? {
         label: "Получатель сервиса",
         value: request.clientName,

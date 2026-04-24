@@ -14,7 +14,7 @@ export const LEGACY_AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент\\под
 export const AI_TOOLS_REQUEST_CATEGORY = "AI-инструмент/подписка";
 export const LEGACY_CLIENT_SERVICES_TRANSIT_CATEGORY = "Сервисы/транзиты для клиентов";
 export const LEGACY_PROJECT_TRANSIT_CATEGORY = "Транзиты для проектов";
-export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Транзиты для клиентов";
+export const CLIENT_SERVICES_TRANSIT_CATEGORY = "Транзит";
 export const PURCHASE_CATEGORY = "Закупка";
 export const CONTRACTOR_PAYMENT_CATEGORY = "Оплата подрядчика";
 export const ACCOUNTING_REQUEST_AREA = "Аккаунтинг";
@@ -140,6 +140,11 @@ export function isServiceRecipientCategory(category: string) {
     AI_TOOLS_REQUEST_CATEGORY,
     LEGACY_AI_TOOLS_REQUEST_CATEGORY,
   ].includes(category);
+}
+
+export function usesServiceRecipientLabel(category: string) {
+  const normalizedCategory = normalizeRequestCategory(category);
+  return normalizedCategory === PURCHASE_CATEGORY || isServiceRecipientCategory(category);
 }
 
 export function isHodSelectableCategory(category: string) {

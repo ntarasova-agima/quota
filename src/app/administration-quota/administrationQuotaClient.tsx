@@ -14,6 +14,7 @@ import { HOD_DEPARTMENTS } from "@/lib/constants";
 import {
   DEFAULT_VAT_RATE,
   formatAmount,
+  getAmountWithVat,
   parseMoneyInput,
   resolveVatAmounts,
   sanitizeNumericInput,
@@ -42,6 +43,8 @@ type QuotaEditableRow = {
   quota: number;
   quotaWithVat?: number;
   vatRate?: number;
+  manualSpent?: number;
+  manualSpentWithVat?: number;
   spent: number;
   spentWithVat?: number;
   remaining: number;
@@ -49,17 +52,23 @@ type QuotaEditableRow = {
   distributed?: number;
   unallocated?: number;
   issues?: string[];
+  canEdit?: boolean;
+  canEditManualSpent?: boolean;
 };
 
 type HistoryEvent = {
   key: string;
-  type: "quota_change" | "request_usage";
+  type: "quota_change" | "manual_spent_change" | "request_usage";
   monthKey: string;
   level?: "total" | "department" | "tag";
   departmentKey?: string;
   tagName?: string;
   fromQuota?: number;
   toQuota?: number;
+  fromManualSpent?: number;
+  toManualSpent?: number;
+  fromManualSpentWithVat?: number;
+  toManualSpentWithVat?: number;
   amountWithoutVat?: number;
   amountWithVat?: number;
   actorEmail?: string;
@@ -87,6 +96,7 @@ function RowEditor({
   expanded = false,
   onToggleExpand,
   onSave,
+  onSaveManualSpent,
 }: {
   row: QuotaEditableRow;
   canEdit: boolean;
@@ -96,9 +106,11 @@ function RowEditor({
   expanded?: boolean;
   onToggleExpand?: () => void;
   onSave: (row: QuotaEditableRow, values: { quota: number; quotaWithVat: number; vatRate: number }) => Promise<void>;
+  onSaveManualSpent?: (row: QuotaEditableRow, values: { manualSpent: number; manualSpentWithVat: number }) => Promise<void>;
 }) {
   const [quota, setQuota] = useState(String(row.quota ?? 0));
   const [quotaWithVat, setQuotaWithVat] = useState(String(row.quotaWithVat ?? row.quota ?? 0));
+  const [manualSpent, setManualSpent] = useState(String(row.manualSpent ?? 0));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const vatRate = row.vatRate ?? DEFAULT_VAT_RATE;
@@ -106,7 +118,8 @@ function RowEditor({
   useEffect(() => {
     setQuota(String(row.quota ?? 0));
     setQuotaWithVat(String(row.quotaWithVat ?? row.quota ?? 0));
-  }, [row.quota, row.quotaWithVat]);
+    setManualSpent(String(row.manualSpent ?? 0));
+  }, [row.manualSpent, row.quota, row.quotaWithVat]);
 
   async function saveIfChanged() {
     if (!canEdit || saving) {
@@ -137,6 +150,33 @@ function RowEditor({
       });
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Не удалось сохранить квоту");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveManualSpentIfChanged() {
+    if (!row.canEditManualSpent || saving || !onSaveManualSpent) {
+      return;
+    }
+    setSaveError(null);
+    const nextManualSpent = parseMoneyInput(manualSpent) ?? 0;
+    const nextManualSpentWithVat =
+      getAmountWithVat(nextManualSpent, undefined, vatRate) ?? nextManualSpent;
+    if (
+      nextManualSpent === (row.manualSpent ?? 0) &&
+      nextManualSpentWithVat === (row.manualSpentWithVat ?? nextManualSpentWithVat)
+    ) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSaveManualSpent(row, {
+        manualSpent: nextManualSpent,
+        manualSpentWithVat: nextManualSpentWithVat,
+      });
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Не удалось сохранить ручное списание");
     } finally {
       setSaving(false);
     }
@@ -223,6 +263,17 @@ function RowEditor({
           {saving ? <div className="text-xs text-emerald-700">Сохраняю...</div> : null}
         </div>
       </div>
+      {row.canEditManualSpent ? (
+        <div className="mt-3 max-w-xs space-y-1" onClick={stopToggle}>
+          <Label>Потрачено без заявок</Label>
+          <Input
+            value={manualSpent}
+            inputMode="decimal"
+            onBlur={saveManualSpentIfChanged}
+            onChange={(event) => setManualSpent(sanitizeNumericInput(event.target.value))}
+          />
+        </div>
+      ) : null}
       {row.unallocated !== undefined ? (
         <div className="mt-3 rounded-lg bg-white/70 px-3 py-2 text-sm text-muted-foreground">
           Не распределено: {formatAmount(row.unallocated)} без НДС
@@ -265,6 +316,7 @@ export default function AdministrationQuotaClient() {
     department: departmentFilter === "all" ? undefined : departmentFilter,
   });
   const updateQuota = useMutation(api.quotas.updateAdministrationQuota);
+  const updateManualSpent = useMutation(api.quotas.updateAdministrationManualSpent);
 
   return (
     <div className="space-y-4">
@@ -334,7 +386,11 @@ export default function AdministrationQuotaClient() {
               history.map((event) => (
                 <div key={event.key} className="rounded-xl border border-border px-4 py-3 text-sm">
                   <div className="font-medium">
-                    {event.type === "quota_change" ? "Изменение квоты" : "Списание по заявке"}
+                    {event.type === "quota_change"
+                      ? "Изменение квоты"
+                      : event.type === "manual_spent_change"
+                        ? "Ручное списание"
+                        : "Списание по заявке"}
                   </div>
                   <div className="text-muted-foreground">
                     {formatEventMonth(event.monthKey)}
@@ -344,6 +400,10 @@ export default function AdministrationQuotaClient() {
                   {event.type === "quota_change" ? (
                     <div>
                       {formatAmount(event.fromQuota ?? 0)} → {formatAmount(event.toQuota ?? 0)}
+                    </div>
+                  ) : event.type === "manual_spent_change" ? (
+                    <div>
+                      {formatAmount(event.fromManualSpent ?? 0)} → {formatAmount(event.toManualSpent ?? 0)}
                     </div>
                   ) : (
                     <div>
@@ -417,13 +477,13 @@ export default function AdministrationQuotaClient() {
                       row={{ ...month.total, monthKey: month.monthKey, departmentKey: "__total__" }}
                       label="Общая квота AGIMA"
                       tone="total"
-                      canEdit={month.canEdit}
+                      canEdit={Boolean(month.total.canEdit)}
                       onSave={async (row, values) => {
                         await updateQuota({ monthKey: row.monthKey, departmentKey: row.departmentKey, ...values });
                       }}
                     />
                   ) : null}
-                  {month.departments.map((department) => {
+                  {month.departments.map((department: QuotaEditableRow & { departmentName?: string; tags: QuotaEditableRow[] }) => {
                     const departmentKey = `${month.monthKey}:${department.departmentKey}`;
                     const departmentExpanded = expandedDepartments[departmentKey] ?? false;
                     return (
@@ -443,7 +503,7 @@ export default function AdministrationQuotaClient() {
                                   }))
                               : undefined
                           }
-                          canEdit={month.canEdit}
+                          canEdit={Boolean(department.canEdit)}
                           onSave={async (row, values) => {
                             await updateQuota({ monthKey: row.monthKey, departmentKey: row.departmentKey, ...values });
                           }}
@@ -451,18 +511,26 @@ export default function AdministrationQuotaClient() {
                         {departmentExpanded ? (
                           <div className="ml-4 space-y-2 border-l border-zinc-100 pl-4">
                             {department.tags.length ? (
-                              department.tags.map((tag) => (
+                              department.tags.map((tag: QuotaEditableRow) => (
                                 <RowEditor
                                   key={`${month.monthKey}-${department.departmentKey}-${tag.tagName}`}
                                   row={tag}
                                   label={tag.tagName ?? "Без тега"}
                                   tone="tag"
-                                  canEdit={month.canEdit && tag.tagName !== "Без тега"}
+                                  canEdit={Boolean(tag.canEdit) && tag.tagName !== "Без тега"}
                                   onSave={async (row, values) => {
                                     await updateQuota({
                                       monthKey: row.monthKey,
                                       departmentKey: row.departmentKey,
                                       tagName: row.tagName,
+                                      ...values,
+                                    });
+                                  }}
+                                  onSaveManualSpent={async (row, values) => {
+                                    await updateManualSpent({
+                                      monthKey: row.monthKey,
+                                      departmentKey: row.departmentKey,
+                                      tagName: row.tagName ?? "",
                                       ...values,
                                     });
                                   }}
