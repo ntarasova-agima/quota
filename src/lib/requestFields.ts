@@ -60,6 +60,8 @@ export function requiresContestSpecialistValidation(item: {
 }
 
 export function isContestSpecialistValidated(item: {
+  sourceType?: string;
+  contractorTypes?: string[];
   department?: string;
   directCost?: number;
   taxAmount?: number;
@@ -67,7 +69,7 @@ export function isContestSpecialistValidated(item: {
   buhConfirmed?: boolean;
   validationSkipped?: boolean;
 }) {
-  if (!requiresContestSpecialistValidation(item)) {
+  if (!requiresContestSpecialistValidation(item) && !specialistNeedsHrValidation(item)) {
     return true;
   }
   return Boolean(
