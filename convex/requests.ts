@@ -56,13 +56,13 @@ import {
   formatMonthKeyLabel,
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
-  HR_DEPARTMENT,
+  PERSONNEL_DEPARTMENT,
   isPaidByDateAllowed,
   isContestSpecialistValidated,
   isPaidByTimestampAllowed,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
-  specialistNeedsHrValidation,
+  specialistNeedsPersonnelValidation,
 } from "../src/lib/requestFields";
 import { isAgimaEmail, normalizeEmail } from "../src/lib/authRules";
 import {
@@ -179,7 +179,7 @@ function normalizeSpecialists(
     validationSkipped?: boolean;
   }>,
 ) {
-  return specialists
+  const normalized = specialists
     .map((item) => ({
       id: item.id,
       name: item.name?.trim() ?? "",
@@ -224,6 +224,10 @@ function normalizeSpecialists(
         item.amountExcludesTaxes ||
         item.validationSkipped,
     );
+  if (normalized.some((item) => item.amountIncludesTaxes && item.amountExcludesTaxes)) {
+    throw new Error("Выберите только один вариант: сумма уже с налогами или сумма не включает налоги");
+  }
+  return normalized;
 }
 
 function hasContestSpecialists(
@@ -254,7 +258,7 @@ function hasContestDepartments(
   }>,
 ) {
   return specialists.some(
-    (item) => requiresContestSpecialistValidation(item) || specialistNeedsHrValidation(item),
+    (item) => requiresContestSpecialistValidation(item) || specialistNeedsPersonnelValidation(item),
   );
 }
 
@@ -283,7 +287,7 @@ function areContestDepartmentsValidated(
   }>,
 ) {
   const departmentalSpecialists = specialists.filter((item) =>
-    requiresContestSpecialistValidation(item) || specialistNeedsHrValidation(item),
+    requiresContestSpecialistValidation(item) || specialistNeedsPersonnelValidation(item),
   );
   if (!departmentalSpecialists.length) {
     return true;
@@ -2859,16 +2863,16 @@ export const updateContestSpecialist = mutation({
     const current = specialists[index];
     const hodDepartments = roleRecord?.hodDepartments ?? [];
     const nextDepartment = args.department?.trim() || undefined;
-    const isHrHod =
+    const isPersonnelHod =
       roleRecord?.roles?.includes("HOD") &&
-      hodDepartments.includes(HR_DEPARTMENT) &&
-      specialistNeedsHrValidation(current);
+      hodDepartments.includes(PERSONNEL_DEPARTMENT) &&
+      specialistNeedsPersonnelValidation(current);
     const allowedDepartment =
       isAdmin ||
       isFinanceEditor ||
       hodDepartments.includes(current.department ?? "") ||
       (current.department === undefined && nextDepartment && hodDepartments.includes(nextDepartment)) ||
-      Boolean(isHrHod);
+      Boolean(isPersonnelHod);
     if (!allowedDepartment) {
       throw new Error("Можно редактировать только специалистов своего цеха");
     }
@@ -2877,7 +2881,7 @@ export const updateContestSpecialist = mutation({
       !isAdmin &&
       !isFinanceEditor &&
       !hodDepartments.includes(nextDepartment) &&
-      !(isHrHod && nextDepartment === current.department)
+      !(isPersonnelHod && nextDepartment === current.department)
     ) {
       throw new Error("Можно выбирать только свои цеха");
     }
@@ -2910,6 +2914,9 @@ export const updateContestSpecialist = mutation({
       hodConfirmed: args.hodConfirmed ?? current.hodConfirmed ?? false,
       buhConfirmed: args.buhConfirmed ?? current.buhConfirmed ?? false,
     };
+    if (nextSpecialist.amountIncludesTaxes && nextSpecialist.amountExcludesTaxes) {
+      throw new Error("Выберите только один вариант: сумма уже с налогами или сумма не включает налоги");
+    }
     specialists[index] = nextSpecialist;
     const nextAmount = calculateContestAmount(request.category, specialists, request.amount);
     const nextAmountWithVat = getAmountWithVat(nextAmount, undefined, request.vatRate);

@@ -7,10 +7,10 @@ import {
   getApprovalRecipientsForTargets,
 } from "../src/lib/approvalRecipients";
 import {
-  HR_DEPARTMENT,
+  PERSONNEL_DEPARTMENT,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
-  specialistNeedsHrValidation,
+  specialistNeedsPersonnelValidation,
 } from "../src/lib/requestFields";
 import { supportsRequestSpecialists, usesServiceRecipientLabel } from "../src/lib/requestRules";
 import { formatAmountPair } from "../src/lib/vat";
@@ -1093,7 +1093,7 @@ export const sendHodValidationRequest = internalAction({
             )
             .map((item: { department?: string }) => item.department?.trim())
             .filter(Boolean),
-          ...(specialists.some((item: any) => specialistNeedsHrValidation(item)) ? [HR_DEPARTMENT] : []),
+          ...(specialists.some((item: any) => specialistNeedsPersonnelValidation(item)) ? [PERSONNEL_DEPARTMENT] : []),
         ],
       ),
     ) as string[];
@@ -1121,7 +1121,7 @@ export const sendHodValidationRequest = internalAction({
               item.department &&
               visibleDepartments.includes(item.department)
             ) ||
-            (visibleDepartments.includes(HR_DEPARTMENT) && specialistNeedsHrValidation(item)),
+            (visibleDepartments.includes(PERSONNEL_DEPARTMENT) && specialistNeedsPersonnelValidation(item)),
         )
         .map(
           (item: any) => `

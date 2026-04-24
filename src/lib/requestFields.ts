@@ -22,7 +22,7 @@ export const SPECIALIST_TAX_FLAG_OPTIONS = [
   "Сумма не включает налоги",
 ] as const;
 
-export const HR_DEPARTMENT = "Отдел кадров";
+export const PERSONNEL_DEPARTMENT = "Отдел кадров";
 
 export const SHIPMENT_MONTH_NAMES = [
   "январь",
@@ -69,7 +69,7 @@ export function isContestSpecialistValidated(item: {
   buhConfirmed?: boolean;
   validationSkipped?: boolean;
 }) {
-  if (!requiresContestSpecialistValidation(item) && !specialistNeedsHrValidation(item)) {
+  if (!requiresContestSpecialistValidation(item) && !specialistNeedsPersonnelValidation(item)) {
     return true;
   }
   return Boolean(
@@ -79,7 +79,14 @@ export function isContestSpecialistValidated(item: {
   );
 }
 
-export function specialistNeedsHrValidation(item: {
+export function hasConflictingSpecialistTaxFlags(item: {
+  amountIncludesTaxes?: boolean;
+  amountExcludesTaxes?: boolean;
+}) {
+  return Boolean(item.amountIncludesTaxes && item.amountExcludesTaxes);
+}
+
+export function specialistNeedsPersonnelValidation(item: {
   sourceType?: string;
   contractorTypes?: string[];
   validationSkipped?: boolean;
