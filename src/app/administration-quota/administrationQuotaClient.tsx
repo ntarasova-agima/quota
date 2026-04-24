@@ -87,6 +87,19 @@ function formatEventMonth(monthKey: string) {
   return `${MONTH_NAMES[Number(month) - 1] ?? month} ${year}`;
 }
 
+function getDisplayErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) {
+    return fallback;
+  }
+  const matched = error.message.match(
+    /Error:\s*([\s\S]*?)(?:\s+at\s+[^(]+\s+\(\.\.\/convex\/|\s+Called by client|$)/,
+  );
+  if (matched?.[1]?.trim()) {
+    return matched[1].trim();
+  }
+  return error.message.trim() || fallback;
+}
+
 function RowEditor({
   row,
   canEdit,
@@ -149,7 +162,7 @@ function RowEditor({
         vatRate,
       });
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Не удалось сохранить квоту");
+      setSaveError(getDisplayErrorMessage(err, "Не удалось сохранить квоту"));
     } finally {
       setSaving(false);
     }
@@ -176,7 +189,7 @@ function RowEditor({
         manualSpentWithVat: nextManualSpentWithVat,
       });
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Не удалось сохранить ручное списание");
+      setSaveError(getDisplayErrorMessage(err, "Не удалось сохранить ручное списание"));
     } finally {
       setSaving(false);
     }
