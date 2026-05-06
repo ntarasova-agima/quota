@@ -1452,7 +1452,7 @@ export default function RequestDetailPage() {
       }));
       router.refresh();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Не удалось принять решение";
+      const message = getDisplayErrorMessage(err, "Не удалось принять решение");
       setError(
         message.includes("Comment required for rejection")
           ? "Комментарий обязателен для отказа"
@@ -3390,6 +3390,12 @@ export default function RequestDetailPage() {
                       const selectedForwardHodDepartments =
                         forwardHodDepartmentsByApproval[approvalKey] ?? [];
                       const forwardableHodDepartments = getForwardableHodDepartments(approval);
+                      const selectedAvailableForwardRoles = selectedForwardRoles.filter((role) =>
+                        availableRoles.includes(role as any),
+                      );
+                      const selectedAvailableForwardHodDepartments = selectedForwardHodDepartments.filter((department) =>
+                        forwardableHodDepartments.includes(department as any),
+                      );
 
                       return (
                         <>
@@ -3457,7 +3463,7 @@ export default function RequestDetailPage() {
                                     {availableRoles.map((role) => (
                                       <label key={role} className="flex items-center gap-2 text-sm">
                                         <Checkbox
-                                          checked={selectedForwardRoles.includes(role)}
+                                          checked={selectedAvailableForwardRoles.includes(role)}
                                           onCheckedChange={() =>
                                             setForwardRolesByApproval((current) => {
                                               const currentRoles = current[approvalKey] ?? [];
@@ -3481,14 +3487,14 @@ export default function RequestDetailPage() {
                                       </label>
                                     ))}
                                   </div>
-                                  {selectedForwardRoles.includes("HOD") ? (
+                                  {selectedAvailableForwardRoles.includes("HOD") ? (
                                     <div className="space-y-2">
                                       <Label>Какие цеха нужны руководителю цеха</Label>
                                       <div className="grid gap-2 sm:grid-cols-2">
                                         {forwardableHodDepartments.map((department) => (
                                           <label key={department} className="flex items-center gap-2 text-sm">
                                             <Checkbox
-                                              checked={selectedForwardHodDepartments.includes(department)}
+                                              checked={selectedAvailableForwardHodDepartments.includes(department)}
                                               onCheckedChange={() =>
                                                 setForwardHodDepartmentsByApproval((current) => {
                                                   const currentDepartments = current[approvalKey] ?? [];
@@ -3523,8 +3529,8 @@ export default function RequestDetailPage() {
                                     variant="outline"
                                     onClick={() =>
                                       handleDecision(approval, "approved", {
-                                        additionalRoles: selectedForwardRoles,
-                                        additionalHodDepartments: selectedForwardHodDepartments,
+                                        additionalRoles: selectedAvailableForwardRoles,
+                                        additionalHodDepartments: selectedAvailableForwardHodDepartments,
                                         forwardMode: "approve",
                                       })
                                     }
@@ -3539,8 +3545,8 @@ export default function RequestDetailPage() {
                                     variant="outline"
                                     onClick={() =>
                                       handleDecision(approval, "approved", {
-                                        additionalRoles: selectedForwardRoles,
-                                        additionalHodDepartments: selectedForwardHodDepartments,
+                                        additionalRoles: selectedAvailableForwardRoles,
+                                        additionalHodDepartments: selectedAvailableForwardHodDepartments,
                                         forwardMode: "defer",
                                       })
                                     }

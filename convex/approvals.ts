@@ -265,7 +265,7 @@ export const decide = mutation({
       throw new Error("Already decided");
     }
 
-    const additionalTargets = buildApprovalTargets({
+    const requestedAdditionalTargets = buildApprovalTargets({
       requiredRoles: additionalRoles,
       requiredHodDepartments: additionalRoles.includes("HOD")
         ? args.additionalHodDepartments
@@ -277,8 +277,15 @@ export const decide = mutation({
       }),
     );
 
-    if (additionalRoles.includes("HOD") && !additionalTargets.some((target) => target.role === "HOD")) {
+    if (additionalRoles.includes("HOD") && !requestedAdditionalTargets.some((target) => target.role === "HOD")) {
       throw new Error("Выберите цех для руководителя цеха");
+    }
+
+    const additionalTargets = requestedAdditionalTargets.filter(
+      (target) => !existingApprovals.some((item) => getApprovalIdentity(item) === getApprovalIdentity(target)),
+    );
+    if (args.forwardMode && requestedAdditionalTargets.length > 0 && additionalTargets.length === 0) {
+      throw new Error("Выберите роль, которой еще нет в согласовании");
     }
 
     for (const target of additionalTargets) {
@@ -295,9 +302,6 @@ export const decide = mutation({
         (roleRecord.hodDepartments ?? []).includes(target.department)
       ) {
         throw new Error("Нельзя отправить заявку самому себе");
-      }
-      if (existingApprovals.some((item) => getApprovalIdentity(item) === getApprovalIdentity(target))) {
-        throw new Error("Эта роль уже участвует в согласовании");
       }
     }
 
