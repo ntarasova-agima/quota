@@ -18,6 +18,10 @@ const roleEnum = v.union(
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),
+  v.literal("BUH Payment"),
+  v.literal("BUH Transit"),
+  v.literal("BUH Inside"),
+  v.literal("BUH Outsource"),
   v.literal("HOD"),
   v.literal("ADMIN"),
 );
@@ -96,7 +100,7 @@ export const listPendingForMe = query({
       results.push({ approval, request, kind });
     }
 
-    if (roles.some((role) => ["BUH", "CFD"].includes(role))) {
+    if (roles.some((role) => ["BUH", "CFD", "BUH Payment"].includes(role))) {
       const paymentRequests = (
         await Promise.all(
           ["awaiting_payment", "payment_planned", "partially_paid"].map((status) =>
@@ -120,7 +124,7 @@ export const listPendingForMe = query({
           request,
           approval: {
             requestId: request._id,
-            role: roles.includes("BUH") ? "BUH" : "CFD",
+            role: roles.includes("BUH Payment") ? "BUH Payment" : roles.includes("BUH") ? "BUH" : "CFD",
             status: "pending",
           },
           kind: "payment",
@@ -270,6 +274,7 @@ export const decide = mutation({
       requiredHodDepartments: additionalRoles.includes("HOD")
         ? args.additionalHodDepartments
         : undefined,
+      enforceFinanceRole: false,
     }).filter(
       (target) => getApprovalIdentity(target) !== getApprovalIdentity({
         role: args.role,

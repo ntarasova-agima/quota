@@ -192,217 +192,36 @@ function getRequestPaymentResidualAmounts(request: any) {
 export function getEffectiveQuotaAllocations(request: any) {
   if (
     request.isCanceled ||
-    ["draft", "pending", "rejected"].includes(request.status)
+    ["draft", "hod_pending", "pending", "rejected"].includes(request.status)
   ) {
     return [] as Array<{ monthKey: string; amountWithoutVat: number; amountWithVat: number }>;
   }
 
-  const approvalMonthKey = monthKeyFromTimestamp(
-    request.approvalDeadline ?? request.submittedAt ?? request.createdAt,
-  );
-  const plannedMonthKey = monthKeyFromTimestamp(request.paymentPlannedAt);
-  const paidMonthKey = monthKeyFromTimestamp(request.paidAt);
+  const expenseMonthKey = monthKeyFromTimestamp(request.neededBy ?? request.createdAt);
   const latestRate = request.paymentCurrencyRate;
-  const paymentSplits = request.paymentSplits ?? [];
   const paymentTargetAmounts = getRequestPaymentTargetAmounts(request);
-  const paymentResidualAmounts = getRequestPaymentResidualAmounts(request);
-  const plannedAllocations = getPlannedPaymentAllocations(request);
-  const unallocatedPaymentAmounts = getUnallocatedPaymentAmounts(request);
-
-  const splitAllocations = paymentSplits
-    .map((split: any) => {
-      const monthKey = monthKeyFromTimestamp(split.paidAt);
-      if (!monthKey) {
-        return null;
-      }
-      const amounts = toRubVatAmounts({
-        amountWithoutVat: split.amountWithoutVat ?? 0,
-        amountWithVat: split.amountWithVat,
-        currency: request.currency,
-        currencyRate: split.currencyRate ?? latestRate,
-        vatRate: split.vatRate ?? request.vatRate,
-      });
-      return {
-        monthKey,
-        ...amounts,
-      };
-    })
-    .filter(Boolean) as Array<{ monthKey: string; amountWithoutVat: number; amountWithVat: number }>;
-
-  const requestAmountWithoutVat = request.amount ?? 0;
-  const requestAmountWithVat =
-    getAmountWithVat(requestAmountWithoutVat, request.amountWithVat, request.vatRate) ??
-    requestAmountWithoutVat;
-
-  if (request.status === "approved") {
-    if (!approvalMonthKey) return [];
-    const amounts = toRubVatAmounts({
-      amountWithoutVat: requestAmountWithoutVat,
-      amountWithVat: requestAmountWithVat,
-      currency: request.currency,
-      currencyRate: latestRate,
-      vatRate: request.vatRate,
-    });
-    return [
-      {
-        monthKey: approvalMonthKey,
-        ...amounts,
-      },
-    ];
+  if (!expenseMonthKey) {
+    return [];
   }
-
-  if (["awaiting_payment", "payment_planned"].includes(request.status)) {
-    if ((request.plannedPaymentSplits?.length ?? 0) === 0) {
-      const monthKey = plannedMonthKey ?? approvalMonthKey;
-      if (!monthKey) return [];
-      return [{
-        monthKey,
-        ...toRubVatAmounts({
-          amountWithoutVat: paymentTargetAmounts.amountWithoutVat,
-          amountWithVat: paymentTargetAmounts.amountWithVat,
-          currency: request.currency,
-          currencyRate: latestRate,
-          vatRate: request.vatRate,
-        }),
-      }];
-    }
-    const allocations = [...plannedAllocations];
-    if (unallocatedPaymentAmounts.amountWithoutVat > 0) {
-      const monthKey = plannedMonthKey ?? approvalMonthKey;
-      if (monthKey) {
-        allocations.push({
-          monthKey,
-          ...toRubVatAmounts({
-            amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
-            amountWithVat: unallocatedPaymentAmounts.amountWithVat,
-            currency: request.currency,
-            currencyRate: latestRate,
-            vatRate: request.vatRate,
-          }),
-        });
-      }
-    }
-    if (allocations.length) {
-      return allocations;
-    }
-    const monthKey = plannedMonthKey ?? approvalMonthKey;
-    if (!monthKey) return [];
-    return [{
-      monthKey,
+  const amountWithoutVat = paymentTargetAmounts.amountWithoutVat ?? request.amount ?? 0;
+  const amountWithVat =
+    getAmountWithVat(
+      amountWithoutVat,
+      paymentTargetAmounts.amountWithVat ?? request.amountWithVat,
+      request.vatRate,
+    ) ?? amountWithoutVat;
+  return [
+    {
+      monthKey: expenseMonthKey,
       ...toRubVatAmounts({
-        amountWithoutVat: paymentTargetAmounts.amountWithoutVat,
-        amountWithVat: paymentTargetAmounts.amountWithVat,
+        amountWithoutVat,
+        amountWithVat,
         currency: request.currency,
         currencyRate: latestRate,
         vatRate: request.vatRate,
       }),
-    }];
-  }
-
-  if (request.status === "partially_paid") {
-    if ((request.plannedPaymentSplits?.length ?? 0) === 0) {
-      const allocations = [...splitAllocations];
-      const monthKey = plannedMonthKey ?? approvalMonthKey;
-      if (monthKey && paymentResidualAmounts.amountWithoutVat > 0) {
-        allocations.push({
-          monthKey,
-          ...toRubVatAmounts({
-            amountWithoutVat: paymentResidualAmounts.amountWithoutVat,
-            amountWithVat: paymentResidualAmounts.amountWithVat,
-            currency: request.currency,
-            currencyRate: latestRate,
-            vatRate: request.vatRate,
-          }),
-        });
-      }
-      return allocations;
-    }
-    const allocations = [...splitAllocations, ...plannedAllocations];
-    const monthKey = plannedMonthKey ?? approvalMonthKey;
-    if (monthKey && unallocatedPaymentAmounts.amountWithoutVat > 0) {
-      allocations.push({
-        monthKey,
-        ...toRubVatAmounts({
-          amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
-          amountWithVat: unallocatedPaymentAmounts.amountWithVat,
-          currency: request.currency,
-          currencyRate: latestRate,
-          vatRate: request.vatRate,
-        }),
-      });
-    }
-    return allocations;
-  }
-
-  if (request.status === "paid" || request.status === "closed") {
-    if (paymentSplits.length > 0) {
-      const allocations = [...splitAllocations];
-      const totalAmountWithoutVat = request.actualPaidAmount ?? paymentTargetAmounts.amountWithoutVat;
-      const totalAmountWithVat =
-        getAmountWithVat(
-          totalAmountWithoutVat,
-          request.actualPaidAmountWithVat ?? paymentTargetAmounts.amountWithVat,
-          request.vatRate,
-        ) ?? totalAmountWithoutVat;
-      const splitTotalWithoutVat = paymentSplits.reduce(
-        (sum: number, split: any) => sum + (split.amountWithoutVat ?? 0),
-        0,
-      );
-      const splitTotalWithVat = paymentSplits.reduce(
-        (sum: number, split: any) =>
-          sum + (getAmountWithVat(split.amountWithoutVat ?? 0, split.amountWithVat, split.vatRate ?? request.vatRate) ?? 0),
-        0,
-      );
-      const finalAmountWithoutVat = Math.max(totalAmountWithoutVat - splitTotalWithoutVat, 0);
-      const finalAmountWithVat = Math.max(totalAmountWithVat - splitTotalWithVat, 0);
-      const monthKey = paidMonthKey ?? plannedMonthKey ?? approvalMonthKey;
-      if (monthKey && finalAmountWithoutVat > 0) {
-        const amounts = toRubVatAmounts({
-          amountWithoutVat: finalAmountWithoutVat,
-          amountWithVat: finalAmountWithVat,
-          currency: request.currency,
-          currencyRate: latestRate,
-          vatRate: request.vatRate,
-        });
-        allocations.push({
-          monthKey,
-          ...amounts,
-        });
-      }
-      if (!allocations.length && monthKey) {
-        const amounts = toRubVatAmounts({
-          amountWithoutVat: totalAmountWithoutVat,
-          amountWithVat: totalAmountWithVat,
-          currency: request.currency,
-          currencyRate: latestRate,
-          vatRate: request.vatRate,
-        });
-        allocations.push({
-          monthKey,
-          ...amounts,
-        });
-      }
-      return allocations;
-    }
-
-    const monthKey = paidMonthKey ?? plannedMonthKey ?? approvalMonthKey;
-    if (!monthKey) return [];
-    const amounts = toRubVatAmounts({
-      amountWithoutVat: request.actualPaidAmount ?? paymentTargetAmounts.amountWithoutVat,
-      amountWithVat: request.actualPaidAmountWithVat ?? paymentTargetAmounts.amountWithVat,
-      currency: request.currency,
-      currencyRate: latestRate,
-      vatRate: request.vatRate,
-    });
-    return [
-      {
-        monthKey,
-        ...amounts,
-      },
-    ];
-  }
-
-  return [];
+    },
+  ];
 }
 
 export function sumQuotaUsageByMonth(

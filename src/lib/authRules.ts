@@ -15,7 +15,7 @@ export function isAllowedSignInEmail(email: string, nodeEnv = process.env.NODE_E
 }
 
 export function hasCompletedProfile(
-  record: { fullName?: string | null; creatorTitle?: string | null } | null | undefined,
+  record: { fullName?: string | null; creatorTitle?: string | null; department?: string | null } | null | undefined,
 ) {
-  return Boolean(record?.fullName?.trim() && record?.creatorTitle?.trim());
+  return Boolean(record?.fullName?.trim() && record?.creatorTitle?.trim() && record?.department?.trim());
 }

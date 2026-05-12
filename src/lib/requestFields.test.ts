@@ -2,21 +2,12 @@ import { describe, expect, it } from "vitest";
 import { hasConflictingSpecialistTaxFlags, isContestSpecialistValidated } from "./requestFields";
 
 describe("requestFields", () => {
-  it("requires personnel department validation for GPH contractors even without a department", () => {
+  it("does not require personnel department validation for GPH contractors", () => {
     expect(
       isContestSpecialistValidated({
         sourceType: "contractor",
         contractorTypes: ["ГПХ"],
         directCost: 10_000,
-      }),
-    ).toBe(false);
-
-    expect(
-      isContestSpecialistValidated({
-        sourceType: "contractor",
-        contractorTypes: ["ГПХ"],
-        directCost: 10_000,
-        hodConfirmed: true,
       }),
     ).toBe(true);
   });

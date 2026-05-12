@@ -9,6 +9,8 @@ import {
   isDevTestEmail,
   normalizeEmail,
 } from "../src/lib/authRules";
+import { ACCOUNTING_REQUEST_AREA } from "../src/lib/requestRules";
+import { isKnownHodDepartment, normalizeHodDepartment } from "../src/lib/departments";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -17,6 +19,10 @@ const roleEnum = v.union(
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),
+  v.literal("BUH Payment"),
+  v.literal("BUH Transit"),
+  v.literal("BUH Inside"),
+  v.literal("BUH Outsource"),
   v.literal("HOD"),
   v.literal("ADMIN"),
 );
@@ -37,6 +43,7 @@ export const myProfile = query({
       roles: record?.active ? record.roles : [],
       fullName: record?.fullName ?? null,
       creatorTitle: record?.creatorTitle ?? null,
+      department: record?.department ?? ACCOUNTING_REQUEST_AREA,
       hodDepartments: record?.hodDepartments ?? [],
       needsOnboarding: !record || !hasCompletedProfile(record),
       hasRoleRecord: Boolean(record),
@@ -175,6 +182,7 @@ export const ensureCurrentUserRole = mutation({
         created: false,
         needsOnboarding: !hasCompletedProfile(existing),
         roles: existing.roles,
+        department: existing.department ?? ACCOUNTING_REQUEST_AREA,
       };
     }
 
@@ -188,6 +196,7 @@ export const ensureCurrentUserRole = mutation({
       roles: ["AD"],
       active: true,
       isTest: false,
+      department: ACCOUNTING_REQUEST_AREA,
       createdAt: now,
       updatedAt: now,
     });
@@ -195,6 +204,7 @@ export const ensureCurrentUserRole = mutation({
       created: true,
       needsOnboarding: true,
       roles: ["AD"],
+      department: ACCOUNTING_REQUEST_AREA,
     };
   },
 });
@@ -207,6 +217,7 @@ export const upsertRole = mutation({
     isTest: v.boolean(),
     fullName: v.optional(v.string()),
     creatorTitle: v.optional(v.string()),
+    department: v.optional(v.string()),
     hodDepartments: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
@@ -245,6 +256,10 @@ export const upsertRole = mutation({
       .query("roles")
       .withIndex("by_email", (q) => q.eq("email", normalizedEmail))
       .first();
+    const department = normalizeHodDepartment(args.department) ?? ACCOUNTING_REQUEST_AREA;
+    if (!isKnownHodDepartment(department)) {
+      throw new Error("Так не бывает");
+    }
     const now = Date.now();
     if (existing) {
       await ctx.db.patch(existing._id, {
@@ -253,6 +268,7 @@ export const upsertRole = mutation({
         isTest: args.isTest,
         fullName: args.fullName?.trim() || undefined,
         creatorTitle: args.creatorTitle?.trim() || undefined,
+        department,
         hodDepartments: args.hodDepartments?.length ? args.hodDepartments : undefined,
         updatedAt: now,
       });
@@ -265,6 +281,7 @@ export const upsertRole = mutation({
       isTest: args.isTest,
       fullName: args.fullName?.trim() || undefined,
       creatorTitle: args.creatorTitle?.trim() || undefined,
+      department,
       hodDepartments: args.hodDepartments?.length ? args.hodDepartments : undefined,
       createdAt: now,
       updatedAt: now,
@@ -398,6 +415,10 @@ export const seedTestRoles = mutation({
       { email: "cfd.test@quota.local", roles: ["CFD"] as const, isTest: true },
       { email: "admin.test@quota.local", roles: ["ADMIN"] as const, isTest: true },
       { email: "buh.test@quota.local", roles: ["BUH"] as const, isTest: true },
+      { email: "buh-payment.test@quota.local", roles: ["BUH Payment"] as const, isTest: true },
+      { email: "buh-transit.test@quota.local", roles: ["BUH Transit"] as const, isTest: true },
+      { email: "buh-inside.test@quota.local", roles: ["BUH Inside"] as const, isTest: true },
+      { email: "buh-outsource.test@quota.local", roles: ["BUH Outsource"] as const, isTest: true },
       { email: "hod.mobile.test@quota.local", roles: ["HOD"] as const, isTest: true },
     ];
     for (const entry of emails) {
@@ -406,6 +427,7 @@ export const seedTestRoles = mutation({
         roles: [...entry.roles],
         active: true,
         isTest: entry.isTest,
+        department: ACCOUNTING_REQUEST_AREA,
         createdAt: now,
         updatedAt: now,
       });
@@ -419,6 +441,7 @@ export const updateMyProfile = mutation({
     fullName: v.optional(v.string()),
     email: v.optional(v.string()),
     creatorTitle: v.optional(v.string()),
+    department: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -456,12 +479,17 @@ export const updateMyProfile = mutation({
     if (!nextCreatorTitle) {
       throw new Error("Creator title required");
     }
+    const nextDepartment = normalizeHodDepartment(args.department) ?? ACCOUNTING_REQUEST_AREA;
+    if (!isKnownHodDepartment(nextDepartment)) {
+      throw new Error("Department required");
+    }
 
     if (record) {
       await ctx.db.patch(record._id, {
         email: nextEmail,
         fullName: nextFullName,
         creatorTitle: nextCreatorTitle,
+        department: nextDepartment,
         updatedAt: now,
       });
       return { email: nextEmail };
@@ -476,6 +504,7 @@ export const updateMyProfile = mutation({
       isTest: false,
       fullName: nextFullName,
       creatorTitle: nextCreatorTitle,
+      department: nextDepartment,
       createdAt: now,
       updatedAt: now,
     });

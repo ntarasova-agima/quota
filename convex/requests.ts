@@ -8,7 +8,10 @@ import {
   getRoleRecord,
   hasHistoricalApprovalAccess,
   hasHodAccessToRequest,
+  hasSpecialBuhAccessToRequest,
   hasViewerAccess,
+  requestHasInsideSpecialists,
+  requestHasOutsourceSpecialists,
   upsertViewerAccessEntry,
   REQUEST_ALL_LIST_ROLES,
   REQUEST_WIDE_VIEW_ROLES,
@@ -26,6 +29,7 @@ import {
 } from "./requestWorkflow";
 import {
   AGIMA_QUOTAS_FUNDING_SOURCE,
+  ACCOUNTING_REQUEST_AREA,
   AI_TOOLS_REQUEST_CATEGORY,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
   EMPTY_BUSINESS_CATEGORY,
@@ -56,13 +60,11 @@ import {
   formatMonthKeyLabel,
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
-  PERSONNEL_DEPARTMENT,
   isPaidByDateAllowed,
   isContestSpecialistValidated,
   isPaidByTimestampAllowed,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
-  specialistNeedsPersonnelValidation,
 } from "../src/lib/requestFields";
 import { isAgimaEmail, normalizeEmail } from "../src/lib/authRules";
 import {
@@ -78,6 +80,10 @@ const roleEnum = v.union(
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),
+  v.literal("BUH Payment"),
+  v.literal("BUH Transit"),
+  v.literal("BUH Inside"),
+  v.literal("BUH Outsource"),
   v.literal("HOD"),
   v.literal("ADMIN"),
 );
@@ -161,6 +167,21 @@ function isBeforeDate(left?: number, right?: number) {
   return startOfDate(left) < startOfDate(right);
 }
 
+function getEarliestAllowedExpenseExpectation(now = Date.now()) {
+  const date = new Date(now);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(1);
+  date.setMonth(date.getMonth() - 1);
+  return date.getTime();
+}
+
+function isExpenseExpectationDateAllowed(value?: number, now = Date.now()) {
+  if (value === undefined) {
+    return false;
+  }
+  return startOfDate(value) >= getEarliestAllowedExpenseExpectation(now);
+}
+
 function normalizeSpecialists(
   specialists: Array<{
     id: string;
@@ -188,6 +209,7 @@ function normalizeSpecialists(
         new Set(
           (item.contractorTypes ?? [])
             .map((value) => value?.trim())
+            .map((value) => (value === "другое" ? "другое/не знаю" : value))
             .filter(Boolean) as string[],
         ),
       ),
@@ -262,7 +284,7 @@ function hasContestDepartments(
   }>,
 ) {
   return specialists.some(
-    (item) => requiresContestSpecialistValidation(item) || specialistNeedsPersonnelValidation(item),
+    (item) => requiresContestSpecialistValidation(item),
   );
 }
 
@@ -291,7 +313,7 @@ function areContestDepartmentsValidated(
   }>,
 ) {
   const departmentalSpecialists = specialists.filter((item) =>
-    requiresContestSpecialistValidation(item) || specialistNeedsPersonnelValidation(item),
+    requiresContestSpecialistValidation(item),
   );
   if (!departmentalSpecialists.length) {
     return true;
@@ -875,6 +897,8 @@ const requestPayloadValidator = {
   relatedRequests: v.optional(v.array(v.string())),
   links: v.array(v.string()),
   financePlanLinks: v.optional(v.array(v.string())),
+  finplanEntered: v.optional(v.boolean()),
+  finplanEntryIds: v.optional(v.array(v.string())),
   incomingAmount: v.optional(v.number()),
   incomingAmountWithVat: v.optional(v.number()),
   shipmentDate: v.optional(v.number()),
@@ -883,6 +907,7 @@ const requestPayloadValidator = {
   specialists: v.optional(v.array(specialistValidator)),
   approvalDeadline: v.optional(v.number()),
   neededBy: v.optional(v.number()),
+  paymentDeadline: v.optional(v.number()),
   paidBy: v.optional(v.number()),
   requiredRoles: v.array(roleEnum),
   submit: v.boolean(),
@@ -915,6 +940,8 @@ const requestFieldLabels: Record<string, string> = {
   relatedRequests: "Связанные заявки",
   links: "Ссылки на материалы",
   financePlanLinks: "ID и название отгрузки в финплане",
+  finplanEntered: "Занесено в финплан",
+  finplanEntryIds: "Строки финплана",
   incomingAmount: "Сумма отгрузки без НДС",
   incomingAmountWithVat: "Сумма отгрузки с НДС",
   incomingRatio: "Коэффициент транзита",
@@ -924,6 +951,7 @@ const requestFieldLabels: Record<string, string> = {
   specialists: "Специалисты",
   approvalDeadline: "Дедлайн согласования",
   neededBy: "Ожидание затраты",
+  paymentDeadline: "Дедлайн оплаты",
   paidBy: "Когда платят нам",
   requiredRoles: "Обязательные согласующие",
   status: "Статус заявки",
@@ -937,6 +965,7 @@ function formatValueForHistory(field: string, value: unknown) {
     if (
       field === "approvalDeadline" ||
       field === "neededBy" ||
+      field === "paymentDeadline" ||
       field === "paidBy" ||
       field === "shipmentDate" ||
       field === "prepaymentDate"
@@ -1048,6 +1077,8 @@ function diffRequestFields(previous: any, next: any) {
     "relatedRequests",
     "links",
     "financePlanLinks",
+    "finplanEntered",
+    "finplanEntryIds",
     "incomingAmount",
     "incomingAmountWithVat",
     "incomingRatio",
@@ -1057,6 +1088,7 @@ function diffRequestFields(previous: any, next: any) {
     "specialists",
     "approvalDeadline",
     "neededBy",
+    "paymentDeadline",
     "paidBy",
     "requiredRoles",
     "status",
@@ -1208,6 +1240,7 @@ function validateRequestPayload(args: any) {
   const effectiveRequiredRoles = getEffectiveRequiredRoles({
     requiredRoles: args.requiredRoles as any,
     requiredHodDepartments: effectiveRequiredHodDepartments,
+    category: normalizedCategory,
   });
   const requestWithSpecialists =
     supportsRequestSpecialists(args.category) && hasContestSpecialists(normalizedSpecialists);
@@ -1312,15 +1345,11 @@ function validateRequestPayload(args: any) {
   if (!args.neededBy) {
     throw new Error("Укажите ожидание затраты");
   }
+  if (!args.paymentDeadline) {
+    throw new Error("Укажите дедлайн оплаты");
+  }
   if (!isFundingSourceAllowedForCategory(normalizedCategory, normalizedFundingSource)) {
     throw new Error("Так не бывает");
-  }
-  if (
-    args.approvalDeadline !== undefined &&
-    args.neededBy !== undefined &&
-    args.approvalDeadline > args.neededBy
-  ) {
-    throw new Error("Дедлайн согласования должен быть не позже даты, когда нужно оплатить");
   }
   if (args.approvalDeadline !== undefined) {
     const tomorrow = new Date();
@@ -1392,8 +1421,16 @@ function validateRequestPayload(args: any) {
   ) {
     throw new Error("Так не бывает");
   }
-  if (!effectiveRequiredRoles.includes("BUH")) {
-    throw new Error("Для всех заявок обязателен BUH");
+  if (
+    normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY
+      ? !effectiveRequiredRoles.includes("BUH Transit")
+      : !effectiveRequiredRoles.includes("BUH")
+  ) {
+    throw new Error(
+      normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY
+        ? "Для транзитов обязателен BUH Transit"
+        : "Для всех заявок обязателен BUH",
+    );
   }
   if (args.category === "Welcome-бонус" && (!args.investmentReturn || !args.investmentReturn.trim())) {
     throw new Error("Укажите, как будем возвращать инвестиции");
@@ -1495,11 +1532,41 @@ function matchesBusinessCategoryFilter(request: any, filter?: string) {
   return normalizeBusinessCategory(request.businessCategory) === normalizeBusinessCategory(filter);
 }
 
-function isOpenPaymentTask(request: { status: string; neededBy?: number; isCanceled?: boolean }) {
+function getRequestPaymentDeadline(request: { paymentDeadline?: number; neededBy?: number }) {
+  return request.paymentDeadline ?? request.neededBy;
+}
+
+function isOpenPaymentTask(request: { status: string; paymentDeadline?: number; neededBy?: number; isCanceled?: boolean }) {
   return (
     !request.isCanceled &&
-    request.neededBy !== undefined &&
+    getRequestPaymentDeadline(request) !== undefined &&
     ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+  );
+}
+
+async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymentDeadline?: number) {
+  if (!paymentDeadline) {
+    return;
+  }
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  await ctx.scheduler.runAfter(
+    Math.max(0, startOfDate(paymentDeadline) - dayMs - now),
+    internal.emails.sendPaymentDeadlineReminder,
+    {
+      requestId,
+      paymentDeadline,
+      reminderKind: "before",
+    },
+  );
+  await ctx.scheduler.runAfter(
+    Math.max(0, startOfDate(paymentDeadline) + dayMs - now),
+    internal.emails.sendPaymentDeadlineReminder,
+    {
+      requestId,
+      paymentDeadline,
+      reminderKind: "overdue",
+    },
   );
 }
 
@@ -1526,6 +1593,7 @@ async function createApprovalsForRequest(
     requestId: any;
     requiredRoles: string[];
     requiredHodDepartments?: string[];
+    category?: string;
     autoApprovedRoles: string[];
     now: number;
     userId: any;
@@ -1535,6 +1603,7 @@ async function createApprovalsForRequest(
   const targets = buildApprovalTargets({
     requiredRoles: params.requiredRoles,
     requiredHodDepartments: params.requiredHodDepartments,
+    category: params.category,
   });
   for (const target of targets) {
     const isAutoApproved =
@@ -1703,6 +1772,9 @@ export const listAllRequests = query({
     const canViewAll = record?.roles?.some((role: string) =>
       REQUEST_ALL_LIST_ROLES.includes(role as (typeof REQUEST_ALL_LIST_ROLES)[number]),
     );
+    const hasSpecialBuhListAccess = Boolean(
+      record?.roles?.some((role: string) => ["BUH Payment", "BUH Inside", "BUH Outsource"].includes(role)),
+    );
     const hasReviewedAny = email
       ? (
           await ctx.db
@@ -1715,7 +1787,7 @@ export const listAllRequests = query({
       !canViewAll && !hasReviewedAny
         ? (await ctx.db.query("requests").collect()).some((req: any) => hasViewerAccess(req, email))
         : false;
-    if (!canViewAll && !hasReviewedAny && !hasExplicitViewerAccessAny) {
+    if (!canViewAll && !hasSpecialBuhListAccess && !hasReviewedAny && !hasExplicitViewerAccessAny) {
       throw new Error("Not authorized");
     }
 
@@ -1768,16 +1840,18 @@ export const listAllRequests = query({
         return false;
       }
       if (args.paymentDueFilter === "today") {
+        const paymentDeadline = getRequestPaymentDeadline(req);
         if (
           !isOpenPaymentTask(req) ||
-          req.neededBy! < todayBounds.start ||
-          req.neededBy! > todayBounds.end
+          paymentDeadline! < todayBounds.start ||
+          paymentDeadline! > todayBounds.end
         ) {
           return false;
         }
       }
       if (args.paymentDueFilter === "overdue") {
-        if (!isOpenPaymentTask(req) || req.neededBy! >= todayBounds.start) {
+        const paymentDeadline = getRequestPaymentDeadline(req);
+        if (!isOpenPaymentTask(req) || paymentDeadline! >= todayBounds.start) {
           return false;
         }
       }
@@ -1786,6 +1860,10 @@ export const listAllRequests = query({
       }
       return true;
     });
+    const scopedToSpecialBuhRole =
+      !canViewAll && hasSpecialBuhListAccess
+        ? filtered.filter((req: any) => hasSpecialBuhAccessToRequest(record, req))
+        : [];
     const scopedToCurrentRole =
       record?.roles?.includes("HOD") &&
       !record.roles.some((role: string) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role))
@@ -1810,6 +1888,7 @@ export const listAllRequests = query({
       : scopedToCurrentRole;
     const withViewerAccess = [
       ...withHistorical,
+      ...scopedToSpecialBuhRole,
       ...filtered.filter((req: any) => hasViewerAccess(req, email)),
       ...filtered.filter((req: any) => req.createdBy === userId || req.createdByEmail === email),
     ];
@@ -1875,6 +1954,9 @@ export const canUseAllRequestsView = query({
     if (canViewAll) {
       return true;
     }
+    if (record?.roles?.some((role: string) => ["BUH Payment", "BUH Inside", "BUH Outsource"].includes(role))) {
+      return true;
+    }
     const hasReviewedAny = (
       await ctx.db
         .query("approvals")
@@ -1938,11 +2020,13 @@ export const getRequest = query({
     const canViewAll = record?.roles?.some((role: string) =>
       REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
     );
+    const hasSpecialBuhAccess = hasSpecialBuhAccessToRequest(record, request);
     const canHodView = hasHodAccessToRequest(record, request);
     const canViewByHistory = await hasHistoricalApprovalAccess(ctx, args.id, email);
     const hasExplicitViewerAccess = hasViewerAccess(request, email);
     if (
       !canViewAll &&
+      !hasSpecialBuhAccess &&
       !canHodView &&
       !canViewByHistory &&
       !hasExplicitViewerAccess &&
@@ -2171,6 +2255,7 @@ export const previewEditImpact = query({
     const effectiveRequiredRoles = getEffectiveRequiredRoles({
       requiredRoles: args.requiredRoles as any,
       requiredHodDepartments: effectiveRequiredHodDepartments,
+      category: normalizedCategory,
     });
     const effectiveAmounts = resolveRequestAmounts(
       {
@@ -2221,6 +2306,8 @@ export const previewEditImpact = query({
       relatedRequests: args.relatedRequests,
       links: args.links,
       financePlanLinks: args.financePlanLinks,
+      finplanEntered: args.finplanEntered ?? false,
+      finplanEntryIds: args.finplanEntryIds?.map((item: string) => item.trim()).filter(Boolean) ?? undefined,
       incomingAmount: incomingAmounts.amountWithoutVat,
       incomingAmountWithVat: incomingAmounts.amountWithVat,
       incomingRatio: calculateIncomingRatio({
@@ -2236,6 +2323,7 @@ export const previewEditImpact = query({
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       approvalDeadline: args.approvalDeadline,
       neededBy: args.neededBy,
+      paymentDeadline: args.paymentDeadline,
       paidBy: args.paidBy,
       requiredRoles: effectiveRequiredRoles as any,
     };
@@ -2277,8 +2365,8 @@ export const editRequest = mutation({
       ...args,
       existingContractAttachmentCount: request.contractAttachmentCount ?? 0,
     });
-    if (isBeforeDate(args.neededBy, request.createdAt)) {
-      throw new Error("Ожидание затраты не может быть раньше даты создания заявки");
+    if (!isExpenseExpectationDateAllowed(args.neededBy, Date.now())) {
+      throw new Error("Ожидание затраты можно указать не раньше прошлого месяца");
     }
     if (args.prepaymentRequired && isBeforeDate(args.prepaymentDate, request.createdAt)) {
       throw new Error("Дата предоплаты не может быть раньше даты создания заявки");
@@ -2300,6 +2388,7 @@ export const editRequest = mutation({
     const effectiveRequiredRoles = getEffectiveRequiredRoles({
       requiredRoles: args.requiredRoles as any,
       requiredHodDepartments: effectiveRequiredHodDepartments,
+      category: normalizedCategory,
     });
     const effectiveAmounts = resolveRequestAmounts(
       {
@@ -2355,6 +2444,8 @@ export const editRequest = mutation({
       relatedRequests: args.relatedRequests,
       links: args.links,
       financePlanLinks: args.financePlanLinks,
+      finplanEntered: args.finplanEntered ?? false,
+      finplanEntryIds: args.finplanEntryIds?.map((item: string) => item.trim()).filter(Boolean) ?? undefined,
       incomingAmount: incomingAmounts.amountWithoutVat,
       incomingAmountWithVat: incomingAmounts.amountWithVat,
       incomingRatio: calculateIncomingRatio({
@@ -2370,6 +2461,7 @@ export const editRequest = mutation({
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       approvalDeadline: args.approvalDeadline,
       neededBy: args.neededBy,
+      paymentDeadline: args.paymentDeadline,
       paidBy: args.paidBy,
       requiredRoles: effectiveRequiredRoles as any,
     };
@@ -2423,6 +2515,7 @@ export const editRequest = mutation({
             requestId: args.id,
             requiredRoles: effectiveRequiredRoles as any,
             requiredHodDepartments: effectiveRequiredHodDepartments,
+            category: normalizedCategory,
             autoApprovedRoles,
             now,
             userId,
@@ -2626,6 +2719,18 @@ export const editRequest = mutation({
         requestId: args.id,
       });
     }
+    const hadInsideSpecialists = requestHasInsideSpecialists(request);
+    const hasInsideSpecialists = requestHasInsideSpecialists({ specialists: normalizedSpecialists });
+    const hadOutsourceSpecialists = requestHasOutsourceSpecialists(request);
+    const hasOutsourceSpecialists = requestHasOutsourceSpecialists({ specialists: normalizedSpecialists });
+    if (
+      (hasInsideSpecialists || hasOutsourceSpecialists) &&
+      (submitDraft || shouldResubmit || (!hadInsideSpecialists && hasInsideSpecialists) || (!hadOutsourceSpecialists && hasOutsourceSpecialists))
+    ) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendSpecialistBuhNotifications, {
+        requestId: args.id,
+      });
+    }
     if (nextStatus === "pending" && args.approvalDeadline && (submitDraft || shouldResubmit || approvalDeadlineChanged)) {
       await ctx.scheduler.runAfter(
         Math.max(0, addDays(args.approvalDeadline, 1) - now),
@@ -2656,19 +2761,23 @@ export const createRequest = mutation({
     const roleRecord = await getRoleRecord(ctx, email);
     const creatorRoles = roleRecord?.roles ?? [];
     const now = Date.now();
-    validateRequestPayload(args);
-    if (isBeforeDate(args.neededBy, now)) {
-      throw new Error("Ожидание затраты не может быть раньше даты создания заявки");
+    const payloadArgs = {
+      ...args,
+      department: normalizeHodDepartment(args.department) ?? roleRecord?.department ?? ACCOUNTING_REQUEST_AREA,
+    };
+    validateRequestPayload(payloadArgs);
+    if (!isExpenseExpectationDateAllowed(payloadArgs.neededBy, now)) {
+      throw new Error("Ожидание затраты можно указать не раньше прошлого месяца");
     }
-    if (args.prepaymentRequired && isBeforeDate(args.prepaymentDate, now)) {
+    if (payloadArgs.prepaymentRequired && isBeforeDate(payloadArgs.prepaymentDate, now)) {
       throw new Error("Дата предоплаты не может быть раньше даты создания заявки");
     }
-    const normalizedCategory = normalizeRequestCategory(args.category);
-    const normalizedDepartment = normalizeHodDepartment(args.department);
-    const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
+    const normalizedCategory = normalizeRequestCategory(payloadArgs.category);
+    const normalizedDepartment = normalizeHodDepartment(payloadArgs.department);
+    const normalizedFundingSource = normalizeFundingSource(payloadArgs.fundingSource);
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
     const requestCode = await getNextRequestCode(ctx, normalizedCategory, normalizedFundingSource);
-    const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
+    const normalizedSpecialists = normalizeSpecialists(payloadArgs.specialists ?? []);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
       category: normalizedCategory,
       requiredHodDepartments: args.requiredHodDepartments,
@@ -2677,6 +2786,7 @@ export const createRequest = mutation({
     const effectiveRequiredRoles = getEffectiveRequiredRoles({
       requiredRoles: args.requiredRoles as any,
       requiredHodDepartments: effectiveRequiredHodDepartments,
+      category: normalizedCategory,
     });
     const autoApprovedRoles = effectiveRequiredRoles.filter((role) => creatorRoles.includes(role));
     const specialistNeedsHodValidation =
@@ -2686,8 +2796,9 @@ export const createRequest = mutation({
     const approvalTargets = buildApprovalTargets({
       requiredRoles: effectiveRequiredRoles as any,
       requiredHodDepartments: effectiveRequiredHodDepartments,
+      category: normalizedCategory,
     });
-    const status = !args.submit
+    const status = !payloadArgs.submit
       ? "draft"
       : getRequestApprovalStatus({
           category: normalizedCategory,
@@ -2705,22 +2816,22 @@ export const createRequest = mutation({
     const effectiveAmounts = resolveRequestAmounts(
       {
         category: normalizedCategory,
-        amount: args.amount,
-        amountWithVat: args.amountWithVat,
-        vatRate: args.vatRate,
+        amount: payloadArgs.amount,
+        amountWithVat: payloadArgs.amountWithVat,
+        vatRate: payloadArgs.vatRate,
       },
       normalizedSpecialists,
     );
     const incomingAmounts = resolveVatAmounts({
-      amountWithoutVat: args.incomingAmount,
-      amountWithVat: args.incomingAmountWithVat,
-      vatRate: args.vatRate,
+      amountWithoutVat: payloadArgs.incomingAmount,
+      amountWithVat: payloadArgs.incomingAmountWithVat,
+      vatRate: payloadArgs.vatRate,
       autoCalculateAmountWithVat: true,
     });
     const prepaymentAmounts = resolveVatAmounts({
-      amountWithoutVat: args.prepaymentAmount,
-      amountWithVat: args.prepaymentAmountWithVat,
-      vatRate: args.vatRate,
+      amountWithoutVat: payloadArgs.prepaymentAmount,
+      amountWithVat: payloadArgs.prepaymentAmountWithVat,
+      vatRate: payloadArgs.vatRate,
       autoCalculateAmountWithVat: true,
     });
 
@@ -2728,7 +2839,7 @@ export const createRequest = mutation({
       requestCode,
       requestArea,
       department: normalizedDepartment,
-      title: args.title.trim(),
+      title: payloadArgs.title.trim(),
       createdBy: userId,
       createdByEmail: email,
       createdByName: roleRecord?.fullName ?? identity?.name ?? undefined,
@@ -2736,30 +2847,32 @@ export const createRequest = mutation({
       amount: effectiveAmounts.amount,
       amountWithVat: effectiveAmounts.amountWithVat,
       vatRate: effectiveAmounts.vatRate,
-      currency: args.currency,
+      currency: payloadArgs.currency,
       fundingSource: normalizedFundingSource,
-      counterparty: args.counterparty,
-      paymentMethod: args.paymentMethod,
+      counterparty: payloadArgs.counterparty,
+      paymentMethod: payloadArgs.paymentMethod,
       cfdTag: undefined,
-      contractLink: args.contractLink?.trim() || undefined,
+      contractLink: payloadArgs.contractLink?.trim() || undefined,
       contractAttachmentCount: 0,
       lastContractAttachmentName: undefined,
-      dueDiligenceChecked: args.dueDiligenceChecked ?? false,
-      dueDiligenceJiraLink: args.dueDiligenceJiraLink?.trim() || undefined,
-      prepaymentRequired: args.prepaymentRequired ?? false,
-      prepaymentAmount: args.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
-      prepaymentAmountWithVat: args.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
-      prepaymentDate: args.prepaymentRequired ? args.prepaymentDate : undefined,
-      justification: args.justification,
-      details: args.details?.trim() || undefined,
-      investmentReturn: args.investmentReturn?.trim() || undefined,
-      clientName: args.clientName,
-      contacts: args.contacts,
-      relatedRequests: args.relatedRequests,
-      links: args.links,
+      dueDiligenceChecked: payloadArgs.dueDiligenceChecked ?? false,
+      dueDiligenceJiraLink: payloadArgs.dueDiligenceJiraLink?.trim() || undefined,
+      prepaymentRequired: payloadArgs.prepaymentRequired ?? false,
+      prepaymentAmount: payloadArgs.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
+      prepaymentAmountWithVat: payloadArgs.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
+      prepaymentDate: payloadArgs.prepaymentRequired ? payloadArgs.prepaymentDate : undefined,
+      justification: payloadArgs.justification,
+      details: payloadArgs.details?.trim() || undefined,
+      investmentReturn: payloadArgs.investmentReturn?.trim() || undefined,
+      clientName: payloadArgs.clientName,
+      contacts: payloadArgs.contacts,
+      relatedRequests: payloadArgs.relatedRequests,
+      links: payloadArgs.links,
       attachmentCount: 0,
       lastAttachmentName: undefined,
-      financePlanLinks: args.financePlanLinks,
+      financePlanLinks: payloadArgs.financePlanLinks,
+      finplanEntered: payloadArgs.finplanEntered ?? false,
+      finplanEntryIds: payloadArgs.finplanEntryIds?.map((item: string) => item.trim()).filter(Boolean) ?? undefined,
       incomingAmount: incomingAmounts.amountWithoutVat,
       incomingAmountWithVat: incomingAmounts.amountWithVat,
       incomingRatio: calculateIncomingRatio({
@@ -2768,35 +2881,37 @@ export const createRequest = mutation({
         amountWithoutVat: effectiveAmounts.amount,
         amountWithVat: effectiveAmounts.amountWithVat,
       }),
-      shipmentDate: args.shipmentDate,
-      shipmentMonth: args.shipmentMonth,
+      shipmentDate: payloadArgs.shipmentDate,
+      shipmentMonth: payloadArgs.shipmentMonth,
       requiredHodDepartments:
         effectiveRequiredHodDepartments.length ? effectiveRequiredHodDepartments : undefined,
       specialists: normalizedSpecialists.length ? normalizedSpecialists : undefined,
       requiredRoles: effectiveRequiredRoles as any,
       status,
       isCanceled: false,
-      approvalDeadline: args.approvalDeadline,
-      neededBy: args.neededBy,
-      paidBy: args.paidBy,
-      submittedAt: args.submit ? now : undefined,
+      approvalDeadline: payloadArgs.approvalDeadline,
+      neededBy: payloadArgs.neededBy,
+      paymentDeadline: payloadArgs.paymentDeadline,
+      paidBy: payloadArgs.paidBy,
+      submittedAt: payloadArgs.submit ? now : undefined,
       createdAt: now,
       updatedAt: now,
     });
     await logTimelineEvent(ctx, {
       requestId,
       type: "request_created",
-      title: args.submit ? "Заявка создана и отправлена" : "Создан черновик",
+      title: payloadArgs.submit ? "Заявка создана и отправлена" : "Создан черновик",
       description: `${normalizedCategory} · ${normalizedFundingSource}`,
       actorEmail: email,
       actorName: roleRecord?.fullName ?? identity?.name ?? undefined,
     });
 
-    if (args.submit && approvalTargets.length > 0) {
+    if (payloadArgs.submit && approvalTargets.length > 0) {
       await createApprovalsForRequest(ctx, {
         requestId,
         requiredRoles: effectiveRequiredRoles as any,
         requiredHodDepartments: effectiveRequiredHodDepartments,
+        category: normalizedCategory,
         autoApprovedRoles,
         now,
         userId,
@@ -2805,13 +2920,13 @@ export const createRequest = mutation({
       await ctx.scheduler.runAfter(0, internal.emails.sendRequestSubmitted, {
         requestId,
       });
-      if (args.approvalDeadline) {
+      if (payloadArgs.approvalDeadline) {
         await ctx.scheduler.runAfter(
-          Math.max(0, addDays(args.approvalDeadline, 1) - now),
+          Math.max(0, addDays(payloadArgs.approvalDeadline, 1) - now),
           internal.emails.sendApprovalDeadlineReminder,
           {
             requestId,
-            approvalDeadline: args.approvalDeadline,
+            approvalDeadline: payloadArgs.approvalDeadline,
           },
         );
       }
@@ -2819,6 +2934,11 @@ export const createRequest = mutation({
     await ctx.scheduler.runAfter(0, internal.emails.sendRequestCreatedToBuh, {
       requestId,
     });
+    if (requestHasInsideSpecialists({ specialists: normalizedSpecialists }) || requestHasOutsourceSpecialists({ specialists: normalizedSpecialists })) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendSpecialistBuhNotifications, {
+        requestId,
+      });
+    }
 
     return requestId;
   },
@@ -2861,7 +2981,9 @@ export const updateContestSpecialist = mutation({
       throw new Error("Редактирование специалистов доступно только для заявок со специалистами");
     }
     const isFinanceEditor = Boolean(
-      roleRecord?.roles?.some((role: string) => ["BUH", "CFD"].includes(role)),
+      roleRecord?.roles?.some((role: string) =>
+        ["BUH", "CFD", "BUH Inside", "BUH Outsource"].includes(role),
+      ),
     );
     const isAdmin = Boolean(roleRecord?.roles?.includes("ADMIN"));
     if (!hasHodAccessToRequest(roleRecord, request) && !isAdmin && !isFinanceEditor) {
@@ -2875,16 +2997,11 @@ export const updateContestSpecialist = mutation({
     const current = specialists[index];
     const hodDepartments = roleRecord?.hodDepartments ?? [];
     const nextDepartment = args.department?.trim() || undefined;
-    const isPersonnelHod =
-      roleRecord?.roles?.includes("HOD") &&
-      hodDepartments.includes(PERSONNEL_DEPARTMENT) &&
-      specialistNeedsPersonnelValidation(current);
     const allowedDepartment =
       isAdmin ||
       isFinanceEditor ||
       hodDepartments.includes(current.department ?? "") ||
-      (current.department === undefined && nextDepartment && hodDepartments.includes(nextDepartment)) ||
-      Boolean(isPersonnelHod);
+      Boolean(current.department === undefined && nextDepartment && hodDepartments.includes(nextDepartment));
     if (!allowedDepartment) {
       throw new Error("Можно редактировать только специалистов своего цеха");
     }
@@ -2892,8 +3009,7 @@ export const updateContestSpecialist = mutation({
       nextDepartment &&
       !isAdmin &&
       !isFinanceEditor &&
-      !hodDepartments.includes(nextDepartment) &&
-      !(isPersonnelHod && nextDepartment === current.department)
+      !hodDepartments.includes(nextDepartment)
     ) {
       throw new Error("Можно выбирать только свои цеха");
     }
@@ -2905,6 +3021,7 @@ export const updateContestSpecialist = mutation({
         new Set(
           (args.contractorTypes ?? current.contractorTypes ?? [])
             .map((value) => value?.trim())
+            .map((value) => (value === "другое" ? "другое/не знаю" : value))
             .filter(Boolean) as string[],
         ),
       ),
@@ -3122,7 +3239,8 @@ export const assignCfdTag = mutation({
     const canManageClassification =
       record?.roles?.includes("CFD") ||
       record?.roles?.includes("ADMIN") ||
-      record?.roles?.includes("BUH");
+      record?.roles?.includes("BUH") ||
+      record?.roles?.includes("BUH Transit");
     const canManageTagOnly =
       record?.roles?.includes("COO") ||
       (record?.roles?.includes("HOD") &&
@@ -3188,6 +3306,146 @@ export const assignCfdTag = mutation({
   },
 });
 
+export const updateOperationalFields = mutation({
+  args: {
+    id: v.id("requests"),
+    amount: v.optional(v.number()),
+    amountWithVat: v.optional(v.number()),
+    paymentDeadline: v.optional(v.number()),
+    shipmentDate: v.optional(v.number()),
+    finplanEntered: v.optional(v.boolean()),
+    finplanEntryIds: v.optional(v.array(v.string())),
+    fotAllSpecialistsRecorded: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const record = await getRoleRecord(ctx, email);
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    if (request.isCanceled) {
+      throw new Error("Сначала возобновите заявку");
+    }
+    const roles = record?.roles ?? [];
+    const canManageAll = roles.some((role: string) =>
+      ["BUH", "CFD", "ADMIN", "BUH Transit"].includes(role),
+    );
+    const canManageInside =
+      roles.includes("BUH Inside") && requestHasInsideSpecialists(request);
+    const canManageOutsource =
+      roles.includes("BUH Outsource") && requestHasOutsourceSpecialists(request);
+    if (!canManageAll && !canManageInside && !canManageOutsource) {
+      throw new Error("Not authorized");
+    }
+    if (args.fotAllSpecialistsRecorded !== undefined && !canManageInside && !canManageAll) {
+      throw new Error("ФОТ может отметить только BUH Inside");
+    }
+    if (
+      args.fotAllSpecialistsRecorded !== undefined &&
+      ["draft", "hod_pending", "pending", "rejected"].includes(request.status)
+    ) {
+      throw new Error("ФОТ можно вынести после согласования заявки");
+    }
+    if (
+      (args.amount !== undefined || args.amountWithVat !== undefined) &&
+      !canManageInside &&
+      !canManageOutsource &&
+      !canManageAll
+    ) {
+      throw new Error("Not authorized");
+    }
+    if (
+      (args.paymentDeadline !== undefined || args.shipmentDate !== undefined || args.finplanEntered !== undefined || args.finplanEntryIds !== undefined) &&
+      !canManageOutsource &&
+      !canManageAll
+    ) {
+      throw new Error("Not authorized");
+    }
+
+    validateOptionalMoney(args.amount, "Сумма без НДС");
+    validateOptionalMoney(args.amountWithVat, "Сумма с НДС");
+    const now = Date.now();
+    const effectiveAmounts =
+      args.amount !== undefined || args.amountWithVat !== undefined
+        ? resolveRequestAmounts(
+            {
+              category: request.category,
+              amount: args.amount ?? request.amount,
+              amountWithVat: args.amountWithVat ?? request.amountWithVat,
+              vatRate: request.vatRate,
+            },
+            request.specialists ?? [],
+          )
+        : undefined;
+    const patch: Record<string, any> = {
+      updatedAt: now,
+    };
+    if (effectiveAmounts) {
+      patch.amount = effectiveAmounts.amount;
+      patch.amountWithVat = effectiveAmounts.amountWithVat;
+      patch.vatRate = effectiveAmounts.vatRate;
+    }
+    if (args.paymentDeadline !== undefined) {
+      patch.paymentDeadline = args.paymentDeadline;
+      patch.paymentDeadlineReminderLastDateKey = undefined;
+    }
+    if (args.shipmentDate !== undefined) {
+      patch.shipmentDate = args.shipmentDate;
+    }
+    if (args.finplanEntered !== undefined) {
+      patch.finplanEntered = args.finplanEntered;
+    }
+    if (args.finplanEntryIds !== undefined) {
+      const values = args.finplanEntryIds.map((item) => item.trim()).filter(Boolean);
+      patch.finplanEntryIds = values.length ? values : undefined;
+    }
+    if (args.fotAllSpecialistsRecorded !== undefined) {
+      patch.fotAllSpecialistsRecorded = args.fotAllSpecialistsRecorded;
+    }
+
+    const previousForDiff = { ...request };
+    const nextForDiff = { ...request, ...patch };
+    const changes = diffRequestFields(previousForDiff, nextForDiff);
+    await ctx.db.patch(request._id, patch);
+    if (changes.length) {
+      await recordRequestChanges(
+        ctx,
+        request._id,
+        email,
+        record?.fullName ?? undefined,
+        changes,
+      );
+    }
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "operational_fields_updated",
+      title: "Обновлены финансовые поля",
+      description: changes.map((change) => change.field).join(", ") || undefined,
+      actorEmail: email,
+      actorName: record?.fullName ?? undefined,
+    });
+    if (
+      changes.length > 0 &&
+      normalizeEmail(request.createdByEmail) !== normalizeEmail(email) &&
+      (effectiveAmounts || args.paymentDeadline !== undefined || args.shipmentDate !== undefined)
+    ) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendOperationalFieldsChanged, {
+        requestId: request._id,
+        summaryLines: changes.map(
+          (change) => `${change.field}: ${change.fromValue || "—"} → ${change.toValue || "—"}`,
+        ),
+        actorEmail: email,
+        actorName: record?.fullName ?? undefined,
+      });
+    }
+    return { updated: true };
+  },
+});
+
 export const updatePaymentStatus = mutation({
   args: {
     id: v.id("requests"),
@@ -3235,7 +3493,9 @@ export const updatePaymentStatus = mutation({
     const actorName = record.fullName?.trim() || undefined;
     const now = Date.now();
     const isCreator = request.createdBy === userId || request.createdByEmail === email;
-    const canManagePayments = record.roles.some((role: string) => ["BUH", "CFD"].includes(role));
+    const canManagePayments = record.roles.some((role: string) =>
+      ["BUH", "CFD", "BUH Payment"].includes(role),
+    );
 
     const canBuhReturnPaid =
       args.status === "awaiting_payment" &&
@@ -3246,6 +3506,7 @@ export const updatePaymentStatus = mutation({
       args.status === "awaiting_payment" &&
       !isCreator &&
       !record.roles.includes("ADMIN") &&
+      !record.roles.includes("BUH Payment") &&
       !canBuhReturnPaid
     ) {
       throw new Error("Передать в оплату может только автор заявки");
@@ -3341,6 +3602,7 @@ export const updatePaymentStatus = mutation({
         actualPaidAmount: undefined,
         actualPaidAmountWithVat: undefined,
         paymentReminderSentAt: undefined,
+        paymentDeadlineReminderLastDateKey: undefined,
         closeReminderSentAt: undefined,
         updatedAt: now,
       });
@@ -3352,9 +3614,18 @@ export const updatePaymentStatus = mutation({
         actorName,
       });
       if (!canBuhReturnPaid) {
-        await ctx.scheduler.runAfter(0, internal.emails.sendPaymentRequested, {
-          requestId: request._id,
-        });
+        if (record.roles.includes("BUH Payment")) {
+          await ctx.scheduler.runAfter(0, internal.emails.sendPaymentRequestedToAuthor, {
+            requestId: request._id,
+            actorEmail: email,
+            actorName,
+          });
+        } else {
+          await ctx.scheduler.runAfter(0, internal.emails.sendPaymentRequested, {
+            requestId: request._id,
+          });
+        }
+        await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
       }
       return { status: args.status };
     }
@@ -3368,7 +3639,8 @@ export const updatePaymentStatus = mutation({
       if (args.paymentPlannedAt < today.getTime()) {
         throw new Error("Дата оплаты не может быть раньше сегодняшнего дня");
       }
-      if (request.neededBy && args.paymentPlannedAt > request.neededBy && !args.allowLatePaymentPlan) {
+      const requestPaymentDeadline = getRequestPaymentDeadline(request);
+      if (requestPaymentDeadline && args.paymentPlannedAt > requestPaymentDeadline && !args.allowLatePaymentPlan) {
         throw new Error("Дата оплаты позже даты, когда нужно оплатить");
       }
       const existingSplits = request.paymentSplits ?? [];
@@ -3497,6 +3769,7 @@ export const updatePaymentStatus = mutation({
         finplanCostIds: finplanCostIds.length ? finplanCostIds : undefined,
         plannedPaymentSplits: nextPlannedPaymentSplits.length ? nextPlannedPaymentSplits : undefined,
         paymentReminderSentAt: undefined,
+        paymentDeadlineReminderLastDateKey: undefined,
         updatedAt: now,
       });
       await logTimelineEvent(ctx, {
@@ -3507,14 +3780,10 @@ export const updatePaymentStatus = mutation({
         actorEmail: email,
         actorName,
       });
-      const delay = Math.max(0, args.paymentPlannedAt - now);
       await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanned, {
         requestId: request._id,
       });
-      await ctx.scheduler.runAfter(delay + 24 * 60 * 60 * 1000, internal.emails.sendPaymentDeadlineReminder, {
-        requestId: request._id,
-        plannedAt: args.paymentPlannedAt,
-      });
+      await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
       if (hasPaymentAmountDifference(previousTargetAmounts, targetAmounts)) {
         await ctx.scheduler.runAfter(0, internal.emails.sendPaymentAmountChanged, {
           requestId: request._id,
@@ -3573,7 +3842,8 @@ export const updatePaymentStatus = mutation({
         if (args.paymentPlannedAt < today.getTime()) {
           throw new Error("Дата оплаты не может быть раньше сегодняшнего дня");
         }
-        if (request.neededBy && args.paymentPlannedAt > request.neededBy && !args.allowLatePaymentPlan) {
+        const requestPaymentDeadline = getRequestPaymentDeadline(request);
+        if (requestPaymentDeadline && args.paymentPlannedAt > requestPaymentDeadline && !args.allowLatePaymentPlan) {
           throw new Error("Дата оплаты позже даты, когда нужно оплатить");
         }
       }
@@ -3631,6 +3901,7 @@ export const updatePaymentStatus = mutation({
         actualPaidAmount: cumulativePaid,
         actualPaidAmountWithVat: cumulativePaidWithVat > 0 ? cumulativePaidWithVat : undefined,
         paymentReminderSentAt: undefined,
+        paymentDeadlineReminderLastDateKey: undefined,
         closeReminderSentAt: undefined,
         updatedAt: now,
       });
@@ -3643,11 +3914,7 @@ export const updatePaymentStatus = mutation({
         actorName,
       });
       if (args.paymentPlannedAt) {
-        const delay = Math.max(0, args.paymentPlannedAt - now);
-        await ctx.scheduler.runAfter(delay + 24 * 60 * 60 * 1000, internal.emails.sendPaymentDeadlineReminder, {
-          requestId: request._id,
-          plannedAt: args.paymentPlannedAt,
-        });
+        await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
       }
       return { status: "partially_paid" };
     }
@@ -3712,6 +3979,7 @@ export const updatePaymentStatus = mutation({
         plannedPaymentSplits: undefined,
         closeReminderSentAt: undefined,
         paymentReminderSentAt: undefined,
+        paymentDeadlineReminderLastDateKey: undefined,
         updatedAt: now,
       });
       await logTimelineEvent(ctx, {
@@ -3812,7 +4080,7 @@ export const cancelPaymentEntry = mutation({
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
-    if (!record || !record.roles.some((role: string) => ["BUH", "CFD", "ADMIN"].includes(role))) {
+    if (!record || !record.roles.some((role: string) => ["BUH", "CFD", "ADMIN", "BUH Payment"].includes(role))) {
       throw new Error("Not authorized");
     }
     const request = await ctx.db.get(args.id);
@@ -3966,7 +4234,8 @@ export const remindPayment = mutation({
       isCreator ||
       roleRecord?.roles?.includes("ADMIN") ||
       roleRecord?.roles?.includes("CFD") ||
-      roleRecord?.roles?.includes("BUH");
+      roleRecord?.roles?.includes("BUH") ||
+      roleRecord?.roles?.includes("BUH Payment");
     if (!canRemind) {
       throw new Error("Not authorized");
     }
@@ -3994,6 +4263,7 @@ export const markReminderSent = internalMutation({
     requestId: v.id("requests"),
     kind: v.union(v.literal("approval"), v.literal("payment"), v.literal("close")),
     expectedAt: v.number(),
+    dateKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const request = await ctx.db.get(args.requestId);
@@ -4006,6 +4276,13 @@ export const markReminderSent = internalMutation({
     }
     if (args.kind === "payment" && request.paymentPlannedAt === args.expectedAt) {
       await ctx.db.patch(args.requestId, { paymentReminderSentAt: Date.now() });
+      return;
+    }
+    if (args.kind === "payment" && args.dateKey) {
+      await ctx.db.patch(args.requestId, {
+        paymentReminderSentAt: Date.now(),
+        paymentDeadlineReminderLastDateKey: args.dateKey,
+      });
       return;
     }
     if (args.kind === "close" && request.paidAt === args.expectedAt) {

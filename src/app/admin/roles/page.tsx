@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/lib/convex";
 import { ALL_ROLES_WITH_HOD, HOD_DEPARTMENTS } from "@/lib/constants";
 import { formatRoleList, getRoleLabel } from "@/lib/roleLabels";
@@ -23,6 +24,7 @@ export default function RolesPage() {
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [creatorTitle, setCreatorTitle] = useState("");
+  const [department, setDepartment] = useState("Аккаунтинг");
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [active, setActive] = useState(true);
   const [isTest, setIsTest] = useState(false);
@@ -46,6 +48,7 @@ export default function RolesPage() {
     setActive(true);
     setIsTest(false);
     setCreatorTitle("");
+    setDepartment("Аккаунтинг");
     setHodDepartments([]);
     setEditingEmail(null);
   }
@@ -57,11 +60,13 @@ export default function RolesPage() {
     isTest: boolean;
     fullName?: string;
     creatorTitle?: string;
+    department?: string;
     hodDepartments?: string[];
   }) {
     setEmail(record.email);
     setFullName(record.fullName ?? "");
     setCreatorTitle(record.creatorTitle ?? "");
+    setDepartment(record.department ?? "Аккаунтинг");
     setSelectedRoles(record.roles);
     setActive(record.active);
     setIsTest(record.isTest);
@@ -88,6 +93,7 @@ export default function RolesPage() {
         isTest,
         fullName,
         creatorTitle,
+        department,
         hodDepartments: selectedRoles.includes("HOD") ? hodDepartments : [],
       });
       resetForm();
@@ -176,6 +182,21 @@ export default function RolesPage() {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label>Цех</Label>
+                  <Select value={department} onValueChange={setDepartment}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Выберите цех" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {HOD_DEPARTMENTS.map((dep) => (
+                        <SelectItem key={dep} value={dep}>
+                          {dep}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
                   <Label>Роли</Label>
                   <div className="grid grid-cols-2 gap-2">
                     {ALL_ROLES_WITH_HOD.map((role) => (
@@ -252,6 +273,9 @@ export default function RolesPage() {
                               Должность: {item.creatorTitle}
                             </div>
                           ) : null}
+                          <div className="text-xs text-muted-foreground">
+                            Цех: {item.department ?? "Аккаунтинг"}
+                          </div>
                           <div className="text-muted-foreground">
                             {item.roles.length ? formatRoleList(item.roles) : "Нет ролей"}
                           </div>

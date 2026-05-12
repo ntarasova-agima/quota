@@ -153,15 +153,15 @@ export default function ContestParticipantsEditor({
                   const checked = item.contractorTypes.includes(option);
                   return (
                     <label key={option} className="flex items-center gap-2 text-sm">
-                      <Checkbox
+                      <input
+                        type="radio"
+                        className="size-4 accent-primary"
+                        name={`contractor-type-${item.id}`}
                         checked={checked}
-                        onCheckedChange={(nextChecked) =>
+                        onChange={() =>
                           updateRow(item.id, (row) => ({
                             ...row,
-                            contractorTypes:
-                              nextChecked === true
-                                ? Array.from(new Set([...row.contractorTypes, option]))
-                                : row.contractorTypes.filter((value) => value !== option),
+                            contractorTypes: [option],
                           }))
                         }
                       />
@@ -235,7 +235,7 @@ export default function ContestParticipantsEditor({
                 }))
               }
             />
-            Валидация не требуется
+            Валидация цеха не требуется
           </label>
           <div className="sm:col-span-4 -mt-1 text-xs text-muted-foreground">
             {item.validationSkipped

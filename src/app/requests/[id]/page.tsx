@@ -28,10 +28,8 @@ import {
   formatIncomingRatio,
   formatMonthKeyLabel,
   getSpecialistEffectiveCost,
-  PERSONNEL_DEPARTMENT,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
-  specialistNeedsPersonnelValidation,
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
@@ -554,6 +552,7 @@ export default function RequestDetailPage() {
   const resumeRequest = useMutation(api.requests.resumeRequest);
   const deleteRequest = useMutation(api.requests.deleteRequest);
   const assignCfdTag = useMutation(api.requests.assignCfdTag);
+  const updateOperationalFields = useMutation(api.requests.updateOperationalFields);
   const updatePaymentStatus = useMutation(api.requests.updatePaymentStatus);
   const cancelPaymentEntry = useMutation(api.requests.cancelPaymentEntry);
   const updateContestSpecialist = useMutation(api.requests.updateContestSpecialist);
@@ -593,6 +592,12 @@ export default function RequestDetailPage() {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
   const [finplanCostIdsRaw, setFinplanCostIdsRaw] = useState("");
+  const [finplanEntered, setFinplanEntered] = useState(false);
+  const [finplanEntryIdsRaw, setFinplanEntryIdsRaw] = useState("");
+  const [operationalPaymentDeadline, setOperationalPaymentDeadline] = useState("");
+  const [operationalShipmentDate, setOperationalShipmentDate] = useState("");
+  const [fotAllSpecialistsRecorded, setFotAllSpecialistsRecorded] = useState(false);
+  const [savingOperationalFields, setSavingOperationalFields] = useState(false);
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
   const [paymentTargetAmount, setPaymentTargetAmount] = useState("");
   const [paymentTargetAmountWithVat, setPaymentTargetAmountWithVat] = useState("");
@@ -664,9 +669,12 @@ export default function RequestDetailPage() {
     api.businessCategories.list,
     isAuthenticated && canManageClassification ? {} : "skip",
   );
-  const canSetAwaitingPayment = useMemo(() => data?.isCreator || myRoles.includes("ADMIN"), [data?.isCreator, myRoles]);
+  const canSetAwaitingPayment = useMemo(
+    () => data?.isCreator || myRoles.includes("ADMIN") || myRoles.includes("BUH Payment"),
+    [data?.isCreator, myRoles],
+  );
   const canManagePayments = useMemo(
-    () => myRoles.includes("BUH") || myRoles.includes("CFD"),
+    () => myRoles.includes("BUH") || myRoles.includes("CFD") || myRoles.includes("BUH Payment"),
     [myRoles],
   );
   const canSetPaymentPlanned = canManagePayments;
@@ -677,11 +685,12 @@ export default function RequestDetailPage() {
     [data?.isCreator, myRoles],
   );
   const isLatePaymentPlan = useMemo(() => {
-    if (!paymentPlannedDate || !data?.request?.neededBy) {
+    const paymentDeadline = data?.request?.paymentDeadline ?? data?.request?.neededBy;
+    if (!paymentPlannedDate || !paymentDeadline) {
       return false;
     }
-    return new Date(`${paymentPlannedDate}T00:00:00`).getTime() > data.request.neededBy;
-  }, [paymentPlannedDate, data?.request?.neededBy]);
+    return new Date(`${paymentPlannedDate}T00:00:00`).getTime() > paymentDeadline;
+  }, [paymentPlannedDate, data?.request?.neededBy, data?.request?.paymentDeadline]);
   useEffect(() => {
     if (!isLatePaymentPlan) {
       setLatePaymentPlanNeedsConfirmation(false);
@@ -814,6 +823,21 @@ export default function RequestDetailPage() {
       setSelectedBusinessCategory(data.request.businessCategory ?? EMPTY_BUSINESS_CATEGORY);
       setCustomTagName("");
       setFinplanCostIdsRaw((data.request.finplanCostIds ?? []).join(", "));
+      setFinplanEntered(data.request.finplanEntered ?? false);
+      setFinplanEntryIdsRaw((data.request.finplanEntryIds ?? []).join("\n"));
+      setOperationalPaymentDeadline(
+        data.request.paymentDeadline
+          ? new Date(data.request.paymentDeadline).toISOString().slice(0, 10)
+          : data.request.neededBy
+            ? new Date(data.request.neededBy).toISOString().slice(0, 10)
+            : "",
+      );
+      setOperationalShipmentDate(
+        data.request.shipmentDate
+          ? new Date(data.request.shipmentDate).toISOString().slice(0, 10)
+          : "",
+      );
+      setFotAllSpecialistsRecorded(data.request.fotAllSpecialistsRecorded ?? false);
       setPaymentPlannedDate(
         data.request.paymentPlannedAt
           ? new Date(data.request.paymentPlannedAt).toISOString().slice(0, 10)
@@ -866,6 +890,12 @@ export default function RequestDetailPage() {
     data?.request?.plannedPaymentAmountWithVat,
     data?.request?.plannedPaymentSplits,
     data?.request?.finplanCostIds,
+    data?.request?.finplanEntered,
+    data?.request?.finplanEntryIds,
+    data?.request?.paymentDeadline,
+    data?.request?.neededBy,
+    data?.request?.shipmentDate,
+    data?.request?.fotAllSpecialistsRecorded,
     data?.request?.actualPaidAmount,
     data?.request?.actualPaidAmountWithVat,
     data?.request?.paymentResidualAmount,
@@ -958,12 +988,9 @@ export default function RequestDetailPage() {
       myRoles.includes("HOD") &&
       (request.specialists ?? []).some(
         (item) =>
-          (requiresContestSpecialistValidation(item) ||
-            specialistNeedsPersonnelValidation(item)) &&
-          (
-            (item.department && (data.hodDepartments ?? []).includes(item.department)) ||
-            (data.hodDepartments ?? []).includes(PERSONNEL_DEPARTMENT)
-          ) &&
+          requiresContestSpecialistValidation(item) &&
+          item.department &&
+          (data.hodDepartments ?? []).includes(item.department) &&
           (!item.hodConfirmed || item.directCost === undefined),
       ),
   );
@@ -976,6 +1003,26 @@ export default function RequestDetailPage() {
       (item) => normalizeContestSpecialistSource(item.sourceType) === "contractor",
     ),
   };
+  const hasInsideSpecialists = allContestParticipants.some(
+    (item) =>
+      normalizeContestSpecialistSource(item.sourceType) === "internal" ||
+      (item.contractorTypes ?? []).includes("ГПХ"),
+  );
+  const hasOutsourceSpecialists = allContestParticipants.some(
+    (item) =>
+      normalizeContestSpecialistSource(item.sourceType) === "contractor" &&
+      (item.contractorTypes ?? []).some((type) =>
+        ["ООО", "ИП", "ГПХ", "СЗ", "другое", "другое/не знаю"].includes(type),
+      ),
+  );
+  const canManageOperationalFields =
+    isAdmin ||
+    myRoles.some((role) => ["BUH", "CFD", "BUH Transit"].includes(role)) ||
+    (myRoles.includes("BUH Outsource") && hasOutsourceSpecialists);
+  const canManageFot =
+    isAdmin ||
+    myRoles.some((role) => ["BUH", "CFD"].includes(role)) ||
+    (myRoles.includes("BUH Inside") && hasInsideSpecialists);
   const viewerAccessEntries = (request.viewerAccess ?? []) as Array<{
     email: string;
     fullName?: string;
@@ -1929,6 +1976,98 @@ export default function RequestDetailPage() {
                   </div>
                 </div>
               )}
+              {(canManageOperationalFields || canManageFot) && (
+                <div className="space-y-3 rounded-xl border border-border p-4">
+                  <div>
+                    <div className="text-lg font-semibold">Финансовые отметки</div>
+                    <p className="text-sm text-muted-foreground">
+                      Здесь финотдел может уточнить финплан, дедлайн оплаты и дату отгрузки.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {canManageOperationalFields ? (
+                      <>
+                        <label className="flex items-center gap-2 text-sm font-medium">
+                          <Checkbox
+                            checked={finplanEntered}
+                            onCheckedChange={(checked) => setFinplanEntered(checked === true)}
+                          />
+                          Занесено в финплан
+                        </label>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label>Строки финплана</Label>
+                          <Textarea
+                            value={finplanEntryIdsRaw}
+                            onChange={(event) => setFinplanEntryIdsRaw(event.target.value)}
+                            placeholder="Ссылки на строки или ID, по одной в строке"
+                            rows={2}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Дедлайн оплаты</Label>
+                          <Input
+                            type="date"
+                            value={operationalPaymentDeadline}
+                            onChange={(event) => setOperationalPaymentDeadline(event.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Дата отгрузки</Label>
+                          <Input
+                            type="date"
+                            value={operationalShipmentDate}
+                            onChange={(event) => setOperationalShipmentDate(event.target.value)}
+                          />
+                        </div>
+                      </>
+                    ) : null}
+                    {canManageFot ? (
+                      <label className="flex items-center gap-2 text-sm font-medium sm:col-span-2">
+                        <Checkbox
+                          checked={fotAllSpecialistsRecorded}
+                          onCheckedChange={(checked) => setFotAllSpecialistsRecorded(checked === true)}
+                        />
+                        ФОТ всех специалистов вынесен
+                      </label>
+                    ) : null}
+                  </div>
+                  <Button
+                    type="button"
+                    disabled={savingOperationalFields}
+                    onClick={async () => {
+                      setError(null);
+                      setSavingOperationalFields(true);
+                      try {
+                        await updateOperationalFields({
+                          id: request._id,
+                          finplanEntered: canManageOperationalFields ? finplanEntered : undefined,
+                          finplanEntryIds: canManageOperationalFields
+                            ? finplanEntryIdsRaw
+                                .split("\n")
+                                .map((item) => item.trim())
+                                .filter(Boolean)
+                            : undefined,
+                          paymentDeadline:
+                            canManageOperationalFields && operationalPaymentDeadline
+                              ? new Date(`${operationalPaymentDeadline}T00:00:00`).getTime()
+                              : undefined,
+                          shipmentDate:
+                            canManageOperationalFields && operationalShipmentDate
+                              ? new Date(`${operationalShipmentDate}T00:00:00`).getTime()
+                              : undefined,
+                          fotAllSpecialistsRecorded: canManageFot ? fotAllSpecialistsRecorded : undefined,
+                        });
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Не удалось сохранить финансовые отметки");
+                      } finally {
+                        setSavingOperationalFields(false);
+                      }
+                    }}
+                  >
+                    Сохранить финансовые отметки
+                  </Button>
+                </div>
+              )}
               {(canSetAwaitingPayment || canSetPaymentPlanned || canSetPaid || canClose) && (
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-2">
@@ -2771,7 +2910,7 @@ export default function RequestDetailPage() {
                   <p className="mt-1">{request.counterparty || "Не указан"}</p>
                 </div>
               ) : null}
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-3">
                 <div>
                   <div className="text-muted-foreground">Цех</div>
                   <p className="mt-1">{request.department ?? request.requestArea ?? "Не указан"}</p>
@@ -2836,7 +2975,7 @@ export default function RequestDetailPage() {
                 <div>
                   <div className="text-muted-foreground">Ожидание затраты</div>
                   <p className="mt-1">
-                    <HoverHint label="Дата, к которой заявку нужно оплатить">
+                    <HoverHint label="Дата, по которой заявка списывается из квоты">
                       <span>
                         {request.neededBy
                           ? new Date(request.neededBy).toLocaleDateString("ru-RU")
@@ -2845,7 +2984,43 @@ export default function RequestDetailPage() {
                     </HoverHint>
                   </p>
                 </div>
+                <div>
+                  <div className="text-muted-foreground">Дедлайн оплаты</div>
+                  <p className="mt-1">
+                    <HoverHint label="Когда нужно оплатить">
+                      <span>
+                        {(request.paymentDeadline ?? request.neededBy)
+                          ? new Date(request.paymentDeadline ?? request.neededBy!).toLocaleDateString("ru-RU")
+                          : "Не задано"}
+                      </span>
+                    </HoverHint>
+                  </p>
+                </div>
               </div>
+              {(request.finplanEntered || request.finplanEntryIds?.length || request.fotAllSpecialistsRecorded) ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div className="text-muted-foreground">Занесено в финплан</div>
+                    <p className="mt-1">{request.finplanEntered ? "Да" : "Нет"}</p>
+                  </div>
+                  {request.fotAllSpecialistsRecorded ? (
+                    <div>
+                      <div className="text-muted-foreground">ФОТ всех специалистов вынесен</div>
+                      <p className="mt-1">Да</p>
+                    </div>
+                  ) : null}
+                  {request.finplanEntryIds?.length ? (
+                    <div className="sm:col-span-2">
+                      <div className="text-muted-foreground">Строки финплана</div>
+                      <ul className="mt-1 list-disc pl-5">
+                        {request.finplanEntryIds.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div>
                 <div className="text-muted-foreground">Обоснование</div>
                 <p className="mt-1 whitespace-pre-wrap">{request.justification}</p>
@@ -2953,20 +3128,18 @@ export default function RequestDetailPage() {
                           const draft = specialistDrafts[item.id] ?? item;
                           const canBuhValidateThis =
                             !item.validationSkipped &&
-                            (myRoles.includes("BUH") || myRoles.includes("CFD") || isAdmin);
-                          const canPersonnelValidateThis =
-                            !item.validationSkipped &&
-                            data.canHodEditSpecialists &&
-                            (data.hodDepartments ?? []).includes(PERSONNEL_DEPARTMENT) &&
-                            specialistNeedsPersonnelValidation(item);
+                            (myRoles.includes("BUH") ||
+                              myRoles.includes("CFD") ||
+                              myRoles.includes("BUH Inside") ||
+                              myRoles.includes("BUH Outsource") ||
+                              isAdmin);
                           const canHodValidateThis =
                             !item.validationSkipped &&
                             data.canHodEditSpecialists &&
                             (
-                              canPersonnelValidateThis ||
-                              (item.department
+                              item.department
                                 ? (data.hodDepartments ?? []).includes(item.department)
-                                : true)
+                                : true
                             );
                           const canEditThis =
                             !item.validationSkipped &&
@@ -3076,26 +3249,22 @@ export default function RequestDetailPage() {
                                 <div className="space-y-2">
                                   <div className="text-sm font-medium">Тип подрядчика</div>
                                   <div className="flex flex-wrap gap-3">
-                                    {["ООО", "ИП", "ГПХ", "СЗ", "другое"].map((option) => {
-                                      const checked = (draft.contractorTypes ?? []).includes(option);
+                                    {["ООО", "ИП", "ГПХ", "СЗ", "другое/не знаю"].map((option) => {
+                                      const checked =
+                                        (draft.contractorTypes ?? []).includes(option) ||
+                                        (option === "другое/не знаю" && (draft.contractorTypes ?? []).includes("другое"));
                                       return (
                                         <label key={option} className="flex items-center gap-2 text-sm">
-                                          <Checkbox
+                                          <input
+                                            type="radio"
                                             checked={checked}
                                             disabled={!canEditThis}
-                                            onCheckedChange={(checkedValue) =>
+                                            onChange={() =>
                                               setSpecialistDrafts((current) => ({
                                                 ...current,
                                                 [item.id]: {
                                                   ...draft,
-                                                  contractorTypes:
-                                                    checkedValue === true
-                                                      ? Array.from(
-                                                          new Set([...(draft.contractorTypes ?? []), option]),
-                                                        )
-                                                      : (draft.contractorTypes ?? []).filter(
-                                                          (value) => value !== option,
-                                                        ),
+                                                  contractorTypes: [option],
                                                 },
                                               }))
                                             }
@@ -3257,9 +3426,7 @@ export default function RequestDetailPage() {
                                   ? "Цех не получает задачу на валидацию по этой записи."
                                   : item.hodConfirmed || item.buhConfirmed
                                     ? `Прямые затраты подтверждены${item.hodConfirmed ? " руководителем цеха" : ""}${item.hodConfirmed && item.buhConfirmed ? " и" : ""}${item.buhConfirmed ? " BUH" : ""}.`
-                                    : canPersonnelValidateThis
-                                      ? "Ждет валидации руководителя цеха, Отдела кадров или BUH."
-                                      : "Ждет валидации руководителя цеха или BUH."}
+                                    : "Ждет валидации руководителя цеха или BUH."}
                               </div>
                             </div>
                           );
@@ -3293,8 +3460,6 @@ export default function RequestDetailPage() {
                         : nbdQuotaSummary
                     )?.map((item) => {
                       const remaining = item.quota - item.spent;
-                      const remainingWithVat =
-                        (item.quotaWithVat ?? item.quota) - (item.spentWithVat ?? item.spent);
                       const isHighlighted = item.monthKey === highlightedQuotaMonthKey;
                       return (
                         <div
@@ -3310,11 +3475,8 @@ export default function RequestDetailPage() {
                           </div>
                           <div className="mt-2 text-xs text-muted-foreground">Остаток</div>
                           <div className="mt-1 space-y-1">
-                            <div className="text-sm text-emerald-900">
-                              Без НДС: {remaining.toLocaleString("ru-RU")} ₽
-                            </div>
                             <div className="text-lg font-semibold text-emerald-950">
-                              С НДС: {remainingWithVat.toLocaleString("ru-RU")} ₽
+                              {remaining.toLocaleString("ru-RU")} ₽
                             </div>
                           </div>
                         </div>
@@ -3334,11 +3496,7 @@ export default function RequestDetailPage() {
                   <div className="mt-3 grid gap-2 md:grid-cols-3">
                     {cooQuotaSummary.map((item) => {
                       const quotaBase = item.adjustedQuota ?? item.quota;
-                      const quotaBaseWithVat =
-                        item.adjustedQuotaWithVat ?? item.quotaWithVat ?? quotaBase;
                       const remaining = quotaBase - item.spent;
-                      const remainingWithVat =
-                        quotaBaseWithVat - (item.spentWithVat ?? item.spent);
                       const isHighlighted = item.monthKey === highlightedQuotaMonthKey;
                       return (
                         <div
@@ -3354,11 +3512,8 @@ export default function RequestDetailPage() {
                           </div>
                           <div className="mt-2 text-xs text-muted-foreground">Остаток</div>
                           <div className="mt-1 space-y-1">
-                            <div className="text-sm text-slate-700">
-                              Без НДС: {remaining.toLocaleString("ru-RU")} ₽
-                            </div>
                             <div className="text-lg font-semibold text-slate-950">
-                              С НДС: {remainingWithVat.toLocaleString("ru-RU")} ₽
+                              {remaining.toLocaleString("ru-RU")} ₽
                             </div>
                           </div>
                         </div>

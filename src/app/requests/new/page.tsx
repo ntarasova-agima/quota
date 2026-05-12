@@ -12,7 +12,6 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { HoverHint } from "@/components/ui/hover-hint";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import ContestParticipantsEditor, {
@@ -25,7 +24,6 @@ import {
   DEFAULT_REQUIRED_ROLES,
   FUNDING_SOURCES,
   HOD_DEPARTMENTS,
-  REQUEST_AREAS,
   getCategoriesForDepartment,
   ROLE_OPTIONS,
   type RequestArea,
@@ -37,9 +35,7 @@ import {
   formatIncomingRatio,
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
-  PERSONNEL_DEPARTMENT,
   isPaidByDateAllowed,
-  specialistNeedsPersonnelValidation,
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
@@ -74,6 +70,7 @@ export default function NewRequestPage() {
   const createRequest = useMutation(api.requests.createRequest);
   const generateAttachmentUploadUrl = useMutation(api.attachments.generateUploadUrl);
   const saveAttachment = useMutation(api.attachments.saveAttachment);
+  const profile = useQuery(api.roles.myProfile);
   const router = useRouter();
   const today = useMemo(() => new Date(), []);
   const minApprovalDateValue = useMemo(() => {
@@ -81,7 +78,12 @@ export default function NewRequestPage() {
     next.setDate(next.getDate() + 1);
     return next.toISOString().slice(0, 10);
   }, [today]);
-  const minNeededByDateValue = useMemo(() => today.toISOString().slice(0, 10), [today]);
+  const minNeededByDateValue = useMemo(() => {
+    const date = new Date(today);
+    date.setDate(1);
+    date.setMonth(date.getMonth() - 1);
+    return date.toISOString().slice(0, 10);
+  }, [today]);
   const defaultDeadline = useMemo(() => {
     const date = new Date(today);
     let added = 0;
@@ -127,12 +129,15 @@ export default function NewRequestPage() {
     createContestParticipantDraft(),
   ]);
   const [financeLinks, setFinanceLinks] = useState("");
+  const [finplanEntered, setFinplanEntered] = useState(false);
+  const [finplanEntryIds, setFinplanEntryIds] = useState("");
   const [incomingAmount, setIncomingAmount] = useState("");
   const [incomingAmountWithVat, setIncomingAmountWithVat] = useState("");
   const [incomingVatInputSource, setIncomingVatInputSource] = useState<VatAmountSource>("without");
   const [shipmentDate, setShipmentDate] = useState("");
   const [approvalDeadline, setApprovalDeadline] = useState(defaultDeadline);
   const [neededBy, setNeededBy] = useState(defaultDeadline);
+  const [paymentDeadline, setPaymentDeadline] = useState(defaultDeadline);
   const [paidBy, setPaidBy] = useState("");
   const [requiredRoles, setRequiredRoles] = useState<RoleOption[]>([...DEFAULT_REQUIRED_ROLES]);
   const [requiredHodDepartments, setRequiredHodDepartments] = useState<string[]>([]);
@@ -217,6 +222,14 @@ export default function NewRequestPage() {
     category !== "Welcome-бонус" &&
     !isServiceCategory;
   const financeLinksRequired = fundingSource === "Отгрузки проекта";
+
+  useEffect(() => {
+    const profileDepartment = normalizeHodDepartment(profile?.department ?? undefined);
+    if (!profileDepartment || profileDepartment === requestArea) {
+      return;
+    }
+    handleRequestAreaChange(profileDepartment as RequestArea);
+  }, [profile?.department]);
   const relatedRequestsList = useMemo(
     () =>
       relatedRequests
@@ -287,10 +300,6 @@ export default function NewRequestPage() {
                   .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
                   .map((item) => item.department as string)
               : []),
-            ...(requestSupportsSpecialists &&
-            specialistsPayload.some((item) => specialistNeedsPersonnelValidation(item))
-              ? [PERSONNEL_DEPARTMENT]
-              : []),
             ...(isHodSelectableCategory(category) && selectedDepartment ? [selectedDepartment] : []),
           ],
         ),
@@ -315,6 +324,14 @@ export default function NewRequestPage() {
         .map((item) => item.trim())
         .filter(Boolean),
     [financeLinks],
+  );
+  const finplanEntryIdsList = useMemo(
+    () =>
+      finplanEntryIds
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    [finplanEntryIds],
   );
 
   const enforcedRoles = useMemo(() => {
@@ -414,6 +431,7 @@ export default function NewRequestPage() {
       !prepaymentDate);
   const approvalDeadlineInvalid = showValidationErrors && !approvalDeadline;
   const neededByInvalid = showValidationErrors && !neededBy;
+  const paymentDeadlineInvalid = showValidationErrors && !paymentDeadline;
   const hodDepartmentsInvalid =
     showValidationErrors &&
     requiredRoles.includes("HOD") &&
@@ -448,6 +466,7 @@ export default function NewRequestPage() {
       effectiveRequiredHodDepartments.length === 0) ||
     !approvalDeadline ||
     !neededBy ||
+    !paymentDeadline ||
     Boolean(fundingError) ||
     Boolean(paidByError);
 
@@ -643,9 +662,6 @@ export default function NewRequestPage() {
           throw new Error("Дедлайн согласования должен быть не раньше завтрашнего дня");
         }
       }
-      if (approvalDeadline && neededBy && new Date(approvalDeadline) > new Date(neededBy)) {
-        throw new Error("Дедлайн согласования должен быть не позже даты, когда нужно оплатить");
-      }
       if (category === "Welcome-бонус" && !investmentReturn.trim()) {
         throw new Error("Укажите, как будем возвращать инвестиции");
       }
@@ -716,6 +732,8 @@ export default function NewRequestPage() {
           showTransitFields && financeLinksList.length
             ? financeLinksList
             : undefined,
+        finplanEntered,
+        finplanEntryIds: finplanEntryIdsList.length ? finplanEntryIdsList : undefined,
         incomingAmount:
           showTransitFields && resolvedIncomingAmountsPreview.amountWithoutVat !== undefined
             ? resolvedIncomingAmountsPreview.amountWithoutVat
@@ -734,6 +752,7 @@ export default function NewRequestPage() {
             : undefined,
         approvalDeadline: approvalDeadline ? new Date(approvalDeadline).getTime() : undefined,
         neededBy: neededBy ? new Date(neededBy).getTime() : undefined,
+        paymentDeadline: paymentDeadline ? new Date(paymentDeadline).getTime() : undefined,
         paidBy:
           showTransitFields && paidBy
             ? new Date(`${paidBy}T00:00:00`).getTime()
@@ -776,21 +795,12 @@ export default function NewRequestPage() {
                 <div className="grid gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
                   <div className="space-y-2">
                     <FieldLabel required className={headerFieldLabelClass}>Цех</FieldLabel>
-                    <Select value={requestArea} onValueChange={(value) => handleRequestAreaChange(value as RequestArea)}>
-                      <SelectTrigger
-                        className={wrappedSelectTriggerClass}
-                        aria-invalid={departmentInvalid ? true : undefined}
-                      >
-                        <SelectValue placeholder="Выберите цех" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {REQUEST_AREAS.map((item) => (
-                          <SelectItem key={item} value={item} className="whitespace-normal">
-                            {item}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Input
+                      value={selectedDepartment}
+                      readOnly
+                      aria-invalid={departmentInvalid ? true : undefined}
+                      className="h-auto min-h-11 whitespace-normal bg-muted/30 px-3 py-2"
+                    />
                   </div>
                   <div className="space-y-2">
                     <FieldLabel required className={headerFieldLabelClass}>Тип заявки</FieldLabel>
@@ -1215,6 +1225,19 @@ export default function NewRequestPage() {
                 </div>
               ) : null}
 
+              <div className="grid gap-4 rounded-lg border border-border p-4 sm:grid-cols-[auto_minmax(0,1fr)]">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Checkbox checked={finplanEntered} onCheckedChange={(checked) => setFinplanEntered(checked === true)} />
+                  Занесено в финплан
+                </label>
+                <Textarea
+                  value={finplanEntryIds}
+                  onChange={(event) => setFinplanEntryIds(event.target.value)}
+                  placeholder="Ссылки на строки финплана или их ID, по одной в строке"
+                  rows={2}
+                />
+              </div>
+
               {showTransitFields ? (
                 <div className="space-y-4">
                   <div className="space-y-1">
@@ -1510,7 +1533,7 @@ export default function NewRequestPage() {
                 ) : null}
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
                   <FieldLabel htmlFor="approvalDeadline" required>
                     Дедлайн согласования
@@ -1526,9 +1549,7 @@ export default function NewRequestPage() {
                 </div>
                 <div className="space-y-2">
                   <FieldLabel htmlFor="neededBy" required>
-                    <HoverHint label="Когда нужно оплатить">
-                      <span>Ожидание затраты</span>
-                    </HoverHint>
+                    Ожидание затраты
                   </FieldLabel>
                   <Input
                     id="neededBy"
@@ -1536,6 +1557,19 @@ export default function NewRequestPage() {
                     value={neededBy}
                     onChange={(event) => setNeededBy(event.target.value)}
                     aria-invalid={neededByInvalid ? true : undefined}
+                    min={minNeededByDateValue}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="paymentDeadline" required>
+                    Дедлайн оплаты
+                  </FieldLabel>
+                  <Input
+                    id="paymentDeadline"
+                    type="date"
+                    value={paymentDeadline}
+                    onChange={(event) => setPaymentDeadline(event.target.value)}
+                    aria-invalid={paymentDeadlineInvalid ? true : undefined}
                     min={minNeededByDateValue}
                   />
                 </div>

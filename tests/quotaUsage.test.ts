@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getEffectiveQuotaAllocations, sumQuotaUsageByMonth, sumQuotaUsageByMonthAndTag } from "../convex/quotaUsage";
 
 describe("quotaUsage", () => {
-  it("allocates approved requests to approval month", () => {
+  it("allocates approved requests to expense expectation month", () => {
     const allocations = getEffectiveQuotaAllocations({
       status: "approved",
       amount: 15000,
@@ -10,10 +10,11 @@ describe("quotaUsage", () => {
       vatRate: 22,
       currency: "RUB",
       approvalDeadline: new Date("2026-04-10").getTime(),
+      neededBy: new Date("2026-05-10").getTime(),
     });
 
     expect(allocations).toEqual([
-      { monthKey: "2026-04", amountWithoutVat: 15000, amountWithVat: 18300 },
+      { monthKey: "2026-05", amountWithoutVat: 15000, amountWithVat: 18300 },
     ]);
   });
 
@@ -30,15 +31,16 @@ describe("quotaUsage", () => {
       currency: "USD",
       paymentCurrencyRate: 90,
       approvalDeadline: new Date("2026-04-10").getTime(),
+      neededBy: new Date("2026-04-20").getTime(),
       paymentPlannedAt: new Date("2026-05-15").getTime(),
     });
 
     expect(allocations).toEqual([
-      { monthKey: "2026-05", amountWithoutVat: 10800, amountWithVat: 12960 },
+      { monthKey: "2026-04", amountWithoutVat: 10800, amountWithVat: 12960 },
     ]);
   });
 
-  it("splits partially paid requests between paid splits and residual plan", () => {
+  it("keeps partially paid requests in expense expectation month", () => {
     const allocations = getEffectiveQuotaAllocations({
       status: "partially_paid",
       amount: 1000,
@@ -50,6 +52,7 @@ describe("quotaUsage", () => {
       plannedPaymentAmountWithVat: 305,
       currency: "RUB",
       approvalDeadline: new Date("2026-04-10").getTime(),
+      neededBy: new Date("2026-04-20").getTime(),
       paymentPlannedAt: new Date("2026-06-01").getTime(),
       paymentSplits: [
         { amountWithoutVat: 300, amountWithVat: 366, paidAt: new Date("2026-05-05").getTime() },
@@ -58,13 +61,11 @@ describe("quotaUsage", () => {
     });
 
     expect(allocations).toEqual([
-      { monthKey: "2026-05", amountWithoutVat: 300, amountWithVat: 366 },
-      { monthKey: "2026-05", amountWithoutVat: 300, amountWithVat: 366 },
-      { monthKey: "2026-06", amountWithoutVat: 400, amountWithVat: 488 },
+      { monthKey: "2026-04", amountWithoutVat: 1000, amountWithVat: 1220 },
     ]);
   });
 
-  it("allocates multiple planned payments across their months", () => {
+  it("ignores planned payment months for quota allocation", () => {
     const allocations = getEffectiveQuotaAllocations({
       status: "payment_planned",
       amount: 1000,
@@ -72,6 +73,7 @@ describe("quotaUsage", () => {
       vatRate: 22,
       currency: "RUB",
       approvalDeadline: new Date("2026-04-10").getTime(),
+      neededBy: new Date("2026-04-20").getTime(),
       paymentResidualAmount: 1000,
       paymentResidualAmountWithVat: 1220,
       plannedPaymentAmount: 300,
@@ -87,13 +89,11 @@ describe("quotaUsage", () => {
     });
 
     expect(allocations).toEqual([
-      { monthKey: "2026-05", amountWithoutVat: 250, amountWithVat: 305 },
-      { monthKey: "2026-06", amountWithoutVat: 300, amountWithVat: 366 },
-      { monthKey: "2026-06", amountWithoutVat: 450, amountWithVat: 549 },
+      { monthKey: "2026-04", amountWithoutVat: 1000, amountWithVat: 1220 },
     ]);
   });
 
-  it("uses split totals and final remainder for fully paid requests", () => {
+  it("uses final paid total in expense expectation month", () => {
     const allocations = getEffectiveQuotaAllocations({
       status: "paid",
       currency: "RUB",
@@ -101,6 +101,7 @@ describe("quotaUsage", () => {
       actualPaidAmountWithVat: 1220,
       vatRate: 22,
       approvalDeadline: new Date("2026-04-10").getTime(),
+      neededBy: new Date("2026-04-20").getTime(),
       paidAt: new Date("2026-06-15").getTime(),
       paymentSplits: [
         { amountWithoutVat: 250, amountWithVat: 305, paidAt: new Date("2026-05-10").getTime() },
@@ -108,8 +109,7 @@ describe("quotaUsage", () => {
     });
 
     expect(allocations).toEqual([
-      { monthKey: "2026-05", amountWithoutVat: 250, amountWithVat: 305 },
-      { monthKey: "2026-06", amountWithoutVat: 750, amountWithVat: 915 },
+      { monthKey: "2026-04", amountWithoutVat: 1000, amountWithVat: 1220 },
     ]);
   });
 
@@ -122,6 +122,7 @@ describe("quotaUsage", () => {
         vatRate: 22,
         currency: "RUB",
         approvalDeadline: new Date("2026-04-10").getTime(),
+        neededBy: new Date("2026-04-20").getTime(),
         cfdTag: "Tag A",
       },
       {
@@ -131,6 +132,7 @@ describe("quotaUsage", () => {
         vatRate: 22,
         currency: "RUB",
         approvalDeadline: new Date("2026-04-10").getTime(),
+        neededBy: new Date("2026-04-20").getTime(),
         cfdTag: "Tag B",
       },
       {
@@ -140,6 +142,7 @@ describe("quotaUsage", () => {
         vatRate: 22,
         currency: "RUB",
         approvalDeadline: new Date("2026-04-10").getTime(),
+        neededBy: new Date("2026-04-20").getTime(),
         isCanceled: true,
         cfdTag: "Tag C",
       },

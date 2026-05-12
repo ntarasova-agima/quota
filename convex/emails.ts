@@ -7,10 +7,8 @@ import {
   getApprovalRecipientsForTargets,
 } from "../src/lib/approvalRecipients";
 import {
-  PERSONNEL_DEPARTMENT,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
-  specialistNeedsPersonnelValidation,
 } from "../src/lib/requestFields";
 import { supportsRequestSpecialists, usesServiceRecipientLabel } from "../src/lib/requestRules";
 import { formatAmountPair } from "../src/lib/vat";
@@ -23,6 +21,10 @@ const roleEnum = v.union(
   v.literal("COO"),
   v.literal("CFD"),
   v.literal("BUH"),
+  v.literal("BUH Payment"),
+  v.literal("BUH Transit"),
+  v.literal("BUH Inside"),
+  v.literal("BUH Outsource"),
   v.literal("HOD"),
   v.literal("ADMIN"),
 );
@@ -68,6 +70,33 @@ function getRequestOwnerLabel(request: { category: string; clientName: string })
         label: "Клиент",
         value: request.clientName,
       };
+}
+
+const OUTSOURCE_CONTRACTOR_TYPES = ["ООО", "ИП", "ГПХ", "СЗ", "другое", "другое/не знаю"];
+
+function requestHasInsideSpecialists(request: any) {
+  return (request.specialists ?? []).some((item: any) => {
+    if (normalizeContestSpecialistSource(item.sourceType) === "internal") {
+      return true;
+    }
+    return (item.contractorTypes ?? []).includes("ГПХ");
+  });
+}
+
+function requestHasOutsourceSpecialists(request: any) {
+  return (request.specialists ?? []).some((item: any) => {
+    if (normalizeContestSpecialistSource(item.sourceType) !== "contractor") {
+      return false;
+    }
+    return (item.contractorTypes ?? []).some((type: string) =>
+      OUTSOURCE_CONTRACTOR_TYPES.includes(type),
+    );
+  });
+}
+
+function getPaymentDeadlineLabel(request: any) {
+  const timestamp = request.paymentDeadline ?? request.neededBy;
+  return timestamp ? new Date(timestamp).toLocaleDateString("ru-RU") : "не задан";
 }
 
 function getBaseUrl() {
@@ -203,9 +232,7 @@ export const sendRequestSubmitted = internalAction({
     const approvalDeadline = request.approvalDeadline
       ? new Date(request.approvalDeadline).toLocaleDateString("ru-RU")
       : "не задан";
-    const neededBy = request.neededBy
-      ? new Date(request.neededBy).toLocaleDateString("ru-RU")
-      : "не задано";
+    const paymentDeadline = getPaymentDeadlineLabel(request);
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "request_submitted",
@@ -218,7 +245,7 @@ export const sendRequestSubmitted = internalAction({
         <p><strong>${title}</strong></p>
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Дедлайн согласования: ${approvalDeadline}</p>
-        <p>Когда нужно оплатить: ${neededBy}</p>
+        <p>Дедлайн оплаты: ${paymentDeadline}</p>
         <p>Review: <a href="${link}">${link}</a></p>
       `,
     });
@@ -262,6 +289,48 @@ export const sendRequestCreatedToBuh = internalAction({
         <p>На что нужен бюджет: <strong>${requestTitle}</strong></p>
         <p>Тип заявки: ${request.category}</p>
         <p>Источник финансирования: ${request.fundingSource}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendSpecialistBuhNotifications = internalAction({
+  args: {
+    requestId: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request, roles } = data;
+    const recipientRoles = [
+      requestHasInsideSpecialists(request) ? "BUH Inside" : undefined,
+      requestHasOutsourceSpecialists(request) ? "BUH Outsource" : undefined,
+    ].filter(Boolean) as string[];
+    if (!recipientRoles.length) {
+      return;
+    }
+    const recipients = roles
+      .filter((role) => role.active && role.roles.some((item: string) => recipientRoles.includes(item)))
+      .map((role) => role.email);
+    if (!recipients.length) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "specialist_buh_notification",
+      to: Array.from(new Set(recipients)),
+      subject: `В заявке есть специалисты: ${request.requestCode ?? request.category}`,
+      html: `
+        <p>В заявке есть штатные специалисты или подрядчики, требующие внимания бухгалтерии.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
@@ -381,7 +450,7 @@ export const sendPaymentRequested = internalAction({
     }
     const { request, roles, approvals } = data;
     const buhRecipients = roles
-      .filter((role) => role.active && role.roles.some((item: string) => ["BUH", "CFD"].includes(item)))
+      .filter((role) => role.active && role.roles.some((item: string) => ["BUH Payment", "CFD"].includes(item)))
       .map((role) => role.email);
     if (buhRecipients.length === 0) {
       return;
@@ -389,9 +458,7 @@ export const sendPaymentRequested = internalAction({
     const link = `${getBaseUrl()}/requests/${request._id}`;
     const owner = getRequestOwnerLabel(request);
     const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
-    const paymentDeadline = request.neededBy
-      ? new Date(request.neededBy).toLocaleDateString("ru-RU")
-      : "не задан";
+    const paymentDeadline = getPaymentDeadlineLabel(request);
     const author = request.createdByName
       ? `${request.createdByName} (${request.createdByEmail})`
       : request.createdByEmail;
@@ -408,6 +475,70 @@ export const sendPaymentRequested = internalAction({
         <p>Автор заявки: ${author}</p>
         <p>Дедлайн оплаты: ${paymentDeadline}</p>
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendPaymentRequestedToAuthor = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    actorEmail: v.string(),
+    actorName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request } = data;
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const actor = args.actorName ? `${args.actorName} (${args.actorEmail})` : args.actorEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "payment_requested_author",
+      to: [request.createdByEmail],
+      subject: `Заявка передана в оплату: ${request.requestCode ?? request.category}`,
+      html: `
+        <p>Заявка переведена в оплату.</p>
+        <p>Кто передал: ${actor}</p>
+        <p>Дедлайн оплаты: ${getPaymentDeadlineLabel(request)}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendOperationalFieldsChanged = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    summaryLines: v.array(v.string()),
+    actorEmail: v.string(),
+    actorName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request } = data;
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const actor = args.actorName ? `${args.actorName} (${args.actorEmail})` : args.actorEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "operational_fields_changed",
+      to: [request.createdByEmail],
+      subject: `В заявке изменены суммы или даты: ${request.requestCode ?? request.category}`,
+      html: `
+        <p>В заявке изменились финансовые поля.</p>
+        <p>Кто изменил: ${actor}</p>
+        <ul>${args.summaryLines.map((line) => `<li>${line}</li>`).join("")}</ul>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -819,7 +950,8 @@ export const sendPaymentPlanned = internalAction({
 export const sendPaymentDeadlineReminder = internalAction({
   args: {
     requestId: v.id("requests"),
-    plannedAt: v.number(),
+    paymentDeadline: v.number(),
+    reminderKind: v.union(v.literal("before"), v.literal("overdue")),
   },
   handler: async (ctx, args) => {
     const data = await ctx.runQuery(internal.emails.getRequestData, {
@@ -828,30 +960,35 @@ export const sendPaymentDeadlineReminder = internalAction({
     if (!data) {
       return;
     }
-    const { request, roles, approvals } = data;
+    const { request, roles } = data;
+    const dateKey = `${args.reminderKind}:${new Date().toISOString().slice(0, 10)}`;
     if (
       request.status === "paid" ||
       request.status === "closed" ||
-      request.paymentPlannedAt !== args.plannedAt ||
-      request.paymentReminderSentAt
+      (request.paymentDeadline ?? request.neededBy) !== args.paymentDeadline ||
+      request.paymentDeadlineReminderLastDateKey === dateKey
     ) {
       return;
     }
     const buhRecipients = roles
-      .filter((role) => role.active && role.roles.some((item: string) => ["BUH", "CFD"].includes(item)))
+      .filter((role) => role.active && role.roles.includes("BUH Payment"))
       .map((role) => role.email);
-    const recipients = Array.from(new Set([request.createdByEmail, ...buhRecipients]));
+    const recipients = Array.from(new Set(buhRecipients));
     if (recipients.length === 0) {
       return;
     }
     const link = `${getBaseUrl()}/requests/${request._id}`;
+    const isBefore = args.reminderKind === "before";
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "payment_deadline_reminder",
       to: recipients,
-      subject: `Дедлайн оплаты истек: ${request.clientName}`,
+      subject: isBefore
+        ? `Завтра дедлайн оплаты: ${request.requestCode ?? request.clientName}`
+        : `Просрочен дедлайн оплаты: ${request.requestCode ?? request.clientName}`,
       html: `
-        <p>Срок оплаты по заявке истек вчера.</p>
+        <p>${isBefore ? "Завтра дедлайн оплаты по заявке." : "Оплата по заявке просрочена."}</p>
+        <p>Дедлайн оплаты: ${getPaymentDeadlineLabel(request)}</p>
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
@@ -859,8 +996,16 @@ export const sendPaymentDeadlineReminder = internalAction({
     await ctx.runMutation(internal.requests.markReminderSent, {
       requestId: args.requestId,
       kind: "payment",
-      expectedAt: args.plannedAt,
+      expectedAt: args.paymentDeadline,
+      dateKey,
     });
+    if (args.reminderKind === "overdue") {
+      await ctx.scheduler.runAfter(24 * 60 * 60 * 1000, internal.emails.sendPaymentDeadlineReminder, {
+        requestId: args.requestId,
+        paymentDeadline: args.paymentDeadline,
+        reminderKind: "overdue",
+      });
+    }
   },
 });
 
@@ -880,7 +1025,7 @@ export const sendManualPaymentReminder = internalAction({
     const { request, roles } = data;
     const recipients = dedupeEmails(
       roles
-        .filter((role) => role.active && role.roles.some((item: string) => ["BUH", "CFD"].includes(item)))
+        .filter((role) => role.active && role.roles.includes("BUH Payment"))
         .map((role) => role.email),
       [args.remindedByEmail],
     );
@@ -1093,7 +1238,6 @@ export const sendHodValidationRequest = internalAction({
             )
             .map((item: { department?: string }) => item.department?.trim())
             .filter(Boolean),
-          ...(specialists.some((item: any) => specialistNeedsPersonnelValidation(item)) ? [PERSONNEL_DEPARTMENT] : []),
         ],
       ),
     ) as string[];
@@ -1120,8 +1264,7 @@ export const sendHodValidationRequest = internalAction({
               requiresContestSpecialistValidation(item) &&
               item.department &&
               visibleDepartments.includes(item.department)
-            ) ||
-            (visibleDepartments.includes(PERSONNEL_DEPARTMENT) && specialistNeedsPersonnelValidation(item)),
+            ),
         )
         .map(
           (item: any) => `

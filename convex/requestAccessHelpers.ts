@@ -1,12 +1,51 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { normalizeEmail } from "../src/lib/authRules";
-import { requiresContestSpecialistValidation } from "../src/lib/requestFields";
+import {
+  normalizeContestSpecialistSource,
+  requiresContestSpecialistValidation,
+} from "../src/lib/requestFields";
 import { getCurrentEmail } from "./authHelpers";
 import { getEffectiveRequiredHodDepartments } from "./requestWorkflow";
 
-export const REQUEST_WIDE_VIEW_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"] as const;
+export const REQUEST_WIDE_VIEW_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "BUH Transit", "ADMIN"] as const;
 export const REQUEST_ALL_LIST_ROLES = [...REQUEST_WIDE_VIEW_ROLES, "HOD"] as const;
 export const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "HOD"] as const;
+
+const OUTSOURCE_CONTRACTOR_TYPES = ["ООО", "ИП", "ГПХ", "СЗ", "другое", "другое/не знаю"];
+
+export function requestHasInsideSpecialists(request: any) {
+  return (request.specialists ?? []).some((item: any) => {
+    if (normalizeContestSpecialistSource(item.sourceType) === "internal") {
+      return true;
+    }
+    return (item.contractorTypes ?? []).includes("ГПХ");
+  });
+}
+
+export function requestHasOutsourceSpecialists(request: any) {
+  return (request.specialists ?? []).some((item: any) => {
+    if (normalizeContestSpecialistSource(item.sourceType) !== "contractor") {
+      return false;
+    }
+    return (item.contractorTypes ?? []).some((type: string) =>
+      OUTSOURCE_CONTRACTOR_TYPES.includes(type),
+    );
+  });
+}
+
+export function hasSpecialBuhAccessToRequest(roleRecord: any, request: any) {
+  const roles = roleRecord?.roles ?? [];
+  if (roles.includes("BUH Payment")) {
+    return ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status);
+  }
+  if (roles.includes("BUH Inside") && requestHasInsideSpecialists(request)) {
+    return true;
+  }
+  if (roles.includes("BUH Outsource") && requestHasOutsourceSpecialists(request)) {
+    return true;
+  }
+  return false;
+}
 
 export async function getRoleRecord(ctx: { db: any }, email: string) {
   return await ctx.db
@@ -110,11 +149,12 @@ export async function ensureCanViewRequest(ctx: any, requestId: any) {
   const canViewAll = roleRecord?.roles?.some((role: string) =>
     REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
   );
+  const hasSpecialBuhAccess = hasSpecialBuhAccessToRequest(roleRecord, request);
   const canHodView = hasHodAccessToRequest(roleRecord, request);
   const canViewByHistory = await hasHistoricalApprovalAccess(ctx, requestId, email);
   const isCreator = request.createdBy === userId || normalizeEmail(request.createdByEmail) === normalizeEmail(email);
   const hasExplicitViewerAccess = hasViewerAccess(request, email);
-  if (!canViewAll && !canHodView && !canViewByHistory && !isCreator && !hasExplicitViewerAccess) {
+  if (!canViewAll && !hasSpecialBuhAccess && !canHodView && !canViewByHistory && !isCreator && !hasExplicitViewerAccess) {
     throw new Error("Not authorized");
   }
   return {
@@ -123,6 +163,7 @@ export async function ensureCanViewRequest(ctx: any, requestId: any) {
     request,
     roleRecord,
     canViewAll,
+    hasSpecialBuhAccess,
     canHodView,
     canViewByHistory,
     isCreator,
