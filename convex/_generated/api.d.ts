@@ -17,6 +17,7 @@ import type * as cfdTags from "../cfdTags.js";
 import type * as comments from "../comments.js";
 import type * as emails from "../emails.js";
 import type * as http from "../http.js";
+import type * as improvements from "../improvements.js";
 import type * as quotaUsage from "../quotaUsage.js";
 import type * as quotas from "../quotas.js";
 import type * as requestAccessHelpers from "../requestAccessHelpers.js";
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   comments: typeof comments;
   emails: typeof emails;
   http: typeof http;
+  improvements: typeof improvements;
   quotaUsage: typeof quotaUsage;
   quotas: typeof quotas;
   requestAccessHelpers: typeof requestAccessHelpers;

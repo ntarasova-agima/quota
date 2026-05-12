@@ -23,15 +23,17 @@ export default function AppHeader({
   const roles = profile?.roles?.length ? formatRoleList(profile.roles) : "роль не назначена";
   const name = profile?.fullName || profile?.email || "";
   const canViewAllRequests =
-    profile?.roles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)) ||
+    profile?.roles?.some((role) =>
+      ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "BUH Payment", "BUH Transit", "BUH Inside", "BUH Outsource", "HOD", "ADMIN"].includes(role),
+    ) ||
     hasHistoricalApprovalAccess ||
     canUseAllRequestsView;
   const canApprove = profile?.roles?.some((role) =>
-    ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role),
+    ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "BUH Payment", "BUH Transit", "HOD", "ADMIN"].includes(role),
   );
   const isCfd = profile?.roles?.includes("CFD");
   const isCoo = profile?.roles?.includes("COO");
-  const isBuh = profile?.roles?.includes("BUH");
+  const isBuh = profile?.roles?.some((role) => ["BUH", "BUH Transit"].includes(role));
   const isHod = profile?.roles?.includes("HOD");
   const isAdmin = profile?.roles?.includes("ADMIN");
   const canManageTags = Boolean(isCfd || isBuh || isCoo || isHod || isAdmin);
@@ -60,6 +62,9 @@ export default function AppHeader({
             </Button>
             <Button asChild variant="outline">
               <Link href="/profile">Профиль</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/improvements">Предложить улучшения</Link>
             </Button>
             <SignOutButton />
           </div>

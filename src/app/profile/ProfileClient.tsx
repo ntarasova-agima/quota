@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/lib/convex";
+import { HOD_DEPARTMENTS } from "@/lib/constants";
 
 export default function ProfileClient() {
   const { signOut } = useAuthActions();
@@ -22,6 +24,7 @@ export default function ProfileClient() {
   const [error, setError] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
   const [creatorTitle, setCreatorTitle] = useState("");
+  const [department, setDepartment] = useState("Аккаунтинг");
   const [email, setEmail] = useState("");
   const isAdmin = profile?.roles?.includes("ADMIN") ?? false;
   const isOnboarding = searchParams.get("onboarding") === "1" || profile?.needsOnboarding;
@@ -33,6 +36,7 @@ export default function ProfileClient() {
     }
     setFullName(profile.fullName ?? "");
     setCreatorTitle(profile.creatorTitle ?? "");
+    setDepartment(profile.department ?? "Аккаунтинг");
     setEmail(profile.email ?? "");
   }, [profile]);
 
@@ -73,6 +77,7 @@ export default function ProfileClient() {
       await updateProfile({
         fullName: fullName.trim() || undefined,
         creatorTitle: creatorTitle.trim() || undefined,
+        department,
         email: isAdmin ? email.trim() || undefined : undefined,
       });
       if (isOnboarding) {
@@ -89,9 +94,11 @@ export default function ProfileClient() {
               ? "Укажите имя и фамилию"
               : message.includes("Creator title required")
                 ? "Укажите должность"
-                : message.includes("Corporate email required")
-                  ? "Используйте корпоративную почту @agima.ru"
-                  : message,
+                : message.includes("Department required")
+                  ? "Выберите цех"
+                  : message.includes("Corporate email required")
+                    ? "Используйте корпоративную почту @agima.ru"
+                    : message,
       );
     } finally {
       setSaving(false);
@@ -133,6 +140,21 @@ export default function ProfileClient() {
               onChange={(event) => setCreatorTitle(event.target.value)}
               placeholder="Например, Аккаунт-менеджер"
             />
+          </div>
+          <div className="space-y-2">
+            <Label>Цех</Label>
+            <Select value={department} onValueChange={setDepartment}>
+              <SelectTrigger>
+                <SelectValue placeholder="Выберите цех" />
+              </SelectTrigger>
+              <SelectContent>
+                {HOD_DEPARTMENTS.map((item) => (
+                  <SelectItem key={item} value={item}>
+                    {item}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label htmlFor="email">Почта</Label>

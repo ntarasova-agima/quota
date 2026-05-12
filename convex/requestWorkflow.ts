@@ -1,11 +1,10 @@
 import {
-  PERSONNEL_DEPARTMENT,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
-  specialistNeedsPersonnelValidation,
 } from "../src/lib/requestFields";
 import { normalizeHodDepartment } from "../src/lib/departments";
 import {
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
   isHodSelectableCategory,
   normalizeRequestCategory,
   supportsRequestSpecialists,
@@ -51,9 +50,6 @@ export function getRequiredSpecialistHodDepartments(
     .filter((item) => normalizeContestSpecialistSource(item.sourceType) === "internal")
     .filter((item) => requiresContestSpecialistValidation(item))
     .map((item) => item.department);
-  if (specialists.some((item) => specialistNeedsPersonnelValidation(item))) {
-    departments.push(PERSONNEL_DEPARTMENT);
-  }
   return normalizeDepartmentList(departments);
 }
 
@@ -78,9 +74,18 @@ export function getEffectiveRequiredHodDepartments(params: {
 export function getEffectiveRequiredRoles(params: {
   requiredRoles: string[];
   requiredHodDepartments?: string[];
+  category?: string;
+  enforceFinanceRole?: boolean;
 }) {
   const roles = new Set(params.requiredRoles);
-  roles.add("BUH");
+  if (params.enforceFinanceRole !== false) {
+    if (normalizeRequestCategory(params.category ?? "") === CLIENT_SERVICES_TRANSIT_CATEGORY) {
+      roles.delete("BUH");
+      roles.add("BUH Transit");
+    } else {
+      roles.add("BUH");
+    }
+  }
   if ((params.requiredHodDepartments?.length ?? 0) > 0) {
     roles.add("HOD");
   }
@@ -96,6 +101,8 @@ export function getApprovalIdentity(approval: { role: string; department?: strin
 export function buildApprovalTargets(params: {
   requiredRoles: string[];
   requiredHodDepartments?: string[];
+  category?: string;
+  enforceFinanceRole?: boolean;
 }) {
   const roles = getEffectiveRequiredRoles(params);
   const targets: Array<{ role: string; department?: string }> = [];
@@ -118,9 +125,6 @@ export function canDepartmentValidateSpecialist(
   const normalizedDepartment = normalizeHodDepartment(department);
   if (!normalizedDepartment || specialist.validationSkipped) {
     return false;
-  }
-  if (normalizedDepartment === PERSONNEL_DEPARTMENT && specialistNeedsPersonnelValidation(specialist)) {
-    return true;
   }
   if (!requiresContestSpecialistValidation(specialist)) {
     return false;

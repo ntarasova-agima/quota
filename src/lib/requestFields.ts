@@ -13,7 +13,7 @@ export const CONTEST_SPECIALIST_SOURCE_LABELS: Record<ContestSpecialistSource, s
   contractor: "Подрядчики, ГПХ, ИП, СЗ",
 };
 
-export const CONTRACTOR_TYPE_OPTIONS = ["ООО", "ИП", "ГПХ", "СЗ", "другое"] as const;
+export const CONTRACTOR_TYPE_OPTIONS = ["ООО", "ИП", "ГПХ", "СЗ", "другое/не знаю"] as const;
 export type ContractorTypeOption = (typeof CONTRACTOR_TYPE_OPTIONS)[number];
 
 export const SPECIALIST_TAX_FLAG_OPTIONS = [
@@ -69,7 +69,7 @@ export function isContestSpecialistValidated(item: {
   buhConfirmed?: boolean;
   validationSkipped?: boolean;
 }) {
-  if (!requiresContestSpecialistValidation(item) && !specialistNeedsPersonnelValidation(item)) {
+  if (!requiresContestSpecialistValidation(item)) {
     return true;
   }
   return Boolean(

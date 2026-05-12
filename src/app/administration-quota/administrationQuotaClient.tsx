@@ -12,13 +12,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { HOD_DEPARTMENTS } from "@/lib/constants";
 import {
-  DEFAULT_VAT_RATE,
   formatAmount,
-  getAmountWithVat,
   parseMoneyInput,
-  resolveVatAmounts,
   sanitizeNumericInput,
-  syncVatInputPair,
 } from "@/lib/vat";
 
 const MONTH_NAMES = [
@@ -122,43 +118,33 @@ function RowEditor({
   onSaveManualSpent?: (row: QuotaEditableRow, values: { manualSpent: number; manualSpentWithVat: number }) => Promise<void>;
 }) {
   const [quota, setQuota] = useState(String(row.quota ?? 0));
-  const [quotaWithVat, setQuotaWithVat] = useState(String(row.quotaWithVat ?? row.quota ?? 0));
   const [manualSpent, setManualSpent] = useState(String(row.manualSpent ?? 0));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const vatRate = row.vatRate ?? DEFAULT_VAT_RATE;
+  const vatRate = row.vatRate ?? 0;
 
   useEffect(() => {
     setQuota(String(row.quota ?? 0));
-    setQuotaWithVat(String(row.quotaWithVat ?? row.quota ?? 0));
     setManualSpent(String(row.manualSpent ?? 0));
-  }, [row.manualSpent, row.quota, row.quotaWithVat]);
+  }, [row.manualSpent, row.quota]);
 
   async function saveIfChanged() {
     if (!canEdit || saving) {
       return;
     }
     setSaveError(null);
-    const resolved = resolveVatAmounts({
-      amountWithoutVat: parseMoneyInput(quota),
-      amountWithVat: parseMoneyInput(quotaWithVat),
-      vatRate,
-      autoCalculateAmountWithVat: true,
-    });
-    if (resolved.amountWithoutVat === undefined || resolved.amountWithVat === undefined) {
+    const nextQuota = parseMoneyInput(quota);
+    if (nextQuota === undefined) {
       return;
     }
-    if (
-      resolved.amountWithoutVat === row.quota &&
-      resolved.amountWithVat === (row.quotaWithVat ?? row.quota)
-    ) {
+    if (nextQuota === row.quota) {
       return;
     }
     setSaving(true);
     try {
       await onSave(row, {
-        quota: resolved.amountWithoutVat,
-        quotaWithVat: resolved.amountWithVat,
+        quota: nextQuota,
+        quotaWithVat: nextQuota,
         vatRate,
       });
     } catch (err) {
@@ -174,11 +160,10 @@ function RowEditor({
     }
     setSaveError(null);
     const nextManualSpent = parseMoneyInput(manualSpent) ?? 0;
-    const nextManualSpentWithVat =
-      getAmountWithVat(nextManualSpent, undefined, vatRate) ?? nextManualSpent;
+    const nextManualSpentWithVat = nextManualSpent;
     if (
       nextManualSpent === (row.manualSpent ?? 0) &&
-      nextManualSpentWithVat === (row.manualSpentWithVat ?? nextManualSpentWithVat)
+      nextManualSpentWithVat === (row.manualSpentWithVat ?? nextManualSpent)
     ) {
       return;
     }
@@ -212,7 +197,7 @@ function RowEditor({
       className={`${wrapperClass} ${hasIssues ? "border-destructive bg-destructive/5" : ""} ${expandable ? "cursor-pointer transition-colors hover:border-zinc-300" : ""}`}
       onClick={() => onToggleExpand?.()}
     >
-      <div className="grid gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,0.85fr)] md:items-end">
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,0.85fr)] md:items-end">
         <div>
           <div className="flex items-start gap-2">
             {expandable ? (
@@ -222,57 +207,27 @@ function RowEditor({
             ) : null}
             <div>
               <div className={tone === "total" ? "text-lg font-semibold" : "font-medium"}>{label}</div>
-              <div className="text-xs text-muted-foreground">НДС: {vatRate}%</div>
+              <div className="text-xs text-muted-foreground">Все суммы без НДС</div>
             </div>
           </div>
         </div>
         <div className="space-y-1" onClick={stopToggle}>
-          <Label>Квота без НДС</Label>
+          <Label>Квота</Label>
           <Input
             value={quota}
             inputMode="decimal"
             disabled={!canEdit}
             onBlur={saveIfChanged}
-            onChange={(event) => {
-              const value = sanitizeNumericInput(event.target.value);
-              setQuota(value);
-              const synced = syncVatInputPair({
-                amountWithoutVatInput: value,
-                amountWithVatInput: quotaWithVat,
-                vatRateInput: String(vatRate),
-                source: "without",
-              });
-              setQuotaWithVat(synced.amountWithVatInput);
-            }}
-          />
-        </div>
-        <div className="space-y-1" onClick={stopToggle}>
-          <Label>Квота с НДС</Label>
-          <Input
-            value={quotaWithVat}
-            inputMode="decimal"
-            disabled={!canEdit}
-            onBlur={saveIfChanged}
-            onChange={(event) => {
-              const value = sanitizeNumericInput(event.target.value);
-              setQuotaWithVat(value);
-              const synced = syncVatInputPair({
-                amountWithoutVatInput: quota,
-                amountWithVatInput: value,
-                vatRateInput: String(vatRate),
-                source: "with",
-              });
-              setQuota(synced.amountWithoutVatInput);
-            }}
+            onChange={(event) => setQuota(sanitizeNumericInput(event.target.value))}
           />
         </div>
         <div onClick={stopToggle}>
           <div className="text-xs text-muted-foreground">Потрачено</div>
-          <div>{formatAmount(row.spent)} / {formatAmount(row.spentWithVat ?? row.spent)}</div>
+          <div>{formatAmount(row.spent)}</div>
         </div>
         <div onClick={stopToggle}>
           <div className="text-xs text-muted-foreground">Остаток</div>
-          <div>{formatAmount(row.remaining)} / {formatAmount(row.remainingWithVat ?? row.remaining)}</div>
+          <div>{formatAmount(row.remaining)}</div>
           {saving ? <div className="text-xs text-emerald-700">Сохраняю...</div> : null}
         </div>
       </div>

@@ -84,28 +84,20 @@ export default function QuotaRemainingTable({
       <CardContent>
         {rows.length ? (
           <div className="grid gap-3">
-            <div className="grid grid-cols-[1.1fr_1.35fr_1.35fr_1fr_1fr] gap-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <div className="grid grid-cols-[1.1fr_1.35fr_1fr_1fr] gap-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <div>Месяц и год</div>
               <div>Квота</div>
-              <div>Корректировка</div>
               <div>Потрачено</div>
               <div>Остаток</div>
             </div>
             {rows.map((row) => {
-              const initialQuota = row.quota;
-              const initialQuotaWithVat = row.quotaWithVat ?? row.quota;
-              const adjustedQuota = row.adjustedQuota;
-              const adjustedQuotaWithVat = row.adjustedQuotaWithVat ?? row.adjustedQuota;
-              const quotaForRemaining = adjustedQuota ?? initialQuota;
-              const quotaWithVatForRemaining = adjustedQuotaWithVat ?? initialQuotaWithVat;
-              const spentWithVat = row.spentWithVat ?? row.spent;
+              const quotaForRemaining = row.adjustedQuota ?? row.quota;
               const remaining = quotaForRemaining - row.spent;
-              const remainingWithVat = quotaWithVatForRemaining - spentWithVat;
-              const isAlert = remaining < 0 || remainingWithVat < 0;
+              const isAlert = remaining < 0;
               return (
                 <div
                   key={row.monthKey}
-                  className={`grid grid-cols-[1.1fr_1.35fr_1.35fr_1fr_1fr] items-start gap-3 rounded-lg border px-3 py-3 text-sm ${
+                  className={`grid grid-cols-[1.1fr_1.35fr_1fr_1fr] items-start gap-3 rounded-lg border px-3 py-3 text-sm ${
                     isAlert
                       ? "border-rose-200 bg-rose-50/60"
                       : row.monthKey === currentKey
@@ -115,20 +107,13 @@ export default function QuotaRemainingTable({
                 >
                   <div className="font-medium">{formatMonth(row.year, row.month)}</div>
                   <div className="space-y-1">
-                    <div>Без НДС: {formatAmount(initialQuota)}</div>
-                    <div>С НДС: {formatAmount(initialQuotaWithVat)}</div>
+                    <div>{formatAmount(quotaForRemaining)}</div>
                   </div>
                   <div className="space-y-1">
-                    <div>Без НДС: {formatAmount(adjustedQuota)}</div>
-                    <div>С НДС: {formatAmount(adjustedQuotaWithVat)}</div>
-                  </div>
-                  <div className="space-y-1">
-                    <div>Без НДС: {formatAmount(row.spent)}</div>
-                    <div>С НДС: {formatAmount(spentWithVat)}</div>
+                    <div>{formatAmount(row.spent)}</div>
                   </div>
                   <div className={isAlert ? "font-semibold text-rose-600" : ""}>
-                    <div>Без НДС: {formatAmount(remaining)}</div>
-                    <div>С НДС: {formatAmount(remainingWithVat)}</div>
+                    <div>{formatAmount(remaining)}</div>
                   </div>
                 </div>
               );
