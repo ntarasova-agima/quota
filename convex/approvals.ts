@@ -603,3 +603,94 @@ export const adminApproveAsRole = mutation({
     return { status };
   },
 });
+
+export const adminRemoveAdditionalApproval = mutation({
+  args: {
+    requestId: v.id("requests"),
+    role: roleEnum,
+    department: v.optional(v.string()),
+    comment: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const roleRecord = await ctx.db
+      .query("roles")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .first();
+    if (!roleRecord?.active || !roleRecord.roles?.includes("ADMIN")) {
+      throw new Error("Not authorized");
+    }
+    const request = await ctx.db.get(args.requestId);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    const approvalsBefore = await ctx.db
+      .query("approvals")
+      .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
+      .collect();
+    const approval = approvalsBefore.find(
+      (item) =>
+        item.role === args.role &&
+        (args.role !== "HOD" || (item.department ?? "") === (args.department?.trim() ?? "")),
+    );
+    if (!approval) {
+      throw new Error("Approval entry not found");
+    }
+    if (!approval.requestedByRole) {
+      throw new Error("Можно удалить только дополнительное согласование");
+    }
+
+    const remainingApprovals = approvalsBefore.filter((item) => item._id !== approval._id);
+    const nextRequiredHodDepartments =
+      args.role === "HOD"
+        ? (request.requiredHodDepartments ?? []).filter(
+            (department: string) => department !== (args.department?.trim() ?? ""),
+          )
+        : (request.requiredHodDepartments ?? []);
+    const hasSameRoleApproval = remainingApprovals.some((item) => item.role === args.role);
+    const hasHodApproval = remainingApprovals.some((item) => item.role === "HOD");
+    const nextRequiredRoles = (request.requiredRoles ?? []).filter((role: string) => {
+      if (role !== args.role) {
+        return true;
+      }
+      if (role === "HOD") {
+        return hasHodApproval;
+      }
+      return hasSameRoleApproval;
+    });
+    const status = getRequestApprovalStatus({
+      category: request.category,
+      specialists: request.specialists,
+      requiredHodDepartments: nextRequiredHodDepartments,
+      approvals: remainingApprovals,
+    });
+    const now = Date.now();
+
+    await ctx.db.delete(approval._id);
+    await ctx.db.patch(request._id, {
+      requiredRoles: nextRequiredRoles as any,
+      requiredHodDepartments: nextRequiredHodDepartments.length ? nextRequiredHodDepartments : undefined,
+      status,
+      updatedAt: now,
+    });
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "admin_approval_removed",
+      title: `Админ убрал дополнительное согласование ${args.role}${args.department ? ` · ${args.department}` : ""}`,
+      description: args.comment?.trim() || undefined,
+      actorEmail: email,
+      actorName: roleRecord.fullName ?? undefined,
+      metadata: {
+        role: args.role,
+        department: args.department?.trim() || undefined,
+        removedApprovalId: approval._id,
+        previousStatus: request.status,
+        nextStatus: status,
+      },
+    });
+    return { status, removed: true };
+  },
+});

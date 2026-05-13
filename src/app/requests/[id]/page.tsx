@@ -569,6 +569,7 @@ export default function RequestDetailPage() {
   const [adminCommentByRole, setAdminCommentByRole] = useState<Record<string, string>>({});
   const [forwardRolesByApproval, setForwardRolesByApproval] = useState<Record<string, string[]>>({});
   const [forwardHodDepartmentsByApproval, setForwardHodDepartmentsByApproval] = useState<Record<string, string[]>>({});
+  const [forwardPanelOpenByApproval, setForwardPanelOpenByApproval] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [paymentActionError, setPaymentActionError] = useState<string | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
@@ -1496,6 +1497,10 @@ export default function RequestDetailPage() {
       setForwardHodDepartmentsByApproval((current) => ({
         ...current,
         [approvalKey]: [],
+      }));
+      setForwardPanelOpenByApproval((current) => ({
+        ...current,
+        [approvalKey]: false,
       }));
       router.refresh();
     } catch (err) {
@@ -3541,9 +3546,12 @@ export default function RequestDetailPage() {
                         department: approval.department,
                       });
                       const availableRoles = availableForwardRoles(approval);
-                      const selectedForwardRoles = forwardRolesByApproval[approvalKey] ?? [];
+                      const forwardPanelOpen = forwardPanelOpenByApproval[approvalKey] ?? false;
+                      const selectedForwardRoles = forwardPanelOpen
+                        ? (forwardRolesByApproval[approvalKey] ?? [])
+                        : [];
                       const selectedForwardHodDepartments =
-                        forwardHodDepartmentsByApproval[approvalKey] ?? [];
+                        forwardPanelOpen ? (forwardHodDepartmentsByApproval[approvalKey] ?? []) : [];
                       const forwardableHodDepartments = getForwardableHodDepartments(approval);
                       const selectedAvailableForwardRoles = selectedForwardRoles.filter((role) =>
                         availableRoles.includes(role as any),
@@ -3551,6 +3559,13 @@ export default function RequestDetailPage() {
                       const selectedAvailableForwardHodDepartments = selectedForwardHodDepartments.filter((department) =>
                         forwardableHodDepartments.includes(department as any),
                       );
+                      const forwardButtonsDisabled =
+                        submittingRole === approvalKey ||
+                        selectedAvailableForwardRoles.length === 0 ||
+                        (
+                          selectedAvailableForwardRoles.includes("HOD") &&
+                          selectedAvailableForwardHodDepartments.length === 0
+                        );
 
                       return (
                         <>
@@ -3609,65 +3624,101 @@ export default function RequestDetailPage() {
                               {availableRoles.length ? (
                                 <div className="space-y-3 rounded-lg border border-border p-3">
                                   <div className="space-y-1">
-                                    <Label>Дополнительное согласование после вас</Label>
-                                    <p className="text-xs text-muted-foreground">
-                                      Можно выбрать несколько ролей.
-                                    </p>
-                                  </div>
-                                  <div className="grid gap-2 sm:grid-cols-2">
-                                    {availableRoles.map((role) => (
-                                      <label key={role} className="flex items-center gap-2 text-sm">
-                                        <Checkbox
-                                          checked={selectedAvailableForwardRoles.includes(role)}
-                                          onCheckedChange={() =>
-                                            setForwardRolesByApproval((current) => {
-                                              const currentRoles = current[approvalKey] ?? [];
-                                              const nextRoles = currentRoles.includes(role)
-                                                ? currentRoles.filter((item) => item !== role)
-                                                : [...currentRoles, role];
-                                              if (role === "HOD" && currentRoles.includes(role)) {
-                                                setForwardHodDepartmentsByApproval((departments) => ({
-                                                  ...departments,
-                                                  [approvalKey]: [],
-                                                }));
-                                              }
-                                              return {
-                                                ...current,
-                                                [approvalKey]: nextRoles,
-                                              };
-                                            })
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() =>
+                                        setForwardPanelOpenByApproval((current) => {
+                                          const nextOpen = !(current[approvalKey] ?? false);
+                                          if (!nextOpen) {
+                                            setForwardRolesByApproval((roles) => ({
+                                              ...roles,
+                                              [approvalKey]: [],
+                                            }));
+                                            setForwardHodDepartmentsByApproval((departments) => ({
+                                              ...departments,
+                                              [approvalKey]: [],
+                                            }));
                                           }
-                                        />
-                                        {getRoleLabel(role)}
-                                      </label>
-                                    ))}
+                                          return {
+                                            ...current,
+                                            [approvalKey]: nextOpen,
+                                          };
+                                        })
+                                      }
+                                    >
+                                      {forwardPanelOpen ? "Не отправлять дальше" : "Нужно дополнительное согласование"}
+                                    </Button>
                                   </div>
-                                  {selectedAvailableForwardRoles.includes("HOD") ? (
-                                    <div className="space-y-2">
-                                      <Label>Какие цеха нужны руководителю цеха</Label>
+                                  {forwardPanelOpen ? (
+                                    <>
+                                      <div className="space-y-1">
+                                        <Label>Дополнительное согласование после вас</Label>
+                                        <p className="text-xs text-muted-foreground">
+                                          Можно выбрать несколько ролей. Если просто согласуете заявку, этот блок не влияет на решение.
+                                        </p>
+                                      </div>
                                       <div className="grid gap-2 sm:grid-cols-2">
-                                        {forwardableHodDepartments.map((department) => (
-                                          <label key={department} className="flex items-center gap-2 text-sm">
+                                        {availableRoles.map((role) => (
+                                          <label key={role} className="flex items-center gap-2 text-sm">
                                             <Checkbox
-                                              checked={selectedAvailableForwardHodDepartments.includes(department)}
+                                              checked={selectedAvailableForwardRoles.includes(role)}
                                               onCheckedChange={() =>
-                                                setForwardHodDepartmentsByApproval((current) => {
-                                                  const currentDepartments = current[approvalKey] ?? [];
+                                                setForwardRolesByApproval((current) => {
+                                                  const currentRoles = current[approvalKey] ?? [];
+                                                  const nextRoles = currentRoles.includes(role)
+                                                    ? currentRoles.filter((item) => item !== role)
+                                                    : [...currentRoles, role];
+                                                  if (role === "HOD" && currentRoles.includes(role)) {
+                                                    setForwardHodDepartmentsByApproval((departments) => ({
+                                                      ...departments,
+                                                      [approvalKey]: [],
+                                                    }));
+                                                  }
                                                   return {
                                                     ...current,
-                                                    [approvalKey]: currentDepartments.includes(department)
-                                                      ? currentDepartments.filter((item) => item !== department)
-                                                      : [...currentDepartments, department],
+                                                    [approvalKey]: nextRoles,
                                                   };
                                                 })
                                               }
                                             />
-                                            {department}
+                                            {getRoleLabel(role)}
                                           </label>
                                         ))}
                                       </div>
-                                    </div>
-                                  ) : null}
+                                      {selectedAvailableForwardRoles.includes("HOD") ? (
+                                        <div className="space-y-2">
+                                          <Label>Какие цеха нужны руководителю цеха</Label>
+                                          <div className="grid gap-2 sm:grid-cols-2">
+                                            {forwardableHodDepartments.map((department) => (
+                                              <label key={department} className="flex items-center gap-2 text-sm">
+                                                <Checkbox
+                                                  checked={selectedAvailableForwardHodDepartments.includes(department)}
+                                                  onCheckedChange={() =>
+                                                    setForwardHodDepartmentsByApproval((current) => {
+                                                      const currentDepartments = current[approvalKey] ?? [];
+                                                      return {
+                                                        ...current,
+                                                        [approvalKey]: currentDepartments.includes(department)
+                                                          ? currentDepartments.filter((item) => item !== department)
+                                                          : [...currentDepartments, department],
+                                                      };
+                                                    })
+                                                  }
+                                                />
+                                                {department}
+                                              </label>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      ) : null}
+                                    </>
+                                  ) : (
+                                    <p className="text-xs text-muted-foreground">
+                                      Откройте только если хотите передать заявку еще одной роли.
+                                    </p>
+                                  )}
                                 </div>
                               ) : null}
                               <div className="flex flex-wrap gap-3">
@@ -3678,7 +3729,7 @@ export default function RequestDetailPage() {
                                 >
                                   Согласовать
                                 </Button>
-                                {availableRoles.length ? (
+                                {forwardPanelOpen && availableRoles.length ? (
                                   <Button
                                     type="button"
                                     variant="outline"
@@ -3689,12 +3740,12 @@ export default function RequestDetailPage() {
                                         forwardMode: "approve",
                                       })
                                     }
-                                    disabled={submittingRole === approvalKey}
+                                    disabled={forwardButtonsDisabled}
                                   >
                                     Согласовать и отправить дальше
                                   </Button>
                                 ) : null}
-                                {availableRoles.length ? (
+                                {forwardPanelOpen && availableRoles.length ? (
                                   <Button
                                     type="button"
                                     variant="outline"
@@ -3705,7 +3756,7 @@ export default function RequestDetailPage() {
                                         forwardMode: "defer",
                                       })
                                     }
-                                    disabled={submittingRole === approvalKey}
+                                    disabled={forwardButtonsDisabled}
                                   >
                                     Отложить согласование и отправить дальше
                                   </Button>
