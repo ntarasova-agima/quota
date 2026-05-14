@@ -2,6 +2,9 @@ import { convexAuth } from "@convex-dev/auth/server";
 import { Email } from "@convex-dev/auth/providers/Email";
 import { isAllowedSignInEmail, normalizeEmail } from "../src/lib/authRules";
 
+const EMAIL_SEND_ERROR =
+  "Не удалось отправить код: почтовый сервер временно недоступен. Попробуйте позже или напишите администратору.";
+
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
     Email({
@@ -33,8 +36,7 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           }),
         });
         if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`SMTP error: ${errorText}`);
+          throw new Error(EMAIL_SEND_ERROR);
         }
       },
     }),
