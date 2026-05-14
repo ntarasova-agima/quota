@@ -82,8 +82,6 @@ export function getEffectiveRequiredRoles(params: {
     if (normalizeRequestCategory(params.category ?? "") === CLIENT_SERVICES_TRANSIT_CATEGORY) {
       roles.delete("BUH");
       roles.add("BUH Transit");
-    } else {
-      roles.add("BUH");
     }
   }
   if ((params.requiredHodDepartments?.length ?? 0) > 0) {

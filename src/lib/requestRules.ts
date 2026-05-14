@@ -183,7 +183,7 @@ export function getFundingOwnerRoles(fundingSource: string) {
 }
 
 export function getEnforcedRolesForFundingSource(fundingSource: string) {
-  return Array.from(new Set([...getFundingOwnerRoles(fundingSource), "BUH"]));
+  return Array.from(new Set(getFundingOwnerRoles(fundingSource)));
 }
 
 export function isFundingSourceAllowedForCategory(category: string, fundingSource: string) {

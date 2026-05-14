@@ -1422,15 +1422,10 @@ function validateRequestPayload(args: any) {
     throw new Error("Так не бывает");
   }
   if (
-    normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY
-      ? !effectiveRequiredRoles.includes("BUH Transit")
-      : !effectiveRequiredRoles.includes("BUH")
+    normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY &&
+    !effectiveRequiredRoles.includes("BUH Transit")
   ) {
-    throw new Error(
-      normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY
-        ? "Для транзитов обязателен BUH Transit"
-        : "Для всех заявок обязателен BUH",
-    );
+    throw new Error("Для транзитов обязателен BUH Transit");
   }
   if (args.category === "Welcome-бонус" && (!args.investmentReturn || !args.investmentReturn.trim())) {
     throw new Error("Укажите, как будем возвращать инвестиции");

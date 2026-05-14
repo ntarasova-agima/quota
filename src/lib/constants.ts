@@ -14,7 +14,7 @@ import {
 import { HOD_DEPARTMENTS, type HodDepartment } from "./departments";
 
 export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD"] as const;
-export const DEFAULT_REQUIRED_ROLES = ["NBD", "COO", "CFD", "BUH"] as const;
+export const DEFAULT_REQUIRED_ROLES = ["CFD"] as const;
 export const ALL_ROLES = [
   "AD",
   "NBD",
