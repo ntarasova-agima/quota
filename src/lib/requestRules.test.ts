@@ -47,9 +47,9 @@ describe("requestRules", () => {
     expect(normalizeRequestCategory(LEGACY_PROJECT_TRANSIT_CATEGORY)).toBe(CLIENT_SERVICES_TRANSIT_CATEGORY);
   });
 
-  it("keeps BUH as the only globally enforced role from funding", () => {
-    expect(getEnforcedRolesForFundingSource(AGIMA_QUOTAS_FUNDING_SOURCE)).toEqual(["BUH"]);
-    expect(getEnforcedRolesForFundingSource(PROJECT_REVENUE_FUNDING_SOURCE)).toEqual(["BUH"]);
+  it("does not enforce approver roles from funding source", () => {
+    expect(getEnforcedRolesForFundingSource(AGIMA_QUOTAS_FUNDING_SOURCE)).toEqual([]);
+    expect(getEnforcedRolesForFundingSource(PROJECT_REVENUE_FUNDING_SOURCE)).toEqual([]);
     expect(getFundingOwnerRoles(LEGACY_AI_SUBSCRIPTIONS_FUNDING_SOURCE)).toEqual([]);
   });
 
