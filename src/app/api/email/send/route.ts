@@ -22,8 +22,9 @@ export async function POST(request: NextRequest) {
     await sendSmtpMail({ to, subject, html });
     return NextResponse.json({ ok: true });
   } catch (error) {
+    console.error("SMTP send failed", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "SMTP error" },
+      { error: "Почтовый сервер временно недоступен" },
       { status: 500 },
     );
   }

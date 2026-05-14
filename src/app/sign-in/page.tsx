@@ -26,6 +26,36 @@ const captureParams = `
 })();
 `;
 
+function isInvalidCodeError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+
+  return message.includes("Could not verify code");
+}
+
+function getSignInErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const lowerMessage = message.toLowerCase();
+
+  if (isInvalidCodeError(error)) {
+    return "Код недействителен. Запросите новый.";
+  }
+
+  if (
+    lowerMessage.includes("smtp") ||
+    lowerMessage.includes("connection timeout") ||
+    lowerMessage.includes("sendverificationrequest") ||
+    lowerMessage.includes("server error")
+  ) {
+    return "Не удалось отправить код: почтовый сервер временно недоступен. Попробуйте еще раз чуть позже или напишите администратору.";
+  }
+
+  if (message.includes("Войти в Aurum можно только")) {
+    return "Войти в Aurum можно только с почтой @agima.ru";
+  }
+
+  return message || "Не удалось войти";
+}
+
 export default function SignInPage() {
   const { signIn } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -57,7 +87,7 @@ export default function SignInPage() {
     if (!signInError) {
       return;
     }
-    setError(signInError);
+    setError(getSignInErrorMessage(signInError));
   }, [signInError]);
 
   useEffect(() => {
@@ -152,15 +182,15 @@ export default function SignInPage() {
           }
         })
         .catch((err) => {
-          const message = err instanceof Error ? err.message : "Не удалось войти";
-          if (message.includes("Could not verify code")) {
+          const message = getSignInErrorMessage(err);
+          if (isInvalidCodeError(err)) {
             if (typeof window !== "undefined") {
               sessionStorage.removeItem("auth_code");
               sessionStorage.removeItem("auth_email");
             }
             setCode("");
             setStep("email");
-            setError("Код недействителен. Запросите новый.");
+            setError(message);
           } else {
             setError(message);
           }
@@ -192,15 +222,15 @@ export default function SignInPage() {
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Не удалось войти";
-      if (message.includes("Could not verify code")) {
+      const message = getSignInErrorMessage(err);
+      if (isInvalidCodeError(err)) {
         if (typeof window !== "undefined") {
           sessionStorage.removeItem("auth_code");
           sessionStorage.removeItem("auth_email");
         }
         setCode("");
         setStep("email");
-        setError("Код недействителен. Запросите новый.");
+        setError(message);
       } else {
         setError(message);
       }
