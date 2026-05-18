@@ -23,7 +23,6 @@ import {
   CURRENCIES,
   DEFAULT_REQUIRED_ROLES,
   FUNDING_SOURCES,
-  HOD_DEPARTMENTS,
   getCategoriesForDepartment,
   ROLE_OPTIONS,
   type RequestArea,
@@ -56,7 +55,11 @@ import {
   supportsRequestSpecialists,
   usesServiceRecipientLabel,
 } from "@/lib/requestRules";
-import { normalizeHodDepartment } from "@/lib/departments";
+import {
+  FINANCE_LEGAL_DEPARTMENT,
+  HOD_APPROVAL_DEPARTMENTS,
+  normalizeHodDepartment,
+} from "@/lib/departments";
 import {
   DEFAULT_VAT_RATE,
   parseMoneyInput,
@@ -412,20 +415,26 @@ export default function NewRequestPage() {
       Array.from(
         new Set(
           [
-            "Финансово-юридический отдел",
             ...(requestSupportsSpecialists
               ? specialistsPayload
                   .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
                   .map((item) => item.department as string)
               : []),
             ...(isHodSelectableCategory(category) && selectedDepartment ? [selectedDepartment] : []),
-          ],
+          ].filter((department) => department !== FINANCE_LEGAL_DEPARTMENT),
         ),
       ),
     [category, requestSupportsSpecialists, selectedDepartment, specialistsPayload],
   );
   const effectiveRequiredHodDepartments = useMemo(
-    () => Array.from(new Set([...requiredHodDepartments, ...autoRequiredHodDepartments])),
+    () =>
+      Array.from(
+        new Set(
+          [...requiredHodDepartments, ...autoRequiredHodDepartments].filter(
+            (department) => department !== FINANCE_LEGAL_DEPARTMENT,
+          ),
+        ),
+      ),
     [autoRequiredHodDepartments, requiredHodDepartments],
   );
   const effectiveAmountWithoutVatInput = useMemo(
@@ -1805,7 +1814,7 @@ export default function NewRequestPage() {
                       Для конкурсного задания цеха внутренних специалистов добавляются автоматически.
                     </p>
                     <div className="grid gap-2 sm:grid-cols-2">
-                      {HOD_DEPARTMENTS.map((department) => {
+                      {HOD_APPROVAL_DEPARTMENTS.map((department) => {
                         const isAutoRequired = autoRequiredHodDepartments.includes(department);
                         const checked = effectiveRequiredHodDepartments.includes(department);
                         return (

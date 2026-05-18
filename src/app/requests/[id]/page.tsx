@@ -41,7 +41,10 @@ import {
   supportsRequestSpecialists,
 } from "@/lib/requestRules";
 import { isAgimaEmail, normalizeEmail } from "@/lib/authRules";
-import { normalizeHodDepartment } from "@/lib/departments";
+import {
+  HOD_APPROVAL_DEPARTMENTS,
+  normalizeHodDepartment,
+} from "@/lib/departments";
 import {
   DEFAULT_VAT_RATE,
   calculateAmountWithVat,
@@ -1056,7 +1059,7 @@ export default function RequestDetailPage() {
       .filter((item) => item.role === "HOD")
       .map((item) => item.department)
       .filter(Boolean) as string[];
-    return HOD_DEPARTMENTS.filter((department) => {
+    return HOD_APPROVAL_DEPARTMENTS.filter((department) => {
       if (existingDepartments.includes(department)) {
         return false;
       }
