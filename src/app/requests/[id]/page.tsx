@@ -109,6 +109,7 @@ type MentionCandidate = {
 };
 
 const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "HOD"] as const;
+const PAYMENT_REMINDER_STATUSES = ["awaiting_payment", "payment_planned", "partially_paid"] as const;
 
 const MAX_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_SIZE = 40 * 1024 * 1024;
@@ -134,6 +135,18 @@ const ACCEPTED_ATTACHMENT_EXTENSIONS = [
 function isAllowedAttachment(file: File) {
   const fileName = file.name.toLowerCase();
   return ACCEPTED_ATTACHMENT_EXTENSIONS.some((ext) => fileName.endsWith(ext));
+}
+
+function canSendPaymentReminderForStatus(status: string | undefined) {
+  return PAYMENT_REMINDER_STATUSES.includes(status as (typeof PAYMENT_REMINDER_STATUSES)[number]);
+}
+
+function getPaymentReminderErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message.includes("Напоминание об оплате можно отправить только по заявке в оплате")) {
+    return "Напоминание можно отправить только по заявке, которая уже передана в оплату.";
+  }
+  return message || "Не удалось отправить напоминание об оплате";
 }
 
 function formatFileSize(bytes: number) {
@@ -1020,6 +1033,9 @@ export default function RequestDetailPage() {
     isAdmin ||
     myRoles.some((role) => ["BUH", "CFD", "BUH Transit"].includes(role)) ||
     (myRoles.includes("BUH Outsource") && hasOutsourceSpecialists);
+  const canSendPaymentReminder =
+    canSendPaymentReminderForStatus(request.status) &&
+    (isCreator || isAdmin || canManagePayments);
   const canManageFot =
     isAdmin ||
     myRoles.some((role) => ["BUH", "CFD"].includes(role)) ||
@@ -2278,32 +2294,38 @@ export default function RequestDetailPage() {
                                 })}
                               </p>
                             </div>
-                            <div className="space-y-2">
-                              <p className="text-xs text-muted-foreground max-w-sm text-right">
-                                В день оплаты финотдел получит автоматическое уведомление. Нажмите, если хотите напомнить дополнительно
-                              </p>
-                              <div className="flex justify-end">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  disabled={paymentReminderSent}
-                                  onClick={async () => {
-                                    setPaymentActionError(null);
-                                    try {
-                                      await remindPayment({ requestId: request._id });
-                                      setPaymentReminderSent(true);
-                                    } catch (err) {
-                                      setPaymentActionError(
-                                        err instanceof Error ? err.message : "Не удалось отправить напоминание об оплате",
-                                      );
-                                    }
-                                  }}
-                                >
-                                  {paymentReminderSent ? "✓ Напоминание отправлено!" : "Напомнить об оплате"}
-                                </Button>
+                            {canSendPaymentReminder ? (
+                              <div className="space-y-2">
+                                <p className="text-xs text-muted-foreground max-w-sm text-right">
+                                  В день оплаты финотдел получит автоматическое уведомление. Нажмите, если хотите напомнить дополнительно
+                                </p>
+                                <div className="flex justify-end">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={paymentReminderSent}
+                                    onClick={async () => {
+                                      setPaymentActionError(null);
+                                      if (!canSendPaymentReminderForStatus(request.status)) {
+                                        setPaymentActionError(
+                                          "Напоминание можно отправить только по заявке, которая уже передана в оплату.",
+                                        );
+                                        return;
+                                      }
+                                      try {
+                                        await remindPayment({ requestId: request._id });
+                                        setPaymentReminderSent(true);
+                                      } catch (err) {
+                                        setPaymentActionError(getPaymentReminderErrorMessage(err));
+                                      }
+                                    }}
+                                  >
+                                    {paymentReminderSent ? "✓ Напоминание отправлено!" : "Напомнить об оплате"}
+                                  </Button>
+                                </div>
                               </div>
-                            </div>
+                            ) : null}
                           </div>
 
                           {paymentTimelineRows.length ? (
