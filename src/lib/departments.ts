@@ -1,3 +1,5 @@
+export const FINANCE_LEGAL_DEPARTMENT = "Финансово-юридический отдел" as const;
+
 export const HOD_DEPARTMENTS = [
   "Аккаунтинг",
   "AI RnD",
@@ -10,10 +12,14 @@ export const HOD_DEPARTMENTS = [
   "Продуктовая аналитика",
   "Производственный менеджмент",
   "Outstaff",
-  "Финансово-юридический отдел",
+  FINANCE_LEGAL_DEPARTMENT,
 ] as const;
 
 export type HodDepartment = (typeof HOD_DEPARTMENTS)[number];
+
+export const HOD_APPROVAL_DEPARTMENTS = HOD_DEPARTMENTS.filter(
+  (department) => department !== FINANCE_LEGAL_DEPARTMENT,
+);
 
 const LEGACY_DEPARTMENT_MAP: Record<string, HodDepartment> = {
   Транзит: "Аккаунтинг",
