@@ -2,10 +2,7 @@ import {
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
 } from "../src/lib/requestFields";
-import {
-  FINANCE_LEGAL_DEPARTMENT,
-  normalizeHodDepartment,
-} from "../src/lib/departments";
+import { normalizeHodDepartment } from "../src/lib/departments";
 import {
   CLIENT_SERVICES_TRANSIT_CATEGORY,
   isHodSelectableCategory,
@@ -44,12 +41,6 @@ export function normalizeDepartmentList(departments: Array<string | undefined | 
   return Array.from(new Set(normalized));
 }
 
-function excludeFinanceLegalApproval(departments: Array<string | undefined | null>) {
-  return normalizeDepartmentList(departments).filter(
-    (department) => department !== FINANCE_LEGAL_DEPARTMENT,
-  );
-}
-
 export function getRequiredSpecialistHodDepartments(
   specialists: SpecialistEntryLike[] = [],
 ) {
@@ -69,7 +60,7 @@ export function getEffectiveRequiredHodDepartments(params: {
   if (!isHodSelectableCategory(normalizedCategory)) {
     return [];
   }
-  return excludeFinanceLegalApproval([
+  return normalizeDepartmentList([
     ...(params.requiredHodDepartments ?? []),
     ...(supportsRequestSpecialists(normalizedCategory)
       ? getRequiredSpecialistHodDepartments(params.specialists)

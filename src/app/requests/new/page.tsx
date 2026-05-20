@@ -143,7 +143,7 @@ export default function NewRequestPage() {
   const [paymentDeadline, setPaymentDeadline] = useState(defaultDeadline);
   const [paidBy, setPaidBy] = useState("");
   const [requiredRoles, setRequiredRoles] = useState<RoleOption[]>([...DEFAULT_REQUIRED_ROLES]);
-  const [requiredHodDepartments, setRequiredHodDepartments] = useState<string[]>([]);
+  const [requiredHodDepartments, setRequiredHodDepartments] = useState<string[]>([FINANCE_LEGAL_DEPARTMENT]);
   const [error, setError] = useState<string | null>(null);
   const [fundingError, setFundingError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -303,7 +303,7 @@ export default function NewRequestPage() {
                   .map((item) => item.department as string)
               : []),
             ...(isHodSelectableCategory(category) && selectedDepartment ? [selectedDepartment] : []),
-          ].filter((department) => department !== FINANCE_LEGAL_DEPARTMENT),
+          ].filter((department): department is string => Boolean(department)),
         ),
       ),
     [category, requestSupportsSpecialists, selectedDepartment, specialistsPayload],
@@ -313,7 +313,7 @@ export default function NewRequestPage() {
       Array.from(
         new Set(
           [...requiredHodDepartments, ...autoRequiredHodDepartments].filter(
-            (department) => department !== FINANCE_LEGAL_DEPARTMENT,
+            (department): department is string => Boolean(department),
           ),
         ),
       ),
@@ -570,6 +570,11 @@ export default function NewRequestPage() {
       const isRemoving = current.includes(role);
       if (role === "HOD" && isRemoving) {
         setRequiredHodDepartments([]);
+      }
+      if (role === "HOD" && !isRemoving) {
+        setRequiredHodDepartments((departments) =>
+          departments.length ? departments : [FINANCE_LEGAL_DEPARTMENT],
+        );
       }
       return isRemoving ? current.filter((item) => item !== role) : [...current, role];
     });

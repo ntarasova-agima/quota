@@ -7,10 +7,10 @@ describe("roleLabels", () => {
   });
 
   it("leaves unknown roles intact", () => {
-    expect(getRoleLabel("CFD")).toBe("CFD");
+    expect(getRoleLabel("CFD")).toBe("Руководитель финансового отдела");
   });
 
   it("formats role lists", () => {
-    expect(formatRoleList(["AD", "CFD"])).toBe("Автор заявки, CFD");
+    expect(formatRoleList(["AD", "CFD"])).toBe("Автор заявки, Руководитель финансового отдела");
   });
 });

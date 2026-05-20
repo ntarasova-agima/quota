@@ -10,6 +10,11 @@ import {
   getPendingSpecialistValidationDepartments,
   getRequestApprovalStatus,
 } from "./requestWorkflow";
+import {
+  canActAsApprovalRole,
+  getActingHodDepartments,
+  hasFinanceApproverRole,
+} from "../src/lib/financeRole";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -31,7 +36,6 @@ const additionalApprovalRoleEnum = v.union(
   v.literal("NBD"),
   v.literal("AI-BOSS"),
   v.literal("COO"),
-  v.literal("CFD"),
   v.literal("HOD"),
 );
 const forwardModeEnum = v.union(v.literal("approve"), v.literal("defer"));
@@ -60,10 +64,12 @@ export const listPendingForMe = query({
     }
 
     const approvals: any[] = [];
+    const canActAsFinance = hasFinanceApproverRole(roleRecord);
     const approvalRoles = Array.from(new Set([
       ...roles,
-      ...(roles.includes("CFD") ? ["BUH"] : []),
+      ...(canActAsFinance ? ["CFD", "BUH", "HOD"] : []),
     ]));
+    const actingHodDepartments = getActingHodDepartments(roleRecord) as string[];
     for (const role of approvalRoles) {
       let items = await ctx.db
         .query("approvals")
@@ -71,8 +77,7 @@ export const listPendingForMe = query({
         .filter((q) => q.eq(q.field("status"), "pending"))
         .collect();
       if (role === "HOD") {
-        const departments = roleRecord.hodDepartments ?? [];
-        items = items.filter((item) => item.department && departments.includes(item.department));
+        items = items.filter((item) => item.department && actingHodDepartments.includes(item.department));
       }
       approvals.push(...items);
     }
@@ -94,13 +99,13 @@ export const listPendingForMe = query({
           category: request.category,
           specialists: request.specialists,
           requiredHodDepartments: request.requiredHodDepartments,
-        }).some((department) => Boolean(department && (roleRecord.hodDepartments ?? []).includes(department)))
+        }).some((department) => Boolean(department && actingHodDepartments.includes(department)))
           ? "hod"
           : "approval";
       results.push({ approval, request, kind });
     }
 
-    if (roles.some((role) => ["BUH", "CFD", "BUH Payment"].includes(role))) {
+    if (roles.some((role) => ["BUH", "BUH Payment"].includes(role)) || canActAsFinance) {
       const paymentRequests = (
         await Promise.all(
           ["awaiting_payment", "payment_planned", "partially_paid"].map((status) =>
@@ -133,7 +138,6 @@ export const listPendingForMe = query({
     }
 
     if (roles.includes("HOD")) {
-      const departments = roleRecord.hodDepartments ?? [];
       const hodRequests = await ctx.db
         .query("requests")
         .withIndex("by_status", (q) => q.eq("status", "hod_pending"))
@@ -146,7 +150,7 @@ export const listPendingForMe = query({
           category: request.category,
           specialists: request.specialists,
           requiredHodDepartments: request.requiredHodDepartments,
-        }).filter((department) => Boolean(department && departments.includes(department)));
+        }).filter((department) => Boolean(department && actingHodDepartments.includes(department)));
         if (!pendingDepartments.length) {
           continue;
         }
@@ -213,14 +217,14 @@ export const decide = mutation({
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
     const canActAsRole =
-      roleRecord?.roles.includes(args.role) ||
-      (args.role === "BUH" && roleRecord?.roles.includes("CFD"));
+      canActAsApprovalRole(roleRecord, args.role, args.department) ||
+      (args.role === "BUH" && hasFinanceApproverRole(roleRecord));
     if (!roleRecord || !roleRecord.active || !canActAsRole) {
       throw new Error("Not authorized for this role");
     }
     if (
       args.role === "HOD" &&
-      (!args.department || !(roleRecord.hodDepartments ?? []).includes(args.department.trim()))
+      !canActAsApprovalRole(roleRecord, args.role, args.department)
     ) {
       throw new Error("Not authorized for this department");
     }
@@ -296,15 +300,14 @@ export const decide = mutation({
     for (const target of additionalTargets) {
       if (
         target.role !== "HOD" &&
-        roleRecord.roles.includes(target.role as any)
+        canActAsApprovalRole(roleRecord, target.role)
       ) {
         throw new Error("Нельзя отправить заявку самому себе");
       }
       if (
         target.role === "HOD" &&
-        roleRecord.roles.includes("HOD") &&
         target.department &&
-        (roleRecord.hodDepartments ?? []).includes(target.department)
+        canActAsApprovalRole(roleRecord, target.role, target.department)
       ) {
         throw new Error("Нельзя отправить заявку самому себе");
       }

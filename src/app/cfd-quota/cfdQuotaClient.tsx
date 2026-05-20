@@ -41,7 +41,7 @@ export default function CfdQuotaClient() {
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant={activeTab === "cfd" ? "default" : "outline"} onClick={() => setActiveTab("cfd")}>
-          CFD
+          Финотдел
         </Button>
         <Button type="button" variant={activeTab === "presales" ? "default" : "outline"} onClick={() => setActiveTab("presales")}>
           Пресейлы
