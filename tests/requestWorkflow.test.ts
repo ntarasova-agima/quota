@@ -6,28 +6,28 @@ import {
 } from "../convex/requestWorkflow";
 
 describe("requestWorkflow", () => {
-  it("does not create a separate finance HOD approval because CFD covers it", () => {
+  it("keeps finance HOD approval instead of replacing it with CFD", () => {
     expect(
       getEffectiveRequiredHodDepartments({
         category: "Закупка",
         requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT, "Разработка"],
       }),
-    ).toEqual(["Разработка"]);
+    ).toEqual([FINANCE_LEGAL_DEPARTMENT, "Разработка"]);
   });
 
-  it("does not add HOD role when only finance HOD would be required", () => {
+  it("adds HOD role when finance HOD is required", () => {
     const departments = getEffectiveRequiredHodDepartments({
       category: "Закупка",
       requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT],
     });
 
-    expect(departments).toEqual([]);
+    expect(departments).toEqual([FINANCE_LEGAL_DEPARTMENT]);
     expect(
       getEffectiveRequiredRoles({
-        requiredRoles: ["CFD"],
+        requiredRoles: [],
         requiredHodDepartments: departments,
         category: "Закупка",
       }),
-    ).toEqual(["CFD"]);
+    ).toEqual(["HOD"]);
   });
 });

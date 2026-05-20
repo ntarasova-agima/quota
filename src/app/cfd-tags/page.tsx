@@ -15,6 +15,7 @@ import {
   HOD_DEPARTMENTS,
   type RequestArea,
 } from "@/lib/constants";
+import { hasFinanceApproverRole } from "@/lib/financeRole";
 
 export default function CfdTagsPage() {
   const [departmentFilter, setDepartmentFilter] = useState<"all" | RequestArea>("all");
@@ -37,22 +38,23 @@ export default function CfdTagsPage() {
   const [editingBusinessCategoryName, setEditingBusinessCategoryName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const isFinanceHead = useMemo(() => hasFinanceApproverRole(myProfile), [myProfile]);
   const canManageBusinessCategories = useMemo(
     () =>
       Boolean(
-        myProfile?.roles?.some((role) => ["CFD", "ADMIN", "BUH"].includes(role)),
+        myProfile?.roles?.some((role) => ["CFD", "ADMIN", "BUH"].includes(role)) || isFinanceHead,
       ),
-    [myProfile?.roles],
+    [isFinanceHead, myProfile?.roles],
   );
   const availableDepartments = useMemo(() => {
-    if (myProfile?.roles?.some((role) => ["CFD", "ADMIN", "BUH", "COO"].includes(role))) {
+    if (myProfile?.roles?.some((role) => ["CFD", "ADMIN", "BUH", "COO"].includes(role)) || isFinanceHead) {
       return HOD_DEPARTMENTS;
     }
     const hodDepartments = (myProfile?.hodDepartments ?? []).filter((department): department is RequestArea =>
       HOD_DEPARTMENTS.includes(department as RequestArea),
     );
     return hodDepartments.length ? hodDepartments : HOD_DEPARTMENTS;
-  }, [myProfile?.hodDepartments, myProfile?.roles]);
+  }, [isFinanceHead, myProfile?.hodDepartments, myProfile?.roles]);
   useEffect(() => {
     if (!availableDepartments.includes(newTagDepartment)) {
       setNewTagDepartment(availableDepartments[0] ?? "Аккаунтинг");
@@ -232,7 +234,7 @@ export default function CfdTagsPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Категории заявок</CardTitle>
-                <CardDescription>Эти категории BUH и CFD присваивают заявкам для сортировки и фильтров.</CardDescription>
+                <CardDescription>Эти категории финотдел присваивает заявкам для сортировки и фильтров.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <form className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={handleCreateBusinessCategory}>

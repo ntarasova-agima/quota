@@ -25,6 +25,7 @@ import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import { getBuhPaymentStatusSummary, getRequestStatusSummary } from "@/lib/requestStatus";
 import { EMPTY_BUSINESS_CATEGORY, EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
+import { hasFinanceApproverRole } from "@/lib/financeRole";
 import { normalizeRequestCategory } from "@/lib/requestRules";
 import { formatAmountPair } from "@/lib/vat";
 
@@ -133,22 +134,27 @@ export default function RequestsPage() {
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
   const { isAuthenticated } = useConvexAuth();
   const myRoles = useQuery(api.roles.myRoles, isAuthenticated ? {} : "skip");
+  const myProfile = useQuery(api.roles.myProfile, isAuthenticated ? {} : "skip");
   const canUseAllRequestsView = useQuery(
     api.requests.canUseAllRequestsView,
     isAuthenticated ? {} : "skip",
   );
+  const isFinanceHead = useMemo(
+    () => hasFinanceApproverRole({ roles: myRoles ?? [], hodDepartments: myProfile?.hodDepartments ?? [] }),
+    [myProfile?.hodDepartments, myRoles],
+  );
   const isApprover = useMemo(
-    () => myRoles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)),
-    [myRoles],
+    () => myRoles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)) || isFinanceHead,
+    [isFinanceHead, myRoles],
   );
   const isAdmin = useMemo(() => myRoles?.includes("ADMIN") ?? false, [myRoles]);
   const isTagViewer = useMemo(
-    () => myRoles?.some((role) => ["CFD", "NBD", "COO", "BUH", "ADMIN"].includes(role)) ?? false,
-    [myRoles],
+    () => myRoles?.some((role) => ["CFD", "NBD", "COO", "BUH", "ADMIN"].includes(role)) || isFinanceHead,
+    [isFinanceHead, myRoles],
   );
   const isFinanceRole = useMemo(
-    () => myRoles?.some((role) => ["BUH", "CFD"].includes(role)) ?? false,
-    [myRoles],
+    () => myRoles?.includes("BUH") || isFinanceHead,
+    [isFinanceHead, myRoles],
   );
   const rawView = searchParams.get("view") ?? "my";
   const activeView = rawView === "all" && canUseAllRequestsView ? "all" : "my";
@@ -776,7 +782,7 @@ export default function RequestsPage() {
                       className="w-[240px]"
                       value={tagFilter}
                       options={tagOptions}
-                      placeholder="Тег CFD"
+                      placeholder="Тег заявки"
                       searchPlaceholder="Найти тег"
                       onValueChange={setTagFilter}
                     />

@@ -6,6 +6,7 @@ import {
   DEFAULT_BUSINESS_CATEGORIES,
   EMPTY_BUSINESS_CATEGORY,
 } from "../src/lib/requestRules";
+import { hasFinanceApproverRole } from "../src/lib/financeRole";
 
 async function ensureCanManageBusinessCategories(ctx: any) {
   const userId = await getAuthUserId(ctx);
@@ -20,9 +21,10 @@ async function ensureCanManageBusinessCategories(ctx: any) {
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const canManage = record?.roles?.some((role: string) =>
-    ["BUH", "CFD", "ADMIN"].includes(role),
-  );
+  const canManage =
+    record?.roles?.some((role: string) =>
+      ["BUH", "ADMIN"].includes(role),
+    ) || hasFinanceApproverRole(record);
   if (!canManage) {
     throw new Error("Not authorized");
   }

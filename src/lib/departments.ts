@@ -17,9 +17,7 @@ export const HOD_DEPARTMENTS = [
 
 export type HodDepartment = (typeof HOD_DEPARTMENTS)[number];
 
-export const HOD_APPROVAL_DEPARTMENTS = HOD_DEPARTMENTS.filter(
-  (department) => department !== FINANCE_LEGAL_DEPARTMENT,
-);
+export const HOD_APPROVAL_DEPARTMENTS = HOD_DEPARTMENTS;
 
 const LEGACY_DEPARTMENT_MAP: Record<string, HodDepartment> = {
   Транзит: "Аккаунтинг",

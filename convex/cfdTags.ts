@@ -8,6 +8,7 @@ import {
   TRANSIT_TAG_NAME,
   getRequestAreaForDepartment,
 } from "../src/lib/requestRules";
+import { hasFinanceApproverRole } from "../src/lib/financeRole";
 
 async function getTagAccess(ctx: any) {
   const userId = await getAuthUserId(ctx);
@@ -22,7 +23,9 @@ async function getTagAccess(ctx: any) {
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const canManageAll = record?.roles?.some((role: string) => ["CFD", "ADMIN", "BUH", "COO"].includes(role));
+  const canManageAll =
+    record?.roles?.some((role: string) => ["ADMIN", "BUH", "COO"].includes(role)) ||
+    hasFinanceApproverRole(record);
   const managedDepartments = (record?.hodDepartments ?? [])
     .map((department: string) => normalizeHodDepartment(department))
     .filter((department: string | undefined): department is string =>
@@ -53,16 +56,22 @@ async function ensureCanViewTags(ctx: any) {
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const canView = record?.roles?.some((role: string) =>
-    ["CFD", "ADMIN", "COO", "BUH", "HOD"].includes(role),
-  );
+  const canView =
+    record?.roles?.some((role: string) =>
+      ["ADMIN", "COO", "BUH", "HOD"].includes(role),
+    ) || hasFinanceApproverRole(record);
   if (!canView) {
     throw new Error("Not authorized");
   }
   return {
     record,
-    canViewAll: record?.roles?.some((role: string) => ["CFD", "ADMIN", "COO", "BUH"].includes(role)),
-    visibleDepartments: record?.roles?.some((role: string) => ["CFD", "ADMIN", "COO", "BUH"].includes(role))
+    canViewAll:
+      record?.roles?.some((role: string) => ["ADMIN", "COO", "BUH"].includes(role)) ||
+      hasFinanceApproverRole(record),
+    visibleDepartments: (
+      record?.roles?.some((role: string) => ["ADMIN", "COO", "BUH"].includes(role)) ||
+      hasFinanceApproverRole(record)
+    )
       ? HOD_DEPARTMENTS
       : (record?.hodDepartments ?? [])
           .map((department: string) => normalizeHodDepartment(department))

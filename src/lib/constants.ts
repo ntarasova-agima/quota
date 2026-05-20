@@ -13,8 +13,8 @@ import {
 } from "./requestRules";
 import { HOD_DEPARTMENTS, type HodDepartment } from "./departments";
 
-export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD"] as const;
-export const DEFAULT_REQUIRED_ROLES = ["CFD"] as const;
+export const ROLE_OPTIONS = ["NBD", "AI-BOSS", "COO", "BUH", "HOD"] as const;
+export const DEFAULT_REQUIRED_ROLES = ["HOD"] as const;
 export const ALL_ROLES = [
   "AD",
   "NBD",

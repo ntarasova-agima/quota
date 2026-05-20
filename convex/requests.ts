@@ -67,6 +67,7 @@ import {
   requiresContestSpecialistValidation,
 } from "../src/lib/requestFields";
 import { isAgimaEmail, normalizeEmail } from "../src/lib/authRules";
+import { hasAnyRole, hasFinanceApproverRole } from "../src/lib/financeRole";
 import {
   getAmountWithVat,
   normalizeVatRate,
@@ -1764,9 +1765,10 @@ export const listAllRequests = query({
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
-    const canViewAll = record?.roles?.some((role: string) =>
-      REQUEST_ALL_LIST_ROLES.includes(role as (typeof REQUEST_ALL_LIST_ROLES)[number]),
-    );
+    const canViewAll =
+      record?.roles?.some((role: string) =>
+        REQUEST_ALL_LIST_ROLES.includes(role as (typeof REQUEST_ALL_LIST_ROLES)[number]),
+      ) || hasFinanceApproverRole(record);
     const hasSpecialBuhListAccess = Boolean(
       record?.roles?.some((role: string) => ["BUH Payment", "BUH Inside", "BUH Outsource"].includes(role)),
     );
@@ -1861,7 +1863,7 @@ export const listAllRequests = query({
         : [];
     const scopedToCurrentRole =
       record?.roles?.includes("HOD") &&
-      !record.roles.some((role: string) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"].includes(role))
+      !hasAnyRole(record, ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "ADMIN"])
         ? filtered.filter((req: any) => hasHodAccessToRequest(record, req))
         : canViewAll
           ? filtered
@@ -1943,9 +1945,10 @@ export const canUseAllRequestsView = query({
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
-    const canViewAll = record?.roles?.some((role: string) =>
-      REQUEST_ALL_LIST_ROLES.includes(role as (typeof REQUEST_ALL_LIST_ROLES)[number]),
-    );
+    const canViewAll =
+      record?.roles?.some((role: string) =>
+        REQUEST_ALL_LIST_ROLES.includes(role as (typeof REQUEST_ALL_LIST_ROLES)[number]),
+      ) || hasFinanceApproverRole(record);
     if (canViewAll) {
       return true;
     }
@@ -2012,9 +2015,10 @@ export const getRequest = query({
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
-    const canViewAll = record?.roles?.some((role: string) =>
-      REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
-    );
+    const canViewAll =
+      record?.roles?.some((role: string) =>
+        REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
+      ) || hasFinanceApproverRole(record);
     const hasSpecialBuhAccess = hasSpecialBuhAccessToRequest(record, request);
     const canHodView = hasHodAccessToRequest(record, request);
     const canViewByHistory = await hasHistoricalApprovalAccess(ctx, args.id, email);
@@ -2068,9 +2072,10 @@ export const listChangeHistory = query({
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
-    const canViewAll = record?.roles?.some((role: string) =>
-      REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
-    );
+    const canViewAll =
+      record?.roles?.some((role: string) =>
+        REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
+      ) || hasFinanceApproverRole(record);
     const canHodView = hasHodAccessToRequest(record, request);
     const canViewByHistory = await hasHistoricalApprovalAccess(ctx, args.requestId, email);
     if (
@@ -2977,8 +2982,8 @@ export const updateContestSpecialist = mutation({
     }
     const isFinanceEditor = Boolean(
       roleRecord?.roles?.some((role: string) =>
-        ["BUH", "CFD", "BUH Inside", "BUH Outsource"].includes(role),
-      ),
+        ["BUH", "BUH Inside", "BUH Outsource"].includes(role),
+      ) || hasFinanceApproverRole(roleRecord),
     );
     const isAdmin = Boolean(roleRecord?.roles?.includes("ADMIN"));
     if (!hasHodAccessToRequest(roleRecord, request) && !isAdmin && !isFinanceEditor) {
@@ -3232,7 +3237,7 @@ export const assignCfdTag = mutation({
     }
     const requestDepartment = normalizeHodDepartment(request.department);
     const canManageClassification =
-      record?.roles?.includes("CFD") ||
+      hasFinanceApproverRole(record) ||
       record?.roles?.includes("ADMIN") ||
       record?.roles?.includes("BUH") ||
       record?.roles?.includes("BUH Transit");
@@ -3326,9 +3331,10 @@ export const updateOperationalFields = mutation({
       throw new Error("Сначала возобновите заявку");
     }
     const roles = record?.roles ?? [];
-    const canManageAll = roles.some((role: string) =>
-      ["BUH", "CFD", "ADMIN", "BUH Transit"].includes(role),
-    );
+    const canManageAll =
+      roles.some((role: string) =>
+        ["BUH", "ADMIN", "BUH Transit"].includes(role),
+      ) || hasFinanceApproverRole(record);
     const canManageInside =
       roles.includes("BUH Inside") && requestHasInsideSpecialists(request);
     const canManageOutsource =
@@ -3488,9 +3494,10 @@ export const updatePaymentStatus = mutation({
     const actorName = record.fullName?.trim() || undefined;
     const now = Date.now();
     const isCreator = request.createdBy === userId || request.createdByEmail === email;
-    const canManagePayments = record.roles.some((role: string) =>
-      ["BUH", "CFD", "BUH Payment"].includes(role),
-    );
+    const canManagePayments =
+      record.roles.some((role: string) =>
+        ["BUH", "BUH Payment"].includes(role),
+      ) || hasFinanceApproverRole(record);
 
     const canBuhReturnPaid =
       args.status === "awaiting_payment" &&
@@ -4075,7 +4082,11 @@ export const cancelPaymentEntry = mutation({
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
-    if (!record || !record.roles.some((role: string) => ["BUH", "CFD", "ADMIN", "BUH Payment"].includes(role))) {
+    if (
+      !record ||
+      (!record.roles.some((role: string) => ["BUH", "ADMIN", "BUH Payment"].includes(role)) &&
+        !hasFinanceApproverRole(record))
+    ) {
       throw new Error("Not authorized");
     }
     const request = await ctx.db.get(args.id);
@@ -4228,7 +4239,7 @@ export const remindPayment = mutation({
     const canRemind =
       isCreator ||
       roleRecord?.roles?.includes("ADMIN") ||
-      roleRecord?.roles?.includes("CFD") ||
+      hasFinanceApproverRole(roleRecord) ||
       roleRecord?.roles?.includes("BUH") ||
       roleRecord?.roles?.includes("BUH Payment");
     if (!canRemind) {

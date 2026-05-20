@@ -6,10 +6,11 @@ import {
 } from "../src/lib/requestFields";
 import { getCurrentEmail } from "./authHelpers";
 import { getEffectiveRequiredHodDepartments } from "./requestWorkflow";
+import { hasFinanceApproverRole } from "../src/lib/financeRole";
 
 export const REQUEST_WIDE_VIEW_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "BUH Transit", "ADMIN"] as const;
 export const REQUEST_ALL_LIST_ROLES = [...REQUEST_WIDE_VIEW_ROLES, "HOD"] as const;
-export const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "HOD"] as const;
+export const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "HOD"] as const;
 
 const OUTSOURCE_CONTRACTOR_TYPES = ["ООО", "ИП", "ГПХ", "СЗ", "другое", "другое/не знаю"];
 
@@ -146,9 +147,10 @@ export async function ensureCanViewRequest(ctx: any, requestId: any) {
     throw new Error("Request not found");
   }
   const roleRecord = await getRoleRecord(ctx, email);
-  const canViewAll = roleRecord?.roles?.some((role: string) =>
-    REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
-  );
+  const canViewAll =
+    roleRecord?.roles?.some((role: string) =>
+      REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
+    ) || hasFinanceApproverRole(roleRecord);
   const hasSpecialBuhAccess = hasSpecialBuhAccessToRequest(roleRecord, request);
   const canHodView = hasHodAccessToRequest(roleRecord, request);
   const canViewByHistory = await hasHistoricalApprovalAccess(ctx, requestId, email);

@@ -1,5 +1,6 @@
 const ROLE_LABELS: Record<string, string> = {
   AD: "Автор заявки",
+  CFD: "Руководитель финансового отдела",
   "BUH Payment": "Бухгалтерия: оплата",
   "BUH Transit": "Бухгалтерия: транзит",
   "BUH Inside": "Бухгалтерия: штатные специалисты",

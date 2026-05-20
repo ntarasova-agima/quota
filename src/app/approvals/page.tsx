@@ -24,6 +24,7 @@ import {
 import { api } from "@/lib/convex";
 import { normalizeRequestCategory } from "@/lib/requestRules";
 import { EMPTY_BUSINESS_CATEGORY, EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
+import { hasFinanceApproverRole } from "@/lib/financeRole";
 
 function getRequestDisplayTitle(request: {
   title?: string;
@@ -74,6 +75,7 @@ function toEndOfDay(value?: string) {
 export default function ApprovalsPage() {
   const items = useQuery(api.approvals.listPendingForMe);
   const myRoles = useQuery(api.roles.myRoles);
+  const myProfile = useQuery(api.roles.myProfile);
   const adContacts = useQuery(api.roles.listAdContacts);
   const cfdTags = useQuery(api.cfdTags.list, {});
   const businessCategories = useQuery(api.businessCategories.list, {});
@@ -91,8 +93,12 @@ export default function ApprovalsPage() {
   const [createdMonth, setCreatedMonth] = useState("");
   const [requestCodeQuery, setRequestCodeQuery] = useState("");
   const [sort, setSort] = useState("updated_desc");
-  const isFinanceRole = myRoles?.some((role) => ["BUH", "CFD"].includes(role));
-  const canFilterByTags = myRoles?.some((role) => ["CFD", "BUH", "COO", "ADMIN"].includes(role));
+  const isFinanceHead = useMemo(
+    () => hasFinanceApproverRole({ roles: myRoles ?? [], hodDepartments: myProfile?.hodDepartments ?? [] }),
+    [myProfile?.hodDepartments, myRoles],
+  );
+  const isFinanceRole = myRoles?.includes("BUH") || isFinanceHead;
+  const canFilterByTags = myRoles?.some((role) => ["CFD", "BUH", "COO", "ADMIN"].includes(role)) || isFinanceHead;
   const todayStart = useMemo(() => {
     const value = new Date();
     value.setHours(0, 0, 0, 0);
@@ -257,7 +263,7 @@ export default function ApprovalsPage() {
                     : "Список заявок, где вы указаны как согласующий."}
               </CardDescription>
               <div className="flex flex-wrap gap-2">
-                {(myRoles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "HOD", "ADMIN", "BUH"].includes(role))) ? (
+                {(myRoles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "HOD", "ADMIN", "BUH"].includes(role)) || isFinanceHead) ? (
                   <>
                     <Button
                       type="button"
@@ -424,7 +430,7 @@ export default function ApprovalsPage() {
                     className="w-[240px]"
                     value={tagFilter}
                     options={tagOptions}
-                    placeholder="Тег CFD"
+                    placeholder="Тег заявки"
                     searchPlaceholder="Найти тег"
                     onValueChange={setTagFilter}
                   />

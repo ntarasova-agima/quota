@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import SignOutButton from "@/components/SignOutButton";
 import { api } from "@/lib/convex";
 import { formatRoleList } from "@/lib/roleLabels";
+import { hasFinanceApproverRole } from "@/lib/financeRole";
 
 export default function AppHeader({
   title,
@@ -22,6 +23,7 @@ export default function AppHeader({
   const searchParams = useSearchParams();
   const roles = profile?.roles?.length ? formatRoleList(profile.roles) : "роль не назначена";
   const name = profile?.fullName || profile?.email || "";
+  const isFinanceHead = hasFinanceApproverRole(profile);
   const canViewAllRequests =
     profile?.roles?.some((role) =>
       ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "BUH Payment", "BUH Transit", "BUH Inside", "BUH Outsource", "HOD", "ADMIN"].includes(role),
@@ -31,7 +33,7 @@ export default function AppHeader({
   const canApprove = profile?.roles?.some((role) =>
     ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "BUH Payment", "BUH Transit", "HOD", "ADMIN"].includes(role),
   );
-  const isCfd = profile?.roles?.includes("CFD");
+  const isCfd = isFinanceHead;
   const isCoo = profile?.roles?.includes("COO");
   const isBuh = profile?.roles?.some((role) => ["BUH", "BUH Transit"].includes(role));
   const isHod = profile?.roles?.includes("HOD");

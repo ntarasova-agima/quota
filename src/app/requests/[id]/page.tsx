@@ -42,9 +42,11 @@ import {
 } from "@/lib/requestRules";
 import { isAgimaEmail, normalizeEmail } from "@/lib/authRules";
 import {
+  FINANCE_LEGAL_DEPARTMENT,
   HOD_APPROVAL_DEPARTMENTS,
   normalizeHodDepartment,
 } from "@/lib/departments";
+import { hasFinanceApproverRole } from "@/lib/financeRole";
 import {
   DEFAULT_VAT_RATE,
   calculateAmountWithVat,
@@ -111,7 +113,7 @@ type MentionCandidate = {
   isManual?: boolean;
 };
 
-const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "HOD"] as const;
+const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "HOD"] as const;
 const PAYMENT_REMINDER_STATUSES = ["awaiting_payment", "payment_planned", "partially_paid"] as const;
 
 const MAX_ATTACHMENTS = 20;
@@ -639,12 +641,28 @@ export default function RequestDetailPage() {
   const newCommentRef = useRef<HTMLTextAreaElement | null>(null);
   const todayDate = useMemo(() => formatDateInputFromTimestamp(Date.now()), []);
 
+  const financeApproverRecord = useMemo(
+    () => ({
+      roles: myRoles,
+      hodDepartments: myProfile?.hodDepartments ?? data?.hodDepartments ?? [],
+    }),
+    [data?.hodDepartments, myProfile?.hodDepartments, myRoles],
+  );
+  const isFinanceApprover = useMemo(
+    () => hasFinanceApproverRole(financeApproverRecord),
+    [financeApproverRecord],
+  );
   const canDecide = useMemo(() => new Set(myRoles), [myRoles]);
   const canCurrentUserDecideApproval = (approval: { role: string; department?: string }): boolean =>
     approval.role === "HOD"
-      ? myRoles.includes("HOD") &&
-        Boolean(approval.department && (data?.hodDepartments ?? []).includes(approval.department))
-      : canDecide.has(approval.role) || (approval.role === "BUH" && myRoles.includes("CFD"));
+      ? Boolean(
+          approval.department &&
+            (
+              (myRoles.includes("HOD") && (data?.hodDepartments ?? []).includes(approval.department)) ||
+              (isFinanceApprover && approval.department === FINANCE_LEGAL_DEPARTMENT)
+            ),
+        )
+      : canDecide.has(approval.role) || (["BUH", "CFD"].includes(approval.role) && isFinanceApprover);
   const isAdmin = useMemo(() => myRoles.includes("ADMIN"), [myRoles]);
   const isNbd = useMemo(() => myRoles.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles.includes("AI-BOSS"), [myRoles]);
@@ -657,10 +675,10 @@ export default function RequestDetailPage() {
   const canManageFiles = Boolean(data?.canManageFiles);
   const canManageClassification = useMemo(
     () =>
-      myRoles.includes("CFD") ||
+      isFinanceApprover ||
       myRoles.includes("ADMIN") ||
       myRoles.includes("BUH"),
-    [myRoles],
+    [isFinanceApprover, myRoles],
   );
   const canManageRequestTag = useMemo(
     () =>
@@ -691,8 +709,8 @@ export default function RequestDetailPage() {
     [data?.isCreator, myRoles],
   );
   const canManagePayments = useMemo(
-    () => myRoles.includes("BUH") || myRoles.includes("CFD") || myRoles.includes("BUH Payment"),
-    [myRoles],
+    () => myRoles.includes("BUH") || isFinanceApprover || myRoles.includes("BUH Payment"),
+    [isFinanceApprover, myRoles],
   );
   const canSetPaymentPlanned = canManagePayments;
   const canSetPaid = canManagePayments;
@@ -1034,14 +1052,16 @@ export default function RequestDetailPage() {
   );
   const canManageOperationalFields =
     isAdmin ||
-    myRoles.some((role) => ["BUH", "CFD", "BUH Transit"].includes(role)) ||
+    isFinanceApprover ||
+    myRoles.some((role) => ["BUH", "BUH Transit"].includes(role)) ||
     (myRoles.includes("BUH Outsource") && hasOutsourceSpecialists);
   const canSendPaymentReminder =
     canSendPaymentReminderForStatus(request.status) &&
     (isCreator || isAdmin || canManagePayments);
   const canManageFot =
     isAdmin ||
-    myRoles.some((role) => ["BUH", "CFD"].includes(role)) ||
+    isFinanceApprover ||
+    myRoles.includes("BUH") ||
     (myRoles.includes("BUH Inside") && hasInsideSpecialists);
   const viewerAccessEntries = (request.viewerAccess ?? []) as Array<{
     email: string;
@@ -1066,7 +1086,10 @@ export default function RequestDetailPage() {
       if (approval.role === "HOD" && approval.department === department) {
         return false;
       }
-      if (myRoles.includes("HOD") && (data.hodDepartments ?? []).includes(department)) {
+      if (
+        (myRoles.includes("HOD") && (data.hodDepartments ?? []).includes(department)) ||
+        (isFinanceApprover && department === FINANCE_LEGAL_DEPARTMENT)
+      ) {
         return false;
       }
       return true;
@@ -3159,7 +3182,7 @@ export default function RequestDetailPage() {
                           const canBuhValidateThis =
                             !item.validationSkipped &&
                             (myRoles.includes("BUH") ||
-                              myRoles.includes("CFD") ||
+                              isFinanceApprover ||
                               myRoles.includes("BUH Inside") ||
                               myRoles.includes("BUH Outsource") ||
                               isAdmin);
@@ -3216,7 +3239,7 @@ export default function RequestDetailPage() {
                                   <SelectContent>
                                     <SelectItem value="none">Цех не выбран</SelectItem>
                                     {(
-                                      myRoles?.some((role) => ["ADMIN", "BUH", "CFD"].includes(role))
+                                      isAdmin || myRoles.includes("BUH") || isFinanceApprover
                                         ? HOD_DEPARTMENTS
                                         : data.hodDepartments ?? []
                                     ).map((dep: string) => (

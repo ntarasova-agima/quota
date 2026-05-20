@@ -11,6 +11,7 @@ import {
 } from "../src/lib/authRules";
 import { ACCOUNTING_REQUEST_AREA } from "../src/lib/requestRules";
 import { isKnownHodDepartment, normalizeHodDepartment } from "../src/lib/departments";
+import { hasFinanceApproverRole } from "../src/lib/financeRole";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -89,9 +90,10 @@ export const listRoles = query({
       .query("roles")
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
-    const canManage = record?.roles?.some((role) =>
-      ["ADMIN", "NBD", "AI-BOSS", "COO", "CFD"].includes(role),
-    );
+    const canManage =
+      record?.roles?.some((role) =>
+        ["ADMIN", "NBD", "AI-BOSS", "COO"].includes(role),
+      ) || hasFinanceApproverRole(record);
     if (!canManage) {
       return [];
     }
@@ -114,9 +116,10 @@ export const listAdContacts = query({
       .query("roles")
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
-    const canView = record?.roles?.some((role) =>
-      ["ADMIN", "NBD", "AI-BOSS", "COO", "CFD"].includes(role),
-    );
+    const canView =
+      record?.roles?.some((role) =>
+        ["ADMIN", "NBD", "AI-BOSS", "COO"].includes(role),
+      ) || hasFinanceApproverRole(record);
     if (!canView) {
       return [];
     }
@@ -234,9 +237,10 @@ export const upsertRole = mutation({
       .query("roles")
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
-    const canManage = selfRecord?.roles?.some((role) =>
-      ["ADMIN", "NBD", "AI-BOSS", "COO", "CFD"].includes(role),
-    );
+    const canManage =
+      selfRecord?.roles?.some((role) =>
+        ["ADMIN", "NBD", "AI-BOSS", "COO"].includes(role),
+      ) || hasFinanceApproverRole(selfRecord);
     const normalizedEmail = normalizeEmail(args.email);
     if (anyRoles && !canManage) {
       const allRoles = await ctx.db.query("roles").collect();
@@ -306,9 +310,10 @@ export const deleteRole = mutation({
       .query("roles")
       .withIndex("by_email", (q) => q.eq("email", email))
       .first();
-    const canManage = selfRecord?.roles?.some((role) =>
-      ["ADMIN", "NBD", "AI-BOSS", "COO", "CFD"].includes(role),
-    );
+    const canManage =
+      selfRecord?.roles?.some((role) =>
+        ["ADMIN", "NBD", "AI-BOSS", "COO"].includes(role),
+      ) || hasFinanceApproverRole(selfRecord);
     if (!canManage) {
       throw new Error("Not authorized");
     }

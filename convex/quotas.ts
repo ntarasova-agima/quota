@@ -12,6 +12,7 @@ import {
   shouldSkipQuotaByTag,
 } from "../src/lib/requestRules";
 import { HOD_DEPARTMENTS, normalizeHodDepartment } from "../src/lib/departments";
+import { hasAnyRole, hasFinanceApproverRole } from "../src/lib/financeRole";
 import { DEFAULT_VAT_RATE, getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
 
 const ADMINISTRATION_TOTAL_KEY = "__total__";
@@ -89,7 +90,7 @@ async function ensureAnyRole(
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const hasRole = roles.some((role) => record?.roles?.includes(role));
+  const hasRole = hasAnyRole(record, roles);
   if (!hasRole) {
     throw new Error("Not authorized");
   }
@@ -129,7 +130,10 @@ function getAllowedHodDepartments(record: any) {
 }
 
 function canEditAdministrationQuotaRow(record: any, departmentKey: string) {
-  if (record?.roles?.some((role: string) => ["CFD", "COO", "BUH", "ADMIN"].includes(role))) {
+  if (
+    record?.roles?.some((role: string) => ["COO", "BUH", "ADMIN"].includes(role)) ||
+    hasFinanceApproverRole(record)
+  ) {
     return true;
   }
   if (departmentKey === ADMINISTRATION_TOTAL_KEY) {
@@ -139,14 +143,17 @@ function canEditAdministrationQuotaRow(record: any, departmentKey: string) {
 }
 
 function getAdministrationQuotaVisibility(record: any) {
-  const canSeeAllDepartments = record?.roles?.some((role: string) =>
-    ["CFD", "COO", "BUH", "ADMIN"].includes(role),
-  );
+  const canSeeAllDepartments =
+    record?.roles?.some((role: string) =>
+      ["COO", "BUH", "ADMIN"].includes(role),
+    ) || hasFinanceApproverRole(record);
   const allowedDepartments = canSeeAllDepartments ? HOD_DEPARTMENTS : getAllowedHodDepartments(record);
   return {
     canSeeAllDepartments,
     allowedDepartments,
-    canEditTotal: record?.roles?.some((role: string) => ["CFD", "COO", "BUH", "ADMIN"].includes(role)) ?? false,
+    canEditTotal:
+      record?.roles?.some((role: string) => ["COO", "BUH", "ADMIN"].includes(role)) ||
+      hasFinanceApproverRole(record),
   };
 }
 

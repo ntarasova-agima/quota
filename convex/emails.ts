@@ -11,6 +11,7 @@ import {
   requiresContestSpecialistValidation,
 } from "../src/lib/requestFields";
 import { supportsRequestSpecialists, usesServiceRecipientLabel } from "../src/lib/requestRules";
+import { hasFinanceApproverRole } from "../src/lib/financeRole";
 import { formatAmountPair } from "../src/lib/vat";
 
 const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
@@ -450,7 +451,11 @@ export const sendPaymentRequested = internalAction({
     }
     const { request, roles, approvals } = data;
     const buhRecipients = roles
-      .filter((role) => role.active && role.roles.some((item: string) => ["BUH Payment", "CFD"].includes(item)))
+      .filter(
+        (role) =>
+          role.active &&
+          (role.roles.includes("BUH Payment") || hasFinanceApproverRole(role)),
+      )
       .map((role) => role.email);
     if (buhRecipients.length === 0) {
       return;
