@@ -56,7 +56,7 @@ import {
   sanitizeNumericInput,
   syncVatInputPair,
 } from "@/lib/vat";
-import { Paperclip, Upload } from "lucide-react";
+import { CheckCircle2, Paperclip, Upload } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
 
 type SpecialistView = {
@@ -617,6 +617,7 @@ export default function RequestDetailPage() {
   const [operationalShipmentDate, setOperationalShipmentDate] = useState("");
   const [fotAllSpecialistsRecorded, setFotAllSpecialistsRecorded] = useState(false);
   const [savingOperationalFields, setSavingOperationalFields] = useState(false);
+  const [operationalFieldsSavedAt, setOperationalFieldsSavedAt] = useState<number | null>(null);
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
   const [paymentTargetAmount, setPaymentTargetAmount] = useState("");
   const [paymentTargetAmountWithVat, setPaymentTargetAmountWithVat] = useState("");
@@ -704,6 +705,9 @@ export default function RequestDetailPage() {
     api.businessCategories.list,
     isAuthenticated && canManageClassification ? {} : "skip",
   );
+  const markOperationalFieldsDirty = () => {
+    setOperationalFieldsSavedAt(null);
+  };
   const canSetAwaitingPayment = useMemo(
     () => data?.isCreator || myRoles.includes("ADMIN") || myRoles.includes("BUH Payment"),
     [data?.isCreator, myRoles],
@@ -2037,7 +2041,10 @@ export default function RequestDetailPage() {
                         <label className="flex items-center gap-2 text-sm font-medium">
                           <Checkbox
                             checked={finplanEntered}
-                            onCheckedChange={(checked) => setFinplanEntered(checked === true)}
+                            onCheckedChange={(checked) => {
+                              markOperationalFieldsDirty();
+                              setFinplanEntered(checked === true);
+                            }}
                           />
                           Занесено в финплан
                         </label>
@@ -2045,7 +2052,10 @@ export default function RequestDetailPage() {
                           <Label>Строки финплана</Label>
                           <Textarea
                             value={finplanEntryIdsRaw}
-                            onChange={(event) => setFinplanEntryIdsRaw(event.target.value)}
+                            onChange={(event) => {
+                              markOperationalFieldsDirty();
+                              setFinplanEntryIdsRaw(event.target.value);
+                            }}
                             placeholder="Ссылки на строки или ID, по одной в строке"
                             rows={2}
                           />
@@ -2055,7 +2065,10 @@ export default function RequestDetailPage() {
                           <Input
                             type="date"
                             value={operationalPaymentDeadline}
-                            onChange={(event) => setOperationalPaymentDeadline(event.target.value)}
+                            onChange={(event) => {
+                              markOperationalFieldsDirty();
+                              setOperationalPaymentDeadline(event.target.value);
+                            }}
                           />
                         </div>
                         <div className="space-y-2">
@@ -2063,7 +2076,10 @@ export default function RequestDetailPage() {
                           <Input
                             type="date"
                             value={operationalShipmentDate}
-                            onChange={(event) => setOperationalShipmentDate(event.target.value)}
+                            onChange={(event) => {
+                              markOperationalFieldsDirty();
+                              setOperationalShipmentDate(event.target.value);
+                            }}
                           />
                         </div>
                       </>
@@ -2072,47 +2088,60 @@ export default function RequestDetailPage() {
                       <label className="flex items-center gap-2 text-sm font-medium sm:col-span-2">
                         <Checkbox
                           checked={fotAllSpecialistsRecorded}
-                          onCheckedChange={(checked) => setFotAllSpecialistsRecorded(checked === true)}
+                          onCheckedChange={(checked) => {
+                            markOperationalFieldsDirty();
+                            setFotAllSpecialistsRecorded(checked === true);
+                          }}
                         />
                         ФОТ всех специалистов вынесен
                       </label>
                     ) : null}
                   </div>
-                  <Button
-                    type="button"
-                    disabled={savingOperationalFields}
-                    onClick={async () => {
-                      setError(null);
-                      setSavingOperationalFields(true);
-                      try {
-                        await updateOperationalFields({
-                          id: request._id,
-                          finplanEntered: canManageOperationalFields ? finplanEntered : undefined,
-                          finplanEntryIds: canManageOperationalFields
-                            ? finplanEntryIdsRaw
-                                .split("\n")
-                                .map((item) => item.trim())
-                                .filter(Boolean)
-                            : undefined,
-                          paymentDeadline:
-                            canManageOperationalFields && operationalPaymentDeadline
-                              ? new Date(`${operationalPaymentDeadline}T00:00:00`).getTime()
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      disabled={savingOperationalFields}
+                      onClick={async () => {
+                        setError(null);
+                        setOperationalFieldsSavedAt(null);
+                        setSavingOperationalFields(true);
+                        try {
+                          await updateOperationalFields({
+                            id: request._id,
+                            finplanEntered: canManageOperationalFields ? finplanEntered : undefined,
+                            finplanEntryIds: canManageOperationalFields
+                              ? finplanEntryIdsRaw
+                                  .split("\n")
+                                  .map((item) => item.trim())
+                                  .filter(Boolean)
                               : undefined,
-                          shipmentDate:
-                            canManageOperationalFields && operationalShipmentDate
-                              ? new Date(`${operationalShipmentDate}T00:00:00`).getTime()
-                              : undefined,
-                          fotAllSpecialistsRecorded: canManageFot ? fotAllSpecialistsRecorded : undefined,
-                        });
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "Не удалось сохранить финансовые отметки");
-                      } finally {
-                        setSavingOperationalFields(false);
-                      }
-                    }}
-                  >
-                    Сохранить финансовые отметки
-                  </Button>
+                            paymentDeadline:
+                              canManageOperationalFields && operationalPaymentDeadline
+                                ? new Date(`${operationalPaymentDeadline}T00:00:00`).getTime()
+                                : undefined,
+                            shipmentDate:
+                              canManageOperationalFields && operationalShipmentDate
+                                ? new Date(`${operationalShipmentDate}T00:00:00`).getTime()
+                                : undefined,
+                            fotAllSpecialistsRecorded: canManageFot ? fotAllSpecialistsRecorded : undefined,
+                          });
+                          setOperationalFieldsSavedAt(Date.now());
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "Не удалось сохранить финансовые отметки");
+                        } finally {
+                          setSavingOperationalFields(false);
+                        }
+                      }}
+                    >
+                      {savingOperationalFields ? "Сохраняем..." : "Сохранить финансовые отметки"}
+                    </Button>
+                    {operationalFieldsSavedAt ? (
+                      <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Финансовые отметки сохранены
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               )}
               {(canSetAwaitingPayment || canSetPaymentPlanned || canSetPaid || canClose) && (
