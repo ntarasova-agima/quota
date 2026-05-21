@@ -147,6 +147,7 @@ export default function RequestsPage() {
     () => myRoles?.some((role) => ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "HOD", "ADMIN"].includes(role)) || isFinanceHead,
     [isFinanceHead, myRoles],
   );
+  const canShowAllRequests = Boolean(canUseAllRequestsView);
   const isAdmin = useMemo(() => myRoles?.includes("ADMIN") ?? false, [myRoles]);
   const isTagViewer = useMemo(
     () => myRoles?.some((role) => ["CFD", "NBD", "COO", "BUH", "ADMIN"].includes(role)) || isFinanceHead,
@@ -639,7 +640,7 @@ export default function RequestsPage() {
           </Card>
           )}
 
-          {isApprover && activeView === "all" && (
+          {canShowAllRequests && activeView === "all" && (
             <Card className="border-zinc-200 bg-[linear-gradient(180deg,rgba(250,250,250,0.98)_0%,rgba(244,244,245,0.97)_100%)]">
               <CardHeader className="flex flex-col gap-3">
                 <div>
