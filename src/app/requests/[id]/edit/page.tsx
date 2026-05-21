@@ -1822,10 +1822,7 @@ export default function NewRequestPage() {
                         onCheckedChange={() => toggleRole(role)}
                         disabled={enforcedRoles.has(role)}
                       />
-                      <span>
-                        {getRoleLabel(role)}
-                        {enforcedRoles.has(role) ? " · обязателен" : ""}
-                      </span>
+                      <span>{getRoleLabel(role)}</span>
                     </label>
                   ))}
                 </div>
