@@ -29,6 +29,10 @@ import {
   type RequestArea,
   type RoleOption,
 } from "@/lib/constants";
+import {
+  getAutoRequiredHodDepartmentsForRequest,
+  getAutoRequiredRolesForRequest,
+} from "@/lib/approvalRules";
 import { getRoleLabel } from "@/lib/roleLabels";
 import {
   calculateIncomingRatio,
@@ -43,7 +47,6 @@ import {
 import {
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
-  CLIENT_SERVICES_TRANSIT_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
@@ -422,11 +425,14 @@ export default function NewRequestPage() {
                   .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
                   .map((item) => item.department as string)
               : []),
-            ...(isHodSelectableCategory(category) && selectedDepartment ? [selectedDepartment] : []),
+            ...getAutoRequiredHodDepartmentsForRequest({
+              category,
+              specialists: specialistsPayload,
+            }),
           ].filter((department): department is string => Boolean(department)),
         ),
       ),
-    [category, requestSupportsSpecialists, selectedDepartment, specialistsPayload],
+    [category, requestSupportsSpecialists, specialistsPayload],
   );
   const effectiveRequiredHodDepartments = useMemo(
     () =>
@@ -597,9 +603,7 @@ export default function NewRequestPage() {
 
   const enforcedRoles = useMemo(() => {
     const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
-    if (normalizeRequestCategory(category) === CLIENT_SERVICES_TRANSIT_CATEGORY) {
-      roles.add("BUH Transit");
-    }
+    getAutoRequiredRolesForRequest({ category }).forEach((role) => roles.add(role as RoleOption));
     return roles;
   }, [category, fundingSource]);
   const displayedRoleOptions = useMemo(() => {
@@ -1830,7 +1834,7 @@ export default function NewRequestPage() {
                   <div className="space-y-2 rounded-lg border border-border p-3">
                     <Label>Какой руководитель цеха согласует заявку</Label>
                     <p className="text-xs text-muted-foreground">
-                      Для конкурсного задания цеха внутренних специалистов добавляются автоматически.
+                      Некоторые цеха добавляются автоматически по типу заявки, подрядчикам или штатным специалистам.
                     </p>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {HOD_APPROVAL_DEPARTMENTS.map((department) => {

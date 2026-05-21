@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { FINANCE_LEGAL_DEPARTMENT } from "../src/lib/departments";
-import { CLIENT_SERVICES_TRANSIT_CATEGORY } from "../src/lib/requestRules";
+import {
+  ACCOUNTING_REQUEST_AREA,
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
+  PURCHASE_CATEGORY,
+} from "../src/lib/requestRules";
 import {
   buildApprovalTargets,
   getEffectiveRequiredHodDepartments,
@@ -14,7 +18,7 @@ describe("requestWorkflow", () => {
         category: "Закупка",
         requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT, "Разработка"],
       }),
-    ).toEqual([FINANCE_LEGAL_DEPARTMENT, "Разработка"]);
+    ).toEqual([FINANCE_LEGAL_DEPARTMENT, "Разработка", ACCOUNTING_REQUEST_AREA]);
   });
 
   it("adds HOD role when finance HOD is required", () => {
@@ -23,7 +27,7 @@ describe("requestWorkflow", () => {
       requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT],
     });
 
-    expect(departments).toEqual([FINANCE_LEGAL_DEPARTMENT]);
+    expect(departments).toEqual([FINANCE_LEGAL_DEPARTMENT, ACCOUNTING_REQUEST_AREA]);
     expect(
       getEffectiveRequiredRoles({
         requiredRoles: [],
@@ -59,5 +63,71 @@ describe("requestWorkflow", () => {
       { role: "HOD", department: FINANCE_LEGAL_DEPARTMENT },
       { role: "BUH Transit" },
     ]);
+  });
+
+  it("requires NBD for welcome bonus and contest requests only", () => {
+    expect(
+      getEffectiveRequiredRoles({
+        requiredRoles: [],
+        category: "Welcome-бонус",
+      }),
+    ).toEqual(["NBD"]);
+
+    expect(
+      getEffectiveRequiredRoles({
+        requiredRoles: [],
+        category: "Конкурсное задание",
+      }),
+    ).toEqual(["NBD"]);
+
+    expect(
+      getEffectiveRequiredRoles({
+        requiredRoles: [],
+        category: PURCHASE_CATEGORY,
+      }),
+    ).not.toContain("NBD");
+  });
+
+  it("requires Accounting HOD for purchase, gifts, informal events, and merch", () => {
+    for (const category of [
+      PURCHASE_CATEGORY,
+      "Подарки",
+      "Неформальное мероприятие",
+      "Совместный мерч",
+    ]) {
+      expect(
+        getEffectiveRequiredHodDepartments({
+          category,
+          requiredHodDepartments: [],
+        }),
+      ).toContain(ACCOUNTING_REQUEST_AREA);
+    }
+  });
+
+  it("requires Accounting HOD when contractor specialists are present", () => {
+    expect(
+      getEffectiveRequiredHodDepartments({
+        category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+        requiredHodDepartments: [],
+        specialists: [
+          {
+            sourceType: "contractor",
+            name: "Подрядчик",
+          },
+        ],
+      }),
+    ).toContain(ACCOUNTING_REQUEST_AREA);
+
+    expect(
+      getEffectiveRequiredHodDepartments({
+        category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+        requiredHodDepartments: [],
+        specialists: [
+          {
+            sourceType: "contractor",
+          },
+        ],
+      }),
+    ).not.toContain(ACCOUNTING_REQUEST_AREA);
   });
 });

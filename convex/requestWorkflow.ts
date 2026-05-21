@@ -9,6 +9,10 @@ import {
   normalizeRequestCategory,
   supportsRequestSpecialists,
 } from "../src/lib/requestRules";
+import {
+  getAutoRequiredHodDepartmentsForRequest,
+  getAutoRequiredRolesForRequest,
+} from "../src/lib/approvalRules";
 
 export type ApprovalEntryLike = {
   role: string;
@@ -62,6 +66,10 @@ export function getEffectiveRequiredHodDepartments(params: {
   }
   return normalizeDepartmentList([
     ...(params.requiredHodDepartments ?? []),
+    ...getAutoRequiredHodDepartmentsForRequest({
+      category: normalizedCategory,
+      specialists: params.specialists,
+    }),
     ...(supportsRequestSpecialists(normalizedCategory)
       ? getRequiredSpecialistHodDepartments(params.specialists)
       : []),
@@ -76,10 +84,13 @@ export function getEffectiveRequiredRoles(params: {
 }) {
   const roles = new Set(params.requiredRoles);
   if (params.enforceFinanceRole !== false) {
-    if (normalizeRequestCategory(params.category ?? "") === CLIENT_SERVICES_TRANSIT_CATEGORY) {
+    const normalizedCategory = normalizeRequestCategory(params.category ?? "");
+    if (normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY) {
       roles.delete("BUH");
-      roles.add("BUH Transit");
     }
+    getAutoRequiredRolesForRequest({ category: normalizedCategory }).forEach((role) =>
+      roles.add(role),
+    );
   }
   if ((params.requiredHodDepartments?.length ?? 0) > 0) {
     roles.add("HOD");
