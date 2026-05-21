@@ -1063,10 +1063,16 @@ export default function RequestDetailPage() {
     canSendPaymentReminderForStatus(request.status) &&
     (isCreator || isAdmin || canManagePayments);
   const canManageFot =
-    isAdmin ||
-    isFinanceApprover ||
-    myRoles.includes("BUH") ||
-    (myRoles.includes("BUH Inside") && hasInsideSpecialists);
+    hasInsideSpecialists &&
+    (
+      isAdmin ||
+      isFinanceApprover ||
+      myRoles.includes("BUH") ||
+      myRoles.includes("BUH Inside")
+    );
+  const canUpdateFotMark =
+    canManageFot &&
+    !["draft", "hod_pending", "pending", "rejected"].includes(request.status);
   const viewerAccessEntries = (request.viewerAccess ?? []) as Array<{
     email: string;
     fullName?: string;
@@ -2085,16 +2091,24 @@ export default function RequestDetailPage() {
                       </>
                     ) : null}
                     {canManageFot ? (
-                      <label className="flex items-center gap-2 text-sm font-medium sm:col-span-2">
-                        <Checkbox
-                          checked={fotAllSpecialistsRecorded}
-                          onCheckedChange={(checked) => {
-                            markOperationalFieldsDirty();
-                            setFotAllSpecialistsRecorded(checked === true);
-                          }}
-                        />
-                        ФОТ всех специалистов вынесен
-                      </label>
+                      <div className="space-y-1 sm:col-span-2">
+                        <label className="flex items-center gap-2 text-sm font-medium">
+                          <Checkbox
+                            checked={fotAllSpecialistsRecorded}
+                            disabled={!canUpdateFotMark}
+                            onCheckedChange={(checked) => {
+                              markOperationalFieldsDirty();
+                              setFotAllSpecialistsRecorded(checked === true);
+                            }}
+                          />
+                          ФОТ всех специалистов вынесен
+                        </label>
+                        {!canUpdateFotMark ? (
+                          <p className="text-xs text-muted-foreground">
+                            ФОТ можно отметить после согласования заявки.
+                          </p>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
@@ -2123,7 +2137,9 @@ export default function RequestDetailPage() {
                               canManageOperationalFields && operationalShipmentDate
                                 ? new Date(`${operationalShipmentDate}T00:00:00`).getTime()
                                 : undefined,
-                            fotAllSpecialistsRecorded: canManageFot ? fotAllSpecialistsRecorded : undefined,
+                            fotAllSpecialistsRecorded: canUpdateFotMark
+                              ? fotAllSpecialistsRecorded
+                              : undefined,
                           });
                           setOperationalFieldsSavedAt(Date.now());
                         } catch (err) {
