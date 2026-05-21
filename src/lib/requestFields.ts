@@ -10,7 +10,7 @@ export type ContestSpecialistSource = (typeof CONTEST_SPECIALIST_SOURCES)[number
 
 export const CONTEST_SPECIALIST_SOURCE_LABELS: Record<ContestSpecialistSource, string> = {
   internal: "Штатные специалисты",
-  contractor: "Подрядчики, ГПХ, ИП, СЗ",
+  contractor: "Подрядчики/поставщики",
 };
 
 export const CONTRACTOR_TYPE_OPTIONS = ["ООО", "ИП", "ГПХ", "СЗ", "другое/не знаю"] as const;

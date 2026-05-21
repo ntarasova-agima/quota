@@ -67,6 +67,30 @@ export default function ContestParticipantsEditor({
     );
   }
 
+  function rowHasContent(row: ContestParticipantDraft) {
+    return Boolean(
+      row.name.trim() ||
+        row.department ||
+        row.hours ||
+        row.directCost ||
+        row.taxAmount ||
+        row.contractorTypes.length ||
+        row.taxUnknown ||
+        row.amountIncludesTaxes ||
+        row.amountExcludesTaxes ||
+        row.validationSkipped,
+    );
+  }
+
+  function removeOrClearRow(id: string) {
+    setRows((current) => {
+      if (current.length > 1) {
+        return current.filter((row) => row.id !== id);
+      }
+      return [createContestParticipantDraft()];
+    });
+  }
+
   return (
     <div className="space-y-3 rounded-lg border border-border p-4">
       <div className="space-y-1">
@@ -78,7 +102,7 @@ export default function ContestParticipantsEditor({
           key={item.id}
           className="space-y-3 rounded-lg border border-border p-3"
         >
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]">
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.7fr)]">
             <Input
               className="min-w-0"
               placeholder={emptyNamePlaceholder}
@@ -110,19 +134,7 @@ export default function ContestParticipantsEditor({
             </Select>
             <Input
               className="min-w-0"
-              placeholder="Часы"
-              inputMode="decimal"
-              value={item.hours}
-              onChange={(event) =>
-                updateRow(item.id, (row) => ({
-                  ...row,
-                  hours: sanitizeNumericInput(event.target.value),
-                }))
-              }
-            />
-            <Input
-              className="min-w-0"
-              placeholder="Прямые затраты"
+              placeholder={showContractorTypes ? "Сумма подрядчику/поставщику" : "Прямые затраты"}
               inputMode="decimal"
               value={item.directCost}
               onChange={(event) =>
@@ -144,11 +156,23 @@ export default function ContestParticipantsEditor({
                 }))
               }
             />
+            <Input
+              className="min-w-0"
+              placeholder={showContractorTypes ? "Часы, если применимо" : "Часы"}
+              inputMode="decimal"
+              value={item.hours}
+              onChange={(event) =>
+                updateRow(item.id, (row) => ({
+                  ...row,
+                  hours: sanitizeNumericInput(event.target.value),
+                }))
+              }
+            />
           </div>
           {showContractorTypes ? (
             <div className="space-y-2">
               <div className="text-sm font-medium">Тип подрядчика</div>
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 {CONTRACTOR_TYPE_OPTIONS.map((option) => {
                   const checked = item.contractorTypes.includes(option);
                   return (
@@ -158,6 +182,16 @@ export default function ContestParticipantsEditor({
                         className="size-4 accent-primary"
                         name={`contractor-type-${item.id}`}
                         checked={checked}
+                        onClick={(event) => {
+                          if (!checked) {
+                            return;
+                          }
+                          event.preventDefault();
+                          updateRow(item.id, (row) => ({
+                            ...row,
+                            contractorTypes: [],
+                          }));
+                        }}
                         onChange={() =>
                           updateRow(item.id, (row) => ({
                             ...row,
@@ -169,6 +203,21 @@ export default function ContestParticipantsEditor({
                     </label>
                   );
                 })}
+                {item.contractorTypes.length ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      updateRow(item.id, (row) => ({
+                        ...row,
+                        contractorTypes: [],
+                      }))
+                    }
+                  >
+                    Сбросить тип
+                  </Button>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -220,9 +269,30 @@ export default function ContestParticipantsEditor({
                     {option.label}
                   </label>
                 );
-              })}
+                })}
+                {[
+                  item.taxUnknown,
+                  item.amountIncludesTaxes,
+                  item.amountExcludesTaxes,
+                ].some(Boolean) ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      updateRow(item.id, (row) => ({
+                        ...row,
+                        taxUnknown: false,
+                        amountIncludesTaxes: false,
+                        amountExcludesTaxes: false,
+                      }))
+                    }
+                  >
+                    Сбросить
+                  </Button>
+                ) : null}
+              </div>
             </div>
-          </div>
           <label className="sm:col-span-4 flex items-center gap-2 text-sm">
             <Checkbox
               checked={item.validationSkipped}
@@ -242,16 +312,14 @@ export default function ContestParticipantsEditor({
               ? "Цех не получит задачу на валидацию по этой записи."
               : "Уточните у руководителя цеха или отправьте на заполнение."}
           </div>
-          {rows.length > 1 ? (
+          {rows.length > 1 || rowHasContent(item) ? (
             <Button
               type="button"
               variant="ghost"
               className="sm:col-span-4 w-fit"
-              onClick={() =>
-                setRows((current) => current.filter((row) => row.id !== item.id))
-              }
+              onClick={() => removeOrClearRow(item.id)}
             >
-              Удалить
+              {rows.length > 1 ? "Удалить" : "Очистить"}
             </Button>
           ) : null}
         </div>

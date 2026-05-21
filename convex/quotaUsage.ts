@@ -192,6 +192,7 @@ function getRequestPaymentResidualAmounts(request: any) {
 export function getEffectiveQuotaAllocations(request: any) {
   if (
     request.isCanceled ||
+    request.category === "Welcome-бонус" ||
     ["draft", "hod_pending", "pending", "rejected"].includes(request.status)
   ) {
     return [] as Array<{ monthKey: string; amountWithoutVat: number; amountWithVat: number }>;

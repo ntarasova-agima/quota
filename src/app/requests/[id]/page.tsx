@@ -2039,7 +2039,7 @@ export default function RequestDetailPage() {
                   <div>
                     <div className="text-lg font-semibold">Финансовые отметки</div>
                     <p className="text-sm text-muted-foreground">
-                      Здесь финотдел может уточнить финплан, дедлайн оплаты и дату отгрузки.
+                      Здесь финотдел может уточнить финплан, дедлайн оплаты и дату отгрузки по проекту.
                     </p>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -2056,14 +2056,14 @@ export default function RequestDetailPage() {
                           Занесено в финплан
                         </label>
                         <div className="space-y-2 sm:col-span-2">
-                          <Label>Строки финплана</Label>
+                          <Label>ID затраты в Финплане</Label>
                           <Textarea
                             value={finplanEntryIdsRaw}
                             onChange={(event) => {
                               markOperationalFieldsDirty();
                               setFinplanEntryIdsRaw(event.target.value);
                             }}
-                            placeholder="Ссылки на строки или ID, по одной в строке"
+                            placeholder="ID затрат или ссылки на строки, по одной в строке"
                             rows={2}
                           />
                         </div>
@@ -2079,7 +2079,7 @@ export default function RequestDetailPage() {
                           />
                         </div>
                         <div className="space-y-2">
-                          <Label>Дата отгрузки</Label>
+                          <Label>Дата отгрузки по проекту</Label>
                           <Input
                             type="date"
                             value={operationalShipmentDate}
@@ -3058,7 +3058,7 @@ export default function RequestDetailPage() {
                   </p>
                 </div>
               ) : null}
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className={`grid gap-3 ${request.category === "Welcome-бонус" ? "" : "sm:grid-cols-2"}`}>
                 <div>
                   <div className="text-muted-foreground">Дедлайн согласования</div>
                   <p className="mt-1">
@@ -3071,30 +3071,34 @@ export default function RequestDetailPage() {
                     </HoverHint>
                   </p>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">Ожидание затраты</div>
-                  <p className="mt-1">
-                    <HoverHint label="Дата, по которой заявка списывается из квоты">
-                      <span>
-                        {request.neededBy
-                          ? new Date(request.neededBy).toLocaleDateString("ru-RU")
-                          : "Не задано"}
-                      </span>
-                    </HoverHint>
-                  </p>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">Дедлайн оплаты</div>
-                  <p className="mt-1">
-                    <HoverHint label="Когда нужно оплатить">
-                      <span>
-                        {(request.paymentDeadline ?? request.neededBy)
-                          ? new Date(request.paymentDeadline ?? request.neededBy!).toLocaleDateString("ru-RU")
-                          : "Не задано"}
-                      </span>
-                    </HoverHint>
-                  </p>
-                </div>
+                {request.category !== "Welcome-бонус" ? (
+                  <>
+                    <div>
+                      <div className="text-muted-foreground">Дата отгрузки</div>
+                      <p className="mt-1">
+                        <HoverHint label="Дата, по которой заявка списывается из квоты">
+                          <span>
+                            {request.neededBy
+                              ? new Date(request.neededBy).toLocaleDateString("ru-RU")
+                              : "Не задано"}
+                          </span>
+                        </HoverHint>
+                      </p>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Дедлайн оплаты</div>
+                      <p className="mt-1">
+                        <HoverHint label="Когда нужно оплатить">
+                          <span>
+                            {(request.paymentDeadline ?? request.neededBy)
+                              ? new Date(request.paymentDeadline ?? request.neededBy!).toLocaleDateString("ru-RU")
+                              : "Не задано"}
+                          </span>
+                        </HoverHint>
+                      </p>
+                    </div>
+                  </>
+                ) : null}
               </div>
               {(request.finplanEntered || request.finplanEntryIds?.length || request.fotAllSpecialistsRecorded) ? (
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -3110,7 +3114,7 @@ export default function RequestDetailPage() {
                   ) : null}
                   {request.finplanEntryIds?.length ? (
                     <div className="sm:col-span-2">
-                      <div className="text-muted-foreground">Строки финплана</div>
+                      <div className="text-muted-foreground">ID затраты в Финплане</div>
                       <ul className="mt-1 list-disc pl-5">
                         {request.finplanEntryIds.map((item) => (
                           <li key={item}>{item}</li>
@@ -3122,14 +3126,10 @@ export default function RequestDetailPage() {
               ) : null}
               <div>
                 <div className="text-muted-foreground">Обоснование</div>
-                <p className="mt-1 whitespace-pre-wrap">{request.justification}</p>
+                <p className="mt-1 whitespace-pre-wrap">
+                  {[request.justification, request.details].filter(Boolean).join("\n\n")}
+                </p>
               </div>
-              {request.details ? (
-                <div>
-                  <div className="text-muted-foreground">Детали заявки</div>
-                  <p className="mt-1 whitespace-pre-wrap">{request.details}</p>
-                </div>
-              ) : null}
               {request.relatedRequests?.length ? (
                 <div>
                   <div className="text-muted-foreground">Связанные заявки</div>
@@ -3167,7 +3167,7 @@ export default function RequestDetailPage() {
               ) : null}
               {request.financePlanLinks?.length ? (
                 <div>
-                  <div className="text-muted-foreground">ID и название отгрузки в финплане</div>
+                  <div className="text-muted-foreground">ID отгрузки в Финплане</div>
                   <ul className="mt-1 list-disc pl-5">
                     {request.financePlanLinks.map((link, index) => (
                       <li key={`${link}-${index}`}>{link}</li>
@@ -3203,7 +3203,7 @@ export default function RequestDetailPage() {
               ) : null}
               {request.shipmentDate || request.shipmentMonth ? (
                 <div>
-                  <div className="text-muted-foreground">Дата отгрузки</div>
+                  <div className="text-muted-foreground">Дата отгрузки по проекту</div>
                   <p className="mt-1">
                     {request.shipmentDate
                       ? new Date(request.shipmentDate).toLocaleDateString("ru-RU")
@@ -3212,13 +3212,13 @@ export default function RequestDetailPage() {
                 </div>
               ) : null}
               {request.fundingSource === "Отгрузки проекта" && !request.financePlanLinks?.length ? (
-                <p className="text-sm text-muted-foreground">ID и название отгрузки в финплане не указаны.</p>
+                <p className="text-sm text-muted-foreground">ID отгрузки в Финплане не указан.</p>
               ) : null}
               {requestSupportsSpecialists ? (
                 <div className="space-y-4">
                   {[
                     { key: "internal", label: "Штатные специалисты", items: contestParticipants.internal },
-                    { key: "contractor", label: "Подрядчики, ГПХ, ИП, СЗ", items: contestParticipants.contractor },
+                    { key: "contractor", label: "Подрядчики/поставщики", items: contestParticipants.contractor },
                   ].map((section) => (
                     <div key={section.key} className="space-y-3">
                       <div className="text-muted-foreground">{section.label}</div>

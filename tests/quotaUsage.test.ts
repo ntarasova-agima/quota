@@ -157,4 +157,18 @@ describe("quotaUsage", () => {
       amountWithVat: 122,
     });
   });
+
+  it("does not allocate Welcome bonus requests to quotas", () => {
+    expect(
+      getEffectiveQuotaAllocations({
+        status: "approved",
+        category: "Welcome-бонус",
+        amount: 1000,
+        amountWithVat: 1220,
+        vatRate: 22,
+        currency: "RUB",
+        neededBy: new Date("2026-04-20").getTime(),
+      }),
+    ).toEqual([]);
+  });
 });

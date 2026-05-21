@@ -100,6 +100,14 @@ function getPaymentDeadlineLabel(request: any) {
   return timestamp ? new Date(timestamp).toLocaleDateString("ru-RU") : "не задан";
 }
 
+function getDateKey(timestamp?: number) {
+  return timestamp ? new Date(timestamp).toISOString().slice(0, 10) : undefined;
+}
+
+function formatDate(timestamp?: number) {
+  return timestamp ? new Date(timestamp).toLocaleDateString("ru-RU") : "не указана";
+}
+
 function getBaseUrl() {
   return process.env.EMAIL_BASE_URL ?? "http://localhost:3000";
 }
@@ -332,6 +340,46 @@ export const sendSpecialistBuhNotifications = internalAction({
       html: `
         <p>В заявке есть штатные специалисты или подрядчики, требующие внимания бухгалтерии.</p>
         <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
+export const sendSpecialRoleBackfillNotification = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    targetRoles: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data || args.targetRoles.length === 0) {
+      return;
+    }
+    const { request, roles } = data;
+    const recipients = dedupeEmails(
+      roles
+        .filter((role) => role.active && role.roles.some((item: string) => args.targetRoles.includes(item)))
+        .map((role) => role.email),
+      [request.createdByEmail],
+    );
+    if (!recipients.length) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "special_role_backfill",
+      to: recipients,
+      subject: `Актуальная заявка доступна вам: ${request.requestCode ?? request.category}`,
+      html: `
+        <p>Эта заявка уже есть в сервисе и теперь доступна вашей роли.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>Тип заявки: ${request.category}</p>
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
@@ -934,20 +982,115 @@ export const sendPaymentPlanned = internalAction({
     }
     const { request } = data;
     const link = `${getBaseUrl()}/requests/${request._id}`;
+    const paymentDeadline = request.paymentDeadline ?? request.neededBy;
+    const plannedDateDiffersFromDeadline = Boolean(
+      request.paymentPlannedAt &&
+        paymentDeadline &&
+        getDateKey(request.paymentPlannedAt) !== getDateKey(paymentDeadline),
+    );
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "payment_planned",
       to: [request.createdByEmail],
-      subject: `Оплата запланирована: ${request.clientName}`,
+      subject: plannedDateDiffersFromDeadline
+        ? `Дата оплаты отличается от дедлайна: ${request.clientName}`
+        : `Оплата запланирована: ${request.clientName}`,
       html: `
         <p>BUH запланировал оплату по заявке.</p>
-        <p>Дата оплаты: ${
-          request.paymentPlannedAt
-            ? new Date(request.paymentPlannedAt).toLocaleDateString("ru-RU")
-            : "не указана"
-        }</p>
+        <p>Дата оплаты: ${formatDate(request.paymentPlannedAt)}</p>
+        ${
+          plannedDateDiffersFromDeadline
+            ? `<p><strong>Дата оплаты отличается от дедлайна автора.</strong></p>
+               <p>Дедлайн оплаты в заявке: ${formatDate(paymentDeadline)}</p>`
+            : ""
+        }
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
+    });
+  },
+});
+
+export const sendPlannedPaymentReminder = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    paymentPlannedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request, roles } = data;
+    if (
+      request.isCanceled ||
+      ["draft", "hod_pending", "pending", "rejected", "paid", "closed"].includes(request.status)
+    ) {
+      return;
+    }
+    const targetDateKey = getDateKey(args.paymentPlannedAt);
+    const plannedPayments = [
+      ...(request.paymentSplits ?? [])
+        .filter((split: any) => split.nextPaymentAt && getDateKey(split.nextPaymentAt) === targetDateKey)
+        .map((split: any) => ({
+          amountWithoutVat: split.remainingAmountWithoutVat,
+          amountWithVat: undefined,
+          vatRate: split.vatRate ?? request.vatRate,
+        })),
+      ...(request.plannedPaymentSplits ?? []).filter(
+        (split: any) => getDateKey(split.plannedAt) === targetDateKey,
+      ),
+      ...(getDateKey(request.paymentPlannedAt) === targetDateKey
+        ? [
+            {
+              amountWithoutVat: request.plannedPaymentAmount,
+              amountWithVat: request.plannedPaymentAmountWithVat,
+              vatRate: request.vatRate,
+            },
+          ]
+        : []),
+    ].filter((item: any) => item.amountWithoutVat !== undefined || item.amountWithVat !== undefined);
+    if (!plannedPayments.length) {
+      return;
+    }
+    const recipients = dedupeEmails(
+      roles
+        .filter((role) => role.active && role.roles.includes("BUH Payment"))
+        .map((role) => role.email),
+      [],
+    );
+    if (!recipients.length) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const amountLines = plannedPayments
+      .map((payment: any) =>
+        `<li>${formatAmountPair({
+          amountWithoutVat: payment.amountWithoutVat,
+          amountWithVat: payment.amountWithVat,
+          currency: request.currency,
+          vatRate: payment.vatRate ?? request.vatRate,
+        })}</li>`,
+      )
+      .join("");
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "planned_payment_reminder",
+      to: recipients,
+      subject: `Сегодня нужно оплатить: ${request.requestCode ?? request.clientName}`,
+      html: `
+        <p>На сегодня запланирована оплата по заявке.</p>
+        <p>Дата оплаты: ${formatDate(args.paymentPlannedAt)}</p>
+        <p>Сумма:</p>
+        <ul>${amountLines}</ul>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+    await ctx.runMutation(internal.requests.markReminderSent, {
+      requestId: args.requestId,
+      kind: "payment",
+      expectedAt: args.paymentPlannedAt,
     });
   },
 });
@@ -1274,7 +1417,7 @@ export const sendHodValidationRequest = internalAction({
         .map(
           (item: any) => `
             <li>
-              ${normalizeContestSpecialistSource(item.sourceType) === "contractor" ? "Подрядчик, ГПХ, ИП, СЗ" : "Штатный специалист"}: ${item.name || "Не указан"}<br />
+              ${normalizeContestSpecialistSource(item.sourceType) === "contractor" ? "Подрядчик/поставщик" : "Штатный специалист"}: ${item.name || "Не указан"}<br />
               Цех: ${item.department || "Не указан"}<br />
               ${(item.contractorTypes ?? []).length ? `Тип подрядчика: ${(item.contractorTypes ?? []).join(", ")}<br />` : ""}
               Часы: ${item.hours ?? "Не указаны"}<br />

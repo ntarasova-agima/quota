@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { HoverHint } from "@/components/ui/hover-hint";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import ContestParticipantsEditor, {
@@ -115,7 +116,6 @@ export default function NewRequestPage() {
   const [currency, setCurrency] = useState("RUB");
   const [fundingSource, setFundingSource] = useState("Квоты AGIMA");
   const [justification, setJustification] = useState("");
-  const [details, setDetails] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
   const [counterparty, setCounterparty] = useState("");
@@ -211,6 +211,7 @@ export default function NewRequestPage() {
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
   const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(category), [category]);
   const requestSupportsSpecialists = useMemo(() => supportsRequestSpecialists(category), [category]);
+  const isWelcomeBonus = category === "Welcome-бонус";
   const selectedDepartment = requestArea;
   const categoryOptions = useMemo(
     () => getCategoriesForDepartment(selectedDepartment),
@@ -222,12 +223,12 @@ export default function NewRequestPage() {
     () => (paidBy && !isPaidByDateAllowed(paidBy) ? "AGIMA тогда еще не было" : null),
     [paidBy],
   );
-  const showPaymentMethod = category !== "Welcome-бонус";
+  const showPaymentMethod = !isWelcomeBonus;
   const isPaymentMethodRequired =
-    category !== "Welcome-бонус" && category !== "Конкурсное задание";
+    !isWelcomeBonus && category !== "Конкурсное задание";
   const showCounterparty =
     category !== "Конкурсное задание" &&
-    category !== "Welcome-бонус" &&
+    !isWelcomeBonus &&
     !isServiceCategory;
   const financeLinksRequired = fundingSource === "Отгрузки проекта";
 
@@ -417,6 +418,7 @@ export default function NewRequestPage() {
     ],
   );
   const titleInvalid = showValidationErrors && !title.trim();
+  const categoryInvalid = showValidationErrors && !category;
   const departmentInvalid = showValidationErrors && !selectedDepartment;
   const clientNameInvalid = showValidationErrors && !clientName.trim();
   const amountInvalid =
@@ -430,7 +432,7 @@ export default function NewRequestPage() {
     showValidationErrors && isPaymentMethodRequired && !paymentMethod;
   const justificationInvalid = showValidationErrors && !justification.trim();
   const investmentReturnInvalid =
-    showValidationErrors && category === "Welcome-бонус" && !investmentReturn.trim();
+    showValidationErrors && isWelcomeBonus && !investmentReturn.trim();
   const financeLinksInvalid = showValidationErrors && financeLinksRequired && financeLinksList.length === 0;
   const incomingAmountsInvalid =
     showValidationErrors &&
@@ -454,8 +456,8 @@ export default function NewRequestPage() {
       resolvedPrepaymentAmountsPreview.amountWithVat <= 0 ||
       !prepaymentDate);
   const approvalDeadlineInvalid = showValidationErrors && !approvalDeadline;
-  const neededByInvalid = showValidationErrors && !neededBy;
-  const paymentDeadlineInvalid = showValidationErrors && !paymentDeadline;
+  const neededByInvalid = showValidationErrors && !isWelcomeBonus && !neededBy;
+  const paymentDeadlineInvalid = showValidationErrors && !isWelcomeBonus && !paymentDeadline;
   const hodDepartmentsInvalid =
     showValidationErrors &&
     requiredRoles.includes("HOD") &&
@@ -463,6 +465,7 @@ export default function NewRequestPage() {
     effectiveRequiredHodDepartments.length === 0;
   const hasBlockingValidationErrors =
     !title.trim() ||
+    !category ||
     !selectedDepartment ||
     !clientName.trim() ||
     !resolvedAmountsPreview.amountWithoutVat ||
@@ -472,7 +475,7 @@ export default function NewRequestPage() {
     (showCounterparty && !counterparty.trim()) ||
     (isPaymentMethodRequired && !paymentMethod) ||
     !justification.trim() ||
-    (category === "Welcome-бонус" && !investmentReturn.trim()) ||
+    (isWelcomeBonus && !investmentReturn.trim()) ||
     (financeLinksRequired && financeLinksList.length === 0) ||
     (showTransitFields &&
       (!resolvedIncomingAmountsPreview.amountWithoutVat ||
@@ -489,8 +492,8 @@ export default function NewRequestPage() {
       isHodSelectableCategory(category) &&
       effectiveRequiredHodDepartments.length === 0) ||
     !approvalDeadline ||
-    !neededBy ||
-    !paymentDeadline ||
+    (!isWelcomeBonus && !neededBy) ||
+    (!isWelcomeBonus && !paymentDeadline) ||
     Boolean(fundingError) ||
     Boolean(paidByError);
 
@@ -694,7 +697,7 @@ export default function NewRequestPage() {
           throw new Error("Дедлайн согласования должен быть не раньше завтрашнего дня");
         }
       }
-      if (category === "Welcome-бонус" && !investmentReturn.trim()) {
+      if (isWelcomeBonus && !investmentReturn.trim()) {
         throw new Error("Укажите, как будем возвращать инвестиции");
       }
       const resolvedAmounts = resolveVatAmounts({
@@ -726,17 +729,16 @@ export default function NewRequestPage() {
         currency,
         fundingSource,
         justification,
-        details: details.trim() || undefined,
         investmentReturn: investmentReturn.trim() || undefined,
         clientName,
         counterparty:
           category === "Конкурсное задание" ||
-          category === "Welcome-бонус" ||
+          isWelcomeBonus ||
           isServiceCategory
             ? ""
             : counterparty,
         paymentMethod:
-          category === "Welcome-бонус"
+          isWelcomeBonus
             ? undefined
             : paymentMethod || undefined,
         contractLink: contractLink.trim() || undefined,
@@ -783,8 +785,8 @@ export default function NewRequestPage() {
             ? shipmentDate.slice(0, 7)
             : undefined,
         approvalDeadline: approvalDeadline ? new Date(approvalDeadline).getTime() : undefined,
-        neededBy: neededBy ? new Date(neededBy).getTime() : undefined,
-        paymentDeadline: paymentDeadline ? new Date(paymentDeadline).getTime() : undefined,
+        neededBy: !isWelcomeBonus && neededBy ? new Date(neededBy).getTime() : undefined,
+        paymentDeadline: !isWelcomeBonus && paymentDeadline ? new Date(paymentDeadline).getTime() : undefined,
         paidBy:
           showTransitFields && paidBy
             ? new Date(`${paidBy}T00:00:00`).getTime()
@@ -837,7 +839,10 @@ export default function NewRequestPage() {
                   <div className="space-y-2">
                     <FieldLabel required className={headerFieldLabelClass}>Тип заявки</FieldLabel>
                     <Select value={category} onValueChange={handleCategoryChange}>
-                      <SelectTrigger className={wrappedSelectTriggerClass}>
+                      <SelectTrigger
+                        className={wrappedSelectTriggerClass}
+                        aria-invalid={categoryInvalid ? true : undefined}
+                      >
                         <SelectValue placeholder="Выберите тип заявки" />
                       </SelectTrigger>
                       <SelectContent>
@@ -905,7 +910,7 @@ export default function NewRequestPage() {
               {requestSupportsSpecialists ? (
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
-                    Добавьте штатных специалистов и подрядчиков, если затрата связана с ними.
+                    Добавьте штатных специалистов и подрядчиков/поставщиков, если затрата связана с ними.
                     Общая сумма соберется из прямых затрат и налогов автоматически.
                   </p>
                   <ContestParticipantsEditor
@@ -916,9 +921,10 @@ export default function NewRequestPage() {
                     setRows={setInternalSpecialists}
                   />
                   <ContestParticipantsEditor
-                    addLabel="+ Добавить подрядчика"
-                    emptyNamePlaceholder="Подрядчик"
-                    label="Подрядчики, ГПХ, ИП, СЗ"
+                    addLabel="+ Добавить подрядчика/поставщика"
+                    emptyNamePlaceholder="Подрядчик или поставщик"
+                    label="Подрядчики/поставщики"
+                    description="Если добавлены подрядчики или поставщики, сумма заявки считается из их сумм."
                     rows={contractors}
                     setRows={setContractors}
                     showContractorTypes
@@ -1202,27 +1208,25 @@ export default function NewRequestPage() {
               </div>
 
               <div className="space-y-2">
-                <FieldLabel htmlFor="justification" required>
-                  Обоснование
-                </FieldLabel>
+                <div className="flex items-center gap-2">
+                  <FieldLabel htmlFor="justification" required>
+                    Обоснование
+                  </FieldLabel>
+                  <HoverHint label="Можно добавить сюда любые детали по заявке: ссылки, описание предмета закупки и важный контекст.">
+                    <button
+                      type="button"
+                      className="size-5 rounded-full border border-border text-xs text-muted-foreground"
+                      aria-label="Подсказка по обоснованию"
+                    >
+                      ?
+                    </button>
+                  </HoverHint>
+                </div>
                 <Textarea
                   id="justification"
                   value={justification}
                   onChange={(event) => setJustification(event.target.value)}
                   aria-invalid={justificationInvalid ? true : undefined}
-                  rows={4}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <FieldLabel htmlFor="details">Детали заявки</FieldLabel>
-                <p className="text-xs text-muted-foreground">
-                  Важные ссылки, описание предмета закупки
-                </p>
-                <Textarea
-                  id="details"
-                  value={details}
-                  onChange={(event) => setDetails(event.target.value)}
                   rows={4}
                 />
               </div>
@@ -1245,7 +1249,7 @@ export default function NewRequestPage() {
               {fundingSource === "Отгрузки проекта" ? (
                 <div className="space-y-2">
                   <FieldLabel htmlFor="financeLinks" required={financeLinksRequired}>
-                    ID и название отгрузки в финплане (по одной в строке)
+                    ID отгрузки в Финплане (по одной в строке)
                   </FieldLabel>
                   <Textarea
                     id="financeLinks"
@@ -1256,19 +1260,6 @@ export default function NewRequestPage() {
                   />
                 </div>
               ) : null}
-
-              <div className="grid gap-4 rounded-lg border border-border p-4 sm:grid-cols-[auto_minmax(0,1fr)]">
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <Checkbox checked={finplanEntered} onCheckedChange={(checked) => setFinplanEntered(checked === true)} />
-                  Занесено в финплан
-                </label>
-                <Textarea
-                  value={finplanEntryIds}
-                  onChange={(event) => setFinplanEntryIds(event.target.value)}
-                  placeholder="Ссылки на строки финплана или их ID, по одной в строке"
-                  rows={2}
-                />
-              </div>
 
               {showTransitFields ? (
                 <div className="space-y-4">
@@ -1339,7 +1330,7 @@ export default function NewRequestPage() {
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                      <FieldLabel htmlFor="shipmentDate">Дата отгрузки</FieldLabel>
+                      <FieldLabel htmlFor="shipmentDate">Дата отгрузки по проекту</FieldLabel>
                       <Input
                         id="shipmentDate"
                         type="date"
@@ -1565,7 +1556,7 @@ export default function NewRequestPage() {
                 ) : null}
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className={`grid gap-4 ${isWelcomeBonus ? "sm:grid-cols-1" : "sm:grid-cols-3"}`}>
                 <div className="space-y-2">
                   <FieldLabel htmlFor="approvalDeadline" required>
                     Дедлайн согласования
@@ -1579,48 +1570,68 @@ export default function NewRequestPage() {
                     min={minApprovalDateValue}
                   />
                 </div>
-                <div className="space-y-2">
-                  <FieldLabel htmlFor="neededBy" required>
-                    Ожидание затраты
-                  </FieldLabel>
-                  <Input
-                    id="neededBy"
-                    type="date"
-                    value={neededBy}
-                    onChange={(event) => setNeededBy(event.target.value)}
-                    aria-invalid={neededByInvalid ? true : undefined}
-                    min={minNeededByDateValue}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <FieldLabel htmlFor="paymentDeadline" required>
-                    Дедлайн оплаты
-                  </FieldLabel>
-                  <Input
-                    id="paymentDeadline"
-                    type="date"
-                    value={paymentDeadline}
-                    onChange={(event) => setPaymentDeadline(event.target.value)}
-                    aria-invalid={paymentDeadlineInvalid ? true : undefined}
-                    min={minNeededByDateValue}
-                  />
-                </div>
+                {!isWelcomeBonus ? (
+                  <>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="neededBy" required>
+                        Дата отгрузки
+                      </FieldLabel>
+                      <Input
+                        id="neededBy"
+                        type="date"
+                        value={neededBy}
+                        onChange={(event) => setNeededBy(event.target.value)}
+                        aria-invalid={neededByInvalid ? true : undefined}
+                        min={minNeededByDateValue}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel htmlFor="paymentDeadline" required>
+                        Дедлайн оплаты
+                      </FieldLabel>
+                      <Input
+                        id="paymentDeadline"
+                        type="date"
+                        value={paymentDeadline}
+                        onChange={(event) => setPaymentDeadline(event.target.value)}
+                        aria-invalid={paymentDeadlineInvalid ? true : undefined}
+                        min={minNeededByDateValue}
+                      />
+                    </div>
+                  </>
+                ) : null}
               </div>
 
               <div className="space-y-3">
                 <Label>Обязательные согласующие</Label>
                 <div className="grid gap-3 sm:grid-cols-4">
-                  {displayedRoleOptions.map((role) => (
+                  {displayedRoleOptions.filter((role) => !enforcedRoles.has(role)).map((role) => (
                     <label key={role} className="flex items-center gap-2 text-sm">
                       <Checkbox
                         checked={requiredRoles.includes(role)}
                         onCheckedChange={() => toggleRole(role)}
-                        disabled={enforcedRoles.has(role)}
                       />
                       <span>{getRoleLabel(role)}</span>
                     </label>
                   ))}
                 </div>
+                {displayedRoleOptions.some((role) => enforcedRoles.has(role)) ? (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 text-sm">
+                    <div className="font-medium">Автоматически добавятся</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {displayedRoleOptions
+                        .filter((role) => enforcedRoles.has(role))
+                        .map((role) => (
+                          <span
+                            key={role}
+                            className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-emerald-800"
+                          >
+                            {getRoleLabel(role)}
+                          </span>
+                        ))}
+                    </div>
+                  </div>
+                ) : null}
                 {requiredRoles.includes("HOD") && isHodSelectableCategory(category) ? (
                   <div className="space-y-2 rounded-lg border border-border p-3">
                     <Label>Какой руководитель цеха согласует заявку</Label>

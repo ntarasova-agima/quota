@@ -161,6 +161,26 @@ function startOfDate(timestamp: number) {
   return date.getTime();
 }
 
+function getMoscowDateParts(timestamp: number) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+  };
+}
+
+function getMoscowTimeOnDate(timestamp: number, hour: number) {
+  const { year, month, day } = getMoscowDateParts(timestamp);
+  return Date.UTC(year, month - 1, day, hour - 3, 0, 0, 0);
+}
+
 function isBeforeDate(left?: number, right?: number) {
   if (left === undefined || right === undefined) {
     return false;
@@ -935,23 +955,23 @@ const requestFieldLabels: Record<string, string> = {
   prepaymentAmountWithVat: "Предоплата с НДС",
   prepaymentDate: "Дата предоплаты",
   justification: "Обоснование",
-  details: "Детали заявки",
+  details: "Обоснование",
   investmentReturn: "Как будем возвращать инвестиции",
   clientName: "Клиент / получатель сервиса",
   relatedRequests: "Связанные заявки",
   links: "Ссылки на материалы",
-  financePlanLinks: "ID и название отгрузки в финплане",
+  financePlanLinks: "ID отгрузки в Финплане",
   finplanEntered: "Занесено в финплан",
-  finplanEntryIds: "Строки финплана",
+  finplanEntryIds: "ID затраты в Финплане",
   incomingAmount: "Сумма отгрузки без НДС",
   incomingAmountWithVat: "Сумма отгрузки с НДС",
   incomingRatio: "Коэффициент транзита",
-  shipmentDate: "Дата отгрузки",
-  shipmentMonth: "Дата отгрузки",
+  shipmentDate: "Дата отгрузки по проекту",
+  shipmentMonth: "Дата отгрузки по проекту",
   requiredHodDepartments: "Руководители цехов",
   specialists: "Специалисты",
   approvalDeadline: "Дедлайн согласования",
-  neededBy: "Ожидание затраты",
+  neededBy: "Дата отгрузки",
   paymentDeadline: "Дедлайн оплаты",
   paidBy: "Когда платят нам",
   requiredRoles: "Обязательные согласующие",
@@ -994,7 +1014,7 @@ function formatValueForHistory(field: string, value: unknown) {
           const specialist = item as any;
           const parts = [
             specialist.sourceType === "contractor"
-              ? "Подрядчик, ГПХ, ИП, СЗ"
+              ? "Подрядчик/поставщик"
               : "Штатный специалист",
             specialist.name,
             specialist.contractorTypes?.length ? specialist.contractorTypes.join(", ") : undefined,
@@ -1228,7 +1248,12 @@ function getApprovalStatusFromEntries(approvals: any[]) {
 }
 
 function validateRequestPayload(args: any) {
-  const normalizedCategory = normalizeRequestCategory(args.category);
+  const rawCategory = typeof args.category === "string" ? args.category.trim() : "";
+  if (!rawCategory) {
+    throw new Error("Выберите тип заявки");
+  }
+  const normalizedCategory = normalizeRequestCategory(rawCategory);
+  const isWelcomeBonus = normalizedCategory === "Welcome-бонус";
   const normalizedDepartment = normalizeHodDepartment(args.department);
   const requestArea = getRequestAreaForDepartment(normalizedDepartment);
   const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
@@ -1245,7 +1270,7 @@ function validateRequestPayload(args: any) {
   });
   const requestWithSpecialists =
     supportsRequestSpecialists(args.category) && hasContestSpecialists(normalizedSpecialists);
-  const allowedPaymentMethods = getPaymentMethodOptions(args.category);
+  const allowedPaymentMethods = getPaymentMethodOptions(rawCategory);
   validateOptionalVatRate(args.vatRate);
   validateOptionalMoney(args.amount, "Сумма без НДС");
   validateOptionalMoney(args.amountWithVat, "Сумма с НДС");
@@ -1325,7 +1350,7 @@ function validateRequestPayload(args: any) {
     throw new Error("Так не бывает");
   }
   if (
-    args.category !== "Welcome-бонус" &&
+    !isWelcomeBonus &&
     args.category !== "Конкурсное задание" &&
     !args.paymentMethod
   ) {
@@ -1343,10 +1368,10 @@ function validateRequestPayload(args: any) {
   if (!args.approvalDeadline) {
     throw new Error("Укажите дедлайн согласования");
   }
-  if (!args.neededBy) {
-    throw new Error("Укажите ожидание затраты");
+  if (!isWelcomeBonus && !args.neededBy) {
+    throw new Error("Укажите дату отгрузки");
   }
-  if (!args.paymentDeadline) {
+  if (!isWelcomeBonus && !args.paymentDeadline) {
     throw new Error("Укажите дедлайн оплаты");
   }
   if (!isFundingSourceAllowedForCategory(normalizedCategory, normalizedFundingSource)) {
@@ -1398,7 +1423,7 @@ function validateRequestPayload(args: any) {
     normalizedFundingSource === PROJECT_REVENUE_FUNDING_SOURCE &&
     (!args.financePlanLinks || args.financePlanLinks.length === 0)
   ) {
-    throw new Error("Финплан обязателен для отгрузок проекта");
+    throw new Error("ID отгрузки в Финплане обязателен для отгрузок проекта");
   }
   if (
     normalizedFundingSource === PROJECT_REVENUE_FUNDING_SOURCE &&
@@ -1428,7 +1453,7 @@ function validateRequestPayload(args: any) {
   ) {
     throw new Error("Для транзитов обязателен BUH Transit");
   }
-  if (args.category === "Welcome-бонус" && (!args.investmentReturn || !args.investmentReturn.trim())) {
+  if (isWelcomeBonus && (!args.investmentReturn || !args.investmentReturn.trim())) {
     throw new Error("Укажите, как будем возвращать инвестиции");
   }
   if (usesServiceRecipientLabel(args.category) && (!args.clientName || !args.clientName.trim())) {
@@ -1562,6 +1587,20 @@ async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymen
       requestId,
       paymentDeadline,
       reminderKind: "overdue",
+    },
+  );
+}
+
+async function schedulePlannedPaymentReminder(ctx: any, requestId: any, paymentPlannedAt?: number) {
+  if (!paymentPlannedAt) {
+    return;
+  }
+  await ctx.scheduler.runAfter(
+    Math.max(0, getMoscowTimeOnDate(paymentPlannedAt, 9) - Date.now()),
+    internal.emails.sendPlannedPaymentReminder,
+    {
+      requestId,
+      paymentPlannedAt,
     },
   );
 }
@@ -2367,8 +2406,9 @@ export const editRequest = mutation({
       ...args,
       existingContractAttachmentCount: request.contractAttachmentCount ?? 0,
     });
-    if (!isExpenseExpectationDateAllowed(args.neededBy, Date.now())) {
-      throw new Error("Ожидание затраты можно указать не раньше прошлого месяца");
+    const normalizedCategory = normalizeRequestCategory(args.category);
+    if (normalizedCategory !== "Welcome-бонус" && !isExpenseExpectationDateAllowed(args.neededBy, Date.now())) {
+      throw new Error("Дата отгрузки может быть не раньше прошлого месяца");
     }
     if (args.prepaymentRequired && isBeforeDate(args.prepaymentDate, request.createdAt)) {
       throw new Error("Дата предоплаты не может быть раньше даты создания заявки");
@@ -2378,7 +2418,6 @@ export const editRequest = mutation({
     const actorName = roleRecord?.fullName ?? identity?.name ?? undefined;
     const creatorRoles = roleRecord?.roles ?? [];
     const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
-    const normalizedCategory = normalizeRequestCategory(args.category);
     const normalizedDepartment = normalizeHodDepartment(args.department);
     const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
@@ -2768,13 +2807,13 @@ export const createRequest = mutation({
       department: normalizeHodDepartment(args.department) ?? roleRecord?.department ?? ACCOUNTING_REQUEST_AREA,
     };
     validateRequestPayload(payloadArgs);
-    if (!isExpenseExpectationDateAllowed(payloadArgs.neededBy, now)) {
-      throw new Error("Ожидание затраты можно указать не раньше прошлого месяца");
+    const normalizedCategory = normalizeRequestCategory(payloadArgs.category);
+    if (normalizedCategory !== "Welcome-бонус" && !isExpenseExpectationDateAllowed(payloadArgs.neededBy, now)) {
+      throw new Error("Дата отгрузки может быть не раньше прошлого месяца");
     }
     if (payloadArgs.prepaymentRequired && isBeforeDate(payloadArgs.prepaymentDate, now)) {
       throw new Error("Дата предоплаты не может быть раньше даты создания заявки");
     }
-    const normalizedCategory = normalizeRequestCategory(payloadArgs.category);
     const normalizedDepartment = normalizeHodDepartment(payloadArgs.department);
     const normalizedFundingSource = normalizeFundingSource(payloadArgs.fundingSource);
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
@@ -2943,6 +2982,47 @@ export const createRequest = mutation({
     }
 
     return requestId;
+  },
+});
+
+export const sendSpecialRoleBackfillNotifications = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    if (!hasAnyRole(roleRecord, ["ADMIN", "BUH", "CFD"])) {
+      throw new Error("Not authorized");
+    }
+
+    const requests = await ctx.db.query("requests").collect();
+    let scheduled = 0;
+    for (const request of requests) {
+      if (request.isCanceled || ["draft", "rejected", "closed"].includes(request.status)) {
+        continue;
+      }
+      const targetRoles = new Set<string>();
+      if (requestHasInsideSpecialists(request)) {
+        targetRoles.add("BUH Inside");
+      }
+      if (requestHasOutsourceSpecialists(request)) {
+        targetRoles.add("BUH Outsource");
+      }
+      if (normalizeRequestCategory(request.category) === CLIENT_SERVICES_TRANSIT_CATEGORY) {
+        targetRoles.add("BUH Transit");
+      }
+      if (targetRoles.size === 0) {
+        continue;
+      }
+      scheduled += 1;
+      await ctx.scheduler.runAfter(0, internal.emails.sendSpecialRoleBackfillNotification, {
+        requestId: request._id,
+        targetRoles: Array.from(targetRoles),
+      });
+    }
+    return { scheduled };
   },
 });
 
@@ -3788,6 +3868,7 @@ export const updatePaymentStatus = mutation({
         requestId: request._id,
       });
       await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
+      await schedulePlannedPaymentReminder(ctx, request._id, args.paymentPlannedAt);
       if (hasPaymentAmountDifference(previousTargetAmounts, targetAmounts)) {
         await ctx.scheduler.runAfter(0, internal.emails.sendPaymentAmountChanged, {
           requestId: request._id,
@@ -3919,6 +4000,7 @@ export const updatePaymentStatus = mutation({
       });
       if (args.paymentPlannedAt) {
         await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
+        await schedulePlannedPaymentReminder(ctx, request._id, args.paymentPlannedAt);
       }
       return { status: "partially_paid" };
     }
