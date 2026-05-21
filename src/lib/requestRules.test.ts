@@ -28,6 +28,7 @@ import {
   normalizeFundingSource,
   normalizeRequestCategory,
   shouldSkipQuotaByTag,
+  supportsRequestSpecialists,
   usesServiceRecipientLabel,
 } from "./requestRules";
 
@@ -98,6 +99,12 @@ describe("requestRules", () => {
     expect(usesServiceRecipientLabel(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(false);
     expect(isAiToolsRequestCategory(AI_TOOLS_REQUEST_CATEGORY)).toBe(true);
     expect(isAiToolsRequestCategory(PURCHASE_CATEGORY)).toBe(false);
+  });
+
+  it("shows specialist blocks only for contest requests", () => {
+    expect(supportsRequestSpecialists("Конкурсное задание")).toBe(true);
+    expect(supportsRequestSpecialists(PURCHASE_CATEGORY)).toBe(false);
+    expect(supportsRequestSpecialists(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(false);
   });
 
   it("skips quota usage for the Transit tag", () => {

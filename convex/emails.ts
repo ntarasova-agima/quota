@@ -1417,7 +1417,8 @@ export const sendHodValidationRequest = internalAction({
         .map(
           (item: any) => `
             <li>
-              ${normalizeContestSpecialistSource(item.sourceType) === "contractor" ? "Подрядчик/поставщик" : "Штатный специалист"}: ${item.name || "Не указан"}<br />
+              ${normalizeContestSpecialistSource(item.sourceType) === "contractor" ? "Специалист подрядчика" : "Штатный специалист"}: ${item.name || "Не указан"}<br />
+              ${item.contractorLegalEntity ? `ЮЛ подрядчика/поставщика: ${item.contractorLegalEntity}<br />` : ""}
               Цех: ${item.department || "Не указан"}<br />
               ${(item.contractorTypes ?? []).length ? `Тип подрядчика: ${(item.contractorTypes ?? []).join(", ")}<br />` : ""}
               Часы: ${item.hours ?? "Не указаны"}<br />

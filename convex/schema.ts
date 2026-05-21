@@ -131,6 +131,7 @@ const schema = defineSchema({
         v.object({
           id: v.string(),
           name: v.string(),
+          contractorLegalEntity: v.optional(v.string()),
           sourceType: v.optional(v.string()),
           contractorTypes: v.optional(v.array(v.string())),
           department: v.optional(v.string()),

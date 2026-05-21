@@ -207,6 +207,7 @@ function normalizeSpecialists(
   specialists: Array<{
     id: string;
     name: string;
+    contractorLegalEntity?: string;
     sourceType?: string;
     contractorTypes?: string[];
     department?: string;
@@ -225,6 +226,7 @@ function normalizeSpecialists(
     .map((item) => ({
       id: item.id,
       name: item.name?.trim() ?? "",
+      contractorLegalEntity: item.contractorLegalEntity?.trim() || undefined,
       sourceType: normalizeContestSpecialistSource(item.sourceType),
       contractorTypes: Array.from(
         new Set(
@@ -257,6 +259,7 @@ function normalizeSpecialists(
     .filter(
       (item) =>
         item.name ||
+        item.contractorLegalEntity ||
         item.department ||
         item.hours !== undefined ||
         item.directCost !== undefined ||
@@ -276,6 +279,7 @@ function normalizeSpecialists(
 function hasContestSpecialists(
   specialists: Array<{
     name: string;
+    contractorLegalEntity?: string;
     department?: string;
     hours?: number;
     directCost?: number;
@@ -285,6 +289,7 @@ function hasContestSpecialists(
   return specialists.some(
     (item) =>
       item.name ||
+      item.contractorLegalEntity ||
       item.department ||
       item.hours !== undefined ||
       item.directCost !== undefined ||
@@ -874,6 +879,7 @@ async function getNextRequestCode(ctx: { db: any }, category: string, fundingSou
 const specialistValidator = v.object({
   id: v.string(),
   name: v.string(),
+  contractorLegalEntity: v.optional(v.string()),
   sourceType: v.optional(v.string()),
   contractorTypes: v.optional(v.array(v.string())),
   department: v.optional(v.string()),
@@ -943,7 +949,7 @@ const requestFieldLabels: Record<string, string> = {
   vatRate: "НДС",
   currency: "Валюта",
   fundingSource: "Источник финансирования",
-  counterparty: "Кому платим мы",
+  counterparty: "Кому платим мы (ЮЛ подрядчика/поставщика)",
   paymentMethod: "Способ оплаты",
   requestArea: "Тип направления",
   department: "Цех",
@@ -1014,9 +1020,12 @@ function formatValueForHistory(field: string, value: unknown) {
           const specialist = item as any;
           const parts = [
             specialist.sourceType === "contractor"
-              ? "Подрядчик/поставщик"
+              ? "Специалист подрядчика"
               : "Штатный специалист",
             specialist.name,
+            specialist.contractorLegalEntity
+              ? `ЮЛ ${specialist.contractorLegalEntity}`
+              : undefined,
             specialist.contractorTypes?.length ? specialist.contractorTypes.join(", ") : undefined,
             specialist.department,
             specialist.hours !== undefined ? `${specialist.hours} ч` : undefined,
@@ -3031,6 +3040,7 @@ export const updateContestSpecialist = mutation({
     requestId: v.id("requests"),
     specialistId: v.string(),
     name: v.string(),
+    contractorLegalEntity: v.optional(v.string()),
     department: v.optional(v.string()),
     contractorTypes: v.optional(v.array(v.string())),
     hours: v.optional(v.number()),
@@ -3098,6 +3108,7 @@ export const updateContestSpecialist = mutation({
     const nextSpecialist = {
       ...current,
       name: args.name.trim(),
+      contractorLegalEntity: args.contractorLegalEntity?.trim() || undefined,
       department: nextDepartment,
       contractorTypes: Array.from(
         new Set(

@@ -62,6 +62,7 @@ import { HoverHint } from "@/components/ui/hover-hint";
 type SpecialistView = {
   id: string;
   name: string;
+  contractorLegalEntity?: string;
   sourceType?: string;
   contractorTypes?: string[];
   department?: string;
@@ -1194,6 +1195,7 @@ export default function RequestDetailPage() {
       requestId: request._id,
       specialistId,
       name: (overrides.name ?? draft.name ?? "").trim(),
+      contractorLegalEntity: (overrides.contractorLegalEntity ?? draft.contractorLegalEntity)?.trim() || undefined,
       department: overrides.department ?? draft.department,
       contractorTypes: overrides.contractorTypes ?? draft.contractorTypes,
       hours: overrides.hours ?? draft.hours,
@@ -3005,7 +3007,7 @@ export default function RequestDetailPage() {
               request.category !== "Welcome-бонус" &&
               !isServiceCategory ? (
                 <div>
-                  <div className="text-muted-foreground">Кому платим мы</div>
+                  <div className="text-muted-foreground">Кому платим мы (ЮЛ подрядчика/поставщика)</div>
                   <p className="mt-1">{request.counterparty || "Не указан"}</p>
                 </div>
               ) : null}
@@ -3218,7 +3220,7 @@ export default function RequestDetailPage() {
                 <div className="space-y-4">
                   {[
                     { key: "internal", label: "Штатные специалисты", items: contestParticipants.internal },
-                    { key: "contractor", label: "Подрядчики/поставщики", items: contestParticipants.contractor },
+                    { key: "contractor", label: "Специалисты подрядчика", items: contestParticipants.contractor },
                   ].map((section) => (
                     <div key={section.key} className="space-y-3">
                       <div className="text-muted-foreground">{section.label}</div>
@@ -3253,7 +3255,13 @@ export default function RequestDetailPage() {
                               key={item.id}
                               className="space-y-3 rounded-lg border border-border p-3"
                             >
-                              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]">
+                              <div
+                                className={
+                                  section.key === "contractor"
+                                    ? "grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]"
+                                    : "grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]"
+                                }
+                              >
                                 <Input
                                   className="min-w-0"
                                   value={draft.name}
@@ -3266,6 +3274,23 @@ export default function RequestDetailPage() {
                                   disabled={!canEditThis}
                                   placeholder={section.key === "contractor" ? "Подрядчик" : "Специалист"}
                                 />
+                                {section.key === "contractor" ? (
+                                  <Input
+                                    className="min-w-0"
+                                    value={draft.contractorLegalEntity ?? ""}
+                                    onChange={(event) =>
+                                      setSpecialistDrafts((current) => ({
+                                        ...current,
+                                        [item.id]: {
+                                          ...draft,
+                                          contractorLegalEntity: event.target.value,
+                                        },
+                                      }))
+                                    }
+                                    disabled={!canEditThis}
+                                    placeholder="ЮЛ, если есть"
+                                  />
+                                ) : null}
                                 <Select
                                   value={draft.department ?? "none"}
                                   onValueChange={(value) =>

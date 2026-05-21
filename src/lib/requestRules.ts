@@ -40,8 +40,6 @@ export const TRANSIT_REQUEST_CATEGORIES = [
 
 export const SPECIALIST_REQUEST_CATEGORIES = [
   "Конкурсное задание",
-  PURCHASE_CATEGORY,
-  CLIENT_SERVICES_TRANSIT_CATEGORY,
 ] as const;
 
 export const NEW_FUNDING_SOURCES = [

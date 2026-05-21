@@ -13,6 +13,7 @@ import { sanitizeNumericInput } from "@/lib/vat";
 export type ContestParticipantDraft = {
   id: string;
   name: string;
+  contractorLegalEntity: string;
   department: string;
   hours: string;
   directCost: string;
@@ -30,6 +31,7 @@ export function createContestParticipantDraft(): ContestParticipantDraft {
   return {
     id: crypto.randomUUID(),
     name: "",
+    contractorLegalEntity: "",
     department: "",
     hours: "",
     directCost: "",
@@ -70,6 +72,7 @@ export default function ContestParticipantsEditor({
   function rowHasContent(row: ContestParticipantDraft) {
     return Boolean(
       row.name.trim() ||
+        row.contractorLegalEntity.trim() ||
         row.department ||
         row.hours ||
         row.directCost ||
@@ -91,6 +94,8 @@ export default function ContestParticipantsEditor({
     });
   }
 
+  const fieldLabelClass = "text-xs font-medium text-muted-foreground";
+
   return (
     <div className="space-y-3 rounded-lg border border-border p-4">
       <div className="space-y-1">
@@ -102,72 +107,109 @@ export default function ContestParticipantsEditor({
           key={item.id}
           className="space-y-3 rounded-lg border border-border p-3"
         >
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.7fr)]">
-            <Input
-              className="min-w-0"
-              placeholder={emptyNamePlaceholder}
-              value={item.name}
-              onChange={(event) =>
-                updateRow(item.id, (row) => ({ ...row, name: event.target.value }))
-              }
-            />
-            <Select
-              value={item.department || "none"}
-              onValueChange={(value) =>
-                updateRow(item.id, (row) => ({
-                  ...row,
-                  department: value === "none" ? "" : value,
-                }))
-              }
-            >
-              <SelectTrigger className="min-w-0 w-full">
-                <SelectValue placeholder="Цех" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Цех не выбран</SelectItem>
-                {HOD_DEPARTMENTS.map((department) => (
-                  <SelectItem key={department} value={department}>
-                    {department}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Input
-              className="min-w-0"
-              placeholder={showContractorTypes ? "Сумма подрядчику/поставщику" : "Прямые затраты"}
-              inputMode="decimal"
-              value={item.directCost}
-              onChange={(event) =>
-                updateRow(item.id, (row) => ({
-                  ...row,
-                  directCost: sanitizeNumericInput(event.target.value),
-                }))
-              }
-            />
-            <Input
-              className="min-w-0"
-              placeholder="Налоги"
-              inputMode="decimal"
-              value={item.taxAmount}
-              onChange={(event) =>
-                updateRow(item.id, (row) => ({
-                  ...row,
-                  taxAmount: sanitizeNumericInput(event.target.value),
-                }))
-              }
-            />
-            <Input
-              className="min-w-0"
-              placeholder={showContractorTypes ? "Часы, если применимо" : "Часы"}
-              inputMode="decimal"
-              value={item.hours}
-              onChange={(event) =>
-                updateRow(item.id, (row) => ({
-                  ...row,
-                  hours: sanitizeNumericInput(event.target.value),
-                }))
-              }
-            />
+          <div
+            className={
+              showContractorTypes
+                ? "grid gap-3 sm:grid-cols-[minmax(0,1.05fr)_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,0.75fr)_minmax(0,0.7fr)_minmax(0,0.65fr)]"
+                : "grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.7fr)]"
+            }
+          >
+            <div className="min-w-0 space-y-1">
+              <Label className={fieldLabelClass}>{showContractorTypes ? "Специалист" : "Специалист"}</Label>
+              <Input
+                className="min-w-0"
+                placeholder={emptyNamePlaceholder}
+                value={item.name}
+                onChange={(event) =>
+                  updateRow(item.id, (row) => ({ ...row, name: event.target.value }))
+                }
+              />
+            </div>
+            {showContractorTypes ? (
+              <div className="min-w-0 space-y-1">
+                <Label className={fieldLabelClass}>ЮЛ подрядчика/поставщика</Label>
+                <Input
+                  className="min-w-0"
+                  placeholder="Если есть"
+                  value={item.contractorLegalEntity}
+                  onChange={(event) =>
+                    updateRow(item.id, (row) => ({
+                      ...row,
+                      contractorLegalEntity: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+            ) : null}
+            <div className="min-w-0 space-y-1">
+              <Label className={fieldLabelClass}>Цех</Label>
+              <Select
+                value={item.department || "none"}
+                onValueChange={(value) =>
+                  updateRow(item.id, (row) => ({
+                    ...row,
+                    department: value === "none" ? "" : value,
+                  }))
+                }
+              >
+                <SelectTrigger className="min-w-0 w-full">
+                  <SelectValue placeholder="Цех" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Цех не выбран</SelectItem>
+                  {HOD_DEPARTMENTS.map((department) => (
+                    <SelectItem key={department} value={department}>
+                      {department}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-0 space-y-1">
+              <Label className={fieldLabelClass}>Сумма</Label>
+              <Input
+                className="min-w-0"
+                placeholder="Без НДС"
+                inputMode="decimal"
+                value={item.directCost}
+                onChange={(event) =>
+                  updateRow(item.id, (row) => ({
+                    ...row,
+                    directCost: sanitizeNumericInput(event.target.value),
+                  }))
+                }
+              />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <Label className={fieldLabelClass}>Налоги</Label>
+              <Input
+                className="min-w-0"
+                placeholder="Сумма"
+                inputMode="decimal"
+                value={item.taxAmount}
+                onChange={(event) =>
+                  updateRow(item.id, (row) => ({
+                    ...row,
+                    taxAmount: sanitizeNumericInput(event.target.value),
+                  }))
+                }
+              />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <Label className={fieldLabelClass}>Часы</Label>
+              <Input
+                className="min-w-0"
+                placeholder={showContractorTypes ? "Если есть" : "Часы"}
+                inputMode="decimal"
+                value={item.hours}
+                onChange={(event) =>
+                  updateRow(item.id, (row) => ({
+                    ...row,
+                    hours: sanitizeNumericInput(event.target.value),
+                  }))
+                }
+              />
+            </div>
           </div>
           {showContractorTypes ? (
             <div className="space-y-2">

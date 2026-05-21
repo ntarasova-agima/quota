@@ -261,6 +261,7 @@ export default function NewRequestPage() {
       ].map((item) => ({
         id: item.id,
         name: item.name.trim(),
+        contractorLegalEntity: item.contractorLegalEntity.trim() || undefined,
         sourceType: item.sourceType,
         contractorTypes: item.contractorTypes,
         department: item.department || undefined,
@@ -282,6 +283,7 @@ export default function NewRequestPage() {
       specialistsPayload.some(
         (item) =>
           item.name ||
+          item.contractorLegalEntity ||
           item.department ||
           item.hours !== undefined ||
           item.directCost !== undefined ||
@@ -910,7 +912,7 @@ export default function NewRequestPage() {
               {requestSupportsSpecialists ? (
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
-                    Добавьте штатных специалистов и подрядчиков/поставщиков, если затрата связана с ними.
+                    Добавьте штатных специалистов и специалистов подрядчика, если затрата связана с ними.
                     Общая сумма соберется из прямых затрат и налогов автоматически.
                   </p>
                   <ContestParticipantsEditor
@@ -921,10 +923,10 @@ export default function NewRequestPage() {
                     setRows={setInternalSpecialists}
                   />
                   <ContestParticipantsEditor
-                    addLabel="+ Добавить подрядчика/поставщика"
-                    emptyNamePlaceholder="Подрядчик или поставщик"
-                    label="Подрядчики/поставщики"
-                    description="Если добавлены подрядчики или поставщики, сумма заявки считается из их сумм."
+                    addLabel="+ Добавить специалиста подрядчика"
+                    emptyNamePlaceholder="ФИО"
+                    label="Специалисты подрядчика"
+                    description="Если у подрядчика есть юрлицо, укажите его рядом со специалистом. Если это ИП, ГПХ или вы не знаете юрлицо, поле можно оставить пустым."
                     rows={contractors}
                     setRows={setContractors}
                     showContractorTypes
@@ -1066,7 +1068,7 @@ export default function NewRequestPage() {
               {showCounterparty && (
                 <div className="space-y-2">
                   <FieldLabel htmlFor="counterparty" required>
-                    Кому платим мы
+                    Кому платим мы (ЮЛ подрядчика/поставщика)
                   </FieldLabel>
                   <Input
                     id="counterparty"
@@ -1605,33 +1607,17 @@ export default function NewRequestPage() {
               <div className="space-y-3">
                 <Label>Обязательные согласующие</Label>
                 <div className="grid gap-3 sm:grid-cols-4">
-                  {displayedRoleOptions.filter((role) => !enforcedRoles.has(role)).map((role) => (
+                  {displayedRoleOptions.map((role) => (
                     <label key={role} className="flex items-center gap-2 text-sm">
                       <Checkbox
                         checked={requiredRoles.includes(role)}
                         onCheckedChange={() => toggleRole(role)}
+                        disabled={enforcedRoles.has(role)}
                       />
                       <span>{getRoleLabel(role)}</span>
                     </label>
                   ))}
                 </div>
-                {displayedRoleOptions.some((role) => enforcedRoles.has(role)) ? (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 text-sm">
-                    <div className="font-medium">Автоматически добавятся</div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {displayedRoleOptions
-                        .filter((role) => enforcedRoles.has(role))
-                        .map((role) => (
-                          <span
-                            key={role}
-                            className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-emerald-800"
-                          >
-                            {getRoleLabel(role)}
-                          </span>
-                        ))}
-                    </div>
-                  </div>
-                ) : null}
                 {requiredRoles.includes("HOD") && isHodSelectableCategory(category) ? (
                   <div className="space-y-2 rounded-lg border border-border p-3">
                     <Label>Какой руководитель цеха согласует заявку</Label>

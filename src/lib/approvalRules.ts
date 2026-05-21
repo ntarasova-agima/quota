@@ -10,6 +10,7 @@ type SpecialistLike = {
   sourceType?: string;
   contractorTypes?: string[];
   name?: string;
+  contractorLegalEntity?: string;
   department?: string;
   hours?: number | string;
   directCost?: number | string;
@@ -35,6 +36,7 @@ const NBD_REQUIRED_CATEGORIES = [
 function hasSpecialistContent(specialist: SpecialistLike) {
   return Boolean(
     specialist.name?.trim() ||
+      specialist.contractorLegalEntity?.trim() ||
       specialist.department?.trim() ||
       specialist.contractorTypes?.length ||
       specialist.hours !== undefined ||
