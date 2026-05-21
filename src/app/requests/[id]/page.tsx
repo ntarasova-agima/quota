@@ -547,21 +547,22 @@ export default function RequestDetailPage() {
   const requestId = params.id as Id<"requests">;
   const { isAuthenticated } = useConvexAuth();
   const data = useQuery(api.requests.getRequest, isAuthenticated ? { id: requestId } : "skip");
+  const canLoadRequestRelatedData = isAuthenticated && Boolean(data?.request);
   const myRoles = (useQuery(api.roles.myRoles, isAuthenticated ? {} : "skip") ?? []) as string[];
   const myProfile = useQuery(api.roles.myProfile, isAuthenticated ? {} : "skip");
   const activeContacts = useQuery(api.roles.listActiveContacts, isAuthenticated ? {} : "skip");
   const comments = useQuery(
     api.comments.listByRequest,
-    isAuthenticated ? { requestId } : "skip",
+    canLoadRequestRelatedData ? { requestId } : "skip",
   );
   const changeHistory = useQuery(
     api.requests.listChangeHistory,
-    isAuthenticated ? { requestId } : "skip",
+    canLoadRequestRelatedData ? { requestId } : "skip",
   );
-  const timeline = useQuery(api.timeline.listByRequest, isAuthenticated ? { requestId } : "skip");
+  const timeline = useQuery(api.timeline.listByRequest, canLoadRequestRelatedData ? { requestId } : "skip");
   const attachments = useQuery(
     api.attachments.listForRequest,
-    isAuthenticated ? { requestId } : "skip",
+    canLoadRequestRelatedData ? { requestId } : "skip",
   );
   const decide = useMutation(api.approvals.decide);
   const remindApproval = useMutation(api.approvals.remindApproval);
@@ -975,7 +976,7 @@ export default function RequestDetailPage() {
       <RequireAuth>
         <div className="min-h-screen bg-background text-foreground">
           <main className="mx-auto flex min-h-screen w-full max-w-3xl items-center px-6 py-12">
-            <p className="text-sm text-muted-foreground">Заявка не найдена.</p>
+            <p className="text-sm text-muted-foreground">Заявка не найдена или у вас нет доступа.</p>
           </main>
         </div>
       </RequireAuth>

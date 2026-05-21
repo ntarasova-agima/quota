@@ -77,7 +77,6 @@ export default function ApprovalsPage() {
   const myRoles = useQuery(api.roles.myRoles);
   const myProfile = useQuery(api.roles.myProfile);
   const adContacts = useQuery(api.roles.listAdContacts);
-  const cfdTags = useQuery(api.cfdTags.list, {});
   const businessCategories = useQuery(api.businessCategories.list, {});
   const [taskTypeFilter, setTaskTypeFilter] = useState<"all" | "approval" | "payment">("all");
   const [buhQuickFilter, setBuhQuickFilter] = useState<"all" | "today" | "overdue">("all");
@@ -99,6 +98,7 @@ export default function ApprovalsPage() {
   );
   const isFinanceRole = myRoles?.includes("BUH") || isFinanceHead;
   const canFilterByTags = myRoles?.some((role) => ["CFD", "BUH", "COO", "ADMIN"].includes(role)) || isFinanceHead;
+  const cfdTags = useQuery(api.cfdTags.list, canFilterByTags ? {} : "skip");
   const todayStart = useMemo(() => {
     const value = new Date();
     value.setHours(0, 0, 0, 0);

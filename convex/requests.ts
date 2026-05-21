@@ -2032,7 +2032,7 @@ export const getRequest = query({
       request.createdBy !== userId &&
       request.createdByEmail !== email
     ) {
-      throw new Error("Not authorized");
+      return null;
     }
     const approvals = await ctx.db
       .query("approvals")
@@ -2076,10 +2076,12 @@ export const listChangeHistory = query({
       record?.roles?.some((role: string) =>
         REQUEST_WIDE_VIEW_ROLES.includes(role as (typeof REQUEST_WIDE_VIEW_ROLES)[number]),
       ) || hasFinanceApproverRole(record);
+    const hasSpecialBuhAccess = hasSpecialBuhAccessToRequest(record, request);
     const canHodView = hasHodAccessToRequest(record, request);
     const canViewByHistory = await hasHistoricalApprovalAccess(ctx, args.requestId, email);
     if (
       !canViewAll &&
+      !hasSpecialBuhAccess &&
       !canHodView &&
       !canViewByHistory &&
       !hasViewerAccess(request, email) &&
