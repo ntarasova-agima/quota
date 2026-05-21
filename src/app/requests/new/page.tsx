@@ -20,6 +20,7 @@ import ContestParticipantsEditor, {
 } from "@/components/contest-participants-editor";
 import { api } from "@/lib/convex";
 import {
+  AUTO_ONLY_REQUIRED_ROLES,
   CURRENCIES,
   DEFAULT_REQUIRED_ROLES,
   FUNDING_SOURCES,
@@ -38,12 +39,14 @@ import {
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   isAiToolsRequestCategory,
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
+  normalizeRequestCategory,
   supportsRequestSpecialists,
   usesServiceRecipientLabel,
 } from "@/lib/requestRules";
@@ -344,8 +347,17 @@ export default function NewRequestPage() {
   );
 
   const enforcedRoles = useMemo(() => {
-    return new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
-  }, [fundingSource]);
+    const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
+    if (normalizeRequestCategory(category) === CLIENT_SERVICES_TRANSIT_CATEGORY) {
+      roles.add("BUH Transit");
+    }
+    return roles;
+  }, [category, fundingSource]);
+  const displayedRoleOptions = useMemo(() => {
+    const roles = new Set<RoleOption>(ROLE_OPTIONS);
+    enforcedRoles.forEach((role) => roles.add(role));
+    return Array.from(roles);
+  }, [enforcedRoles]);
   const resolvedIncomingAmountsPreview = useMemo(
     () =>
       resolveVatAmounts({
@@ -480,11 +492,14 @@ export default function NewRequestPage() {
     Boolean(paidByError);
 
   useEffect(() => {
-    if (enforcedRoles.size === 0) {
-      return;
-    }
     setRequiredRoles((current) => {
-      const next = new Set(current);
+      const next = new Set(
+        current.filter(
+          (role) =>
+            !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role) ||
+            enforcedRoles.has(role),
+        ),
+      );
       enforcedRoles.forEach((role) => next.add(role));
       return Array.from(next);
     });
@@ -1592,14 +1607,17 @@ export default function NewRequestPage() {
               <div className="space-y-3">
                 <Label>Обязательные согласующие</Label>
                 <div className="grid gap-3 sm:grid-cols-4">
-                  {ROLE_OPTIONS.map((role) => (
+                  {displayedRoleOptions.map((role) => (
                     <label key={role} className="flex items-center gap-2 text-sm">
                       <Checkbox
                         checked={requiredRoles.includes(role)}
                         onCheckedChange={() => toggleRole(role)}
                         disabled={enforcedRoles.has(role)}
                       />
-                      {getRoleLabel(role)}
+                      <span>
+                        {getRoleLabel(role)}
+                        {enforcedRoles.has(role) ? " · обязателен" : ""}
+                      </span>
                     </label>
                   ))}
                 </div>
