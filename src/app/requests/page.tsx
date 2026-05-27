@@ -49,6 +49,27 @@ function getPendingStatusPresentation(isActionableForViewer: boolean) {
       };
 }
 
+function FinplanEnteredBadge({ finplanEntryIds }: { finplanEntryIds?: string[] }) {
+  return (
+    <HoverHint
+      label={
+        finplanEntryIds?.length
+          ? `Строки в финплане: ${finplanEntryIds.join(", ")}`
+          : "BUH отметил, что строки затрат занесены в финплан"
+      }
+      className="w-fit"
+    >
+      <span className="h-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+        Затраты занесены
+      </span>
+    </HoverHint>
+  );
+}
+
+function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryIds?: string[] }) {
+  return Boolean(request.finplanEntered || request.finplanEntryIds?.length);
+}
+
 const statusOptions = [
   { value: "all", label: "Все" },
   { value: "draft", label: "Черновик" },
@@ -61,7 +82,9 @@ const statusOptions = [
   { value: "partially_paid", label: "Частично оплачено" },
   { value: "paid", label: "Оплачено" },
   { value: "closed", label: "Заявка закрыта" },
-];
+] as const;
+
+type RequestStatusValue = Exclude<(typeof statusOptions)[number]["value"], "all">;
 
 function toStartOfDay(value: string) {
   if (!value) {
@@ -150,7 +173,7 @@ export default function RequestsPage() {
   const canShowAllRequests = Boolean(canUseAllRequestsView);
   const isAdmin = useMemo(() => myRoles?.includes("ADMIN") ?? false, [myRoles]);
   const isTagViewer = useMemo(
-    () => myRoles?.some((role) => ["CFD", "NBD", "COO", "BUH", "ADMIN"].includes(role)) || isFinanceHead,
+    () => myRoles?.some((role) => ["CFD", "COO", "BUH", "ADMIN"].includes(role)) || isFinanceHead,
     [isFinanceHead, myRoles],
   );
   const isFinanceRole = useMemo(
@@ -168,7 +191,7 @@ export default function RequestsPage() {
     api.requests.listMyRequests,
     isAuthenticated
         ? {
-            status: myStatusFilter === "all" ? undefined : (myStatusFilter as any),
+            status: myStatusFilter === "all" ? undefined : (myStatusFilter as RequestStatusValue),
             category: myCategoryFilter === "all" ? undefined : myCategoryFilter,
             businessCategory: myBusinessCategoryFilter === "all" ? undefined : myBusinessCategoryFilter,
             fundingSource: myFundingFilter === "all" ? undefined : myFundingFilter,
@@ -186,7 +209,7 @@ export default function RequestsPage() {
     api.requests.listAllRequests,
     isAuthenticated && canUseAllRequestsView
       ? {
-          statuses: statusFilters.length ? (statusFilters as any) : undefined,
+          statuses: statusFilters.length ? (statusFilters as RequestStatusValue[]) : undefined,
           createdByEmail: authorFilter === "all" ? undefined : authorFilter,
           cfdTag:
             tagFilter === "all"
@@ -567,7 +590,7 @@ export default function RequestsPage() {
                                       try {
                                         await updatePaymentStatus({
                                           id: request._id,
-                                          status: "reopen" as any,
+                                          status: "reopen",
                                         });
                                       } catch (err) {
                                         setActionError(
@@ -597,11 +620,16 @@ export default function RequestsPage() {
                             </span>
                           </HoverHint>
                         </div>
-                        <span
-                          className={`h-fit rounded-full border px-3 py-1 text-xs ${statusSummary.className}`}
-                        >
-                          {statusSummary.label}
-                        </span>
+                        <div className="flex flex-col items-start gap-2 md:items-end">
+                          <span
+                            className={`h-fit rounded-full border px-3 py-1 text-xs ${statusSummary.className}`}
+                          >
+                            {statusSummary.label}
+                          </span>
+                          {hasFinplanEntryMark(request) ? (
+                            <FinplanEnteredBadge finplanEntryIds={request.finplanEntryIds} />
+                          ) : null}
+                        </div>
                       </div>
                     );
                   })
@@ -902,23 +930,28 @@ export default function RequestsPage() {
                               {request.createdByEmail}
                             </div>
                           </div>
-                        <div className="text-right font-medium">
-                          <HoverHint label="Сумма заявки">
-                            <span>
-                              {formatAmountPair({
-                                amountWithoutVat: request.amount,
-                                amountWithVat: request.amountWithVat,
-                                currency: request.currency,
-                                vatRate: request.vatRate,
-                              })}
+                          <div className="text-right font-medium">
+                            <HoverHint label="Сумма заявки">
+                              <span>
+                                {formatAmountPair({
+                                  amountWithoutVat: request.amount,
+                                  amountWithVat: request.amountWithVat,
+                                  currency: request.currency,
+                                  vatRate: request.vatRate,
+                                })}
+                              </span>
+                            </HoverHint>
+                          </div>
+                          <div className="flex flex-col items-start gap-2 md:items-end">
+                            <span
+                              className={`h-fit rounded-full border px-3 py-1 text-xs ${statusSummary.className}`}
+                            >
+                              {statusSummary.label}
                             </span>
-                          </HoverHint>
-                        </div>
-                          <span
-                            className={`h-fit rounded-full border px-3 py-1 text-xs ${statusSummary.className}`}
-                          >
-                            {statusSummary.label}
-                          </span>
+                            {hasFinplanEntryMark(request) ? (
+                              <FinplanEnteredBadge finplanEntryIds={request.finplanEntryIds} />
+                            ) : null}
+                          </div>
                         </Link>
                       );
                     })

@@ -341,6 +341,16 @@ const schema = defineSchema({
   })
     .index("by_authorEmail", ["authorEmail"])
     .index("by_status", ["status"]),
+  improvementAttachments: defineTable({
+    suggestionId: v.id("improvementSuggestions"),
+    storageId: v.id("_storage"),
+    fileName: v.string(),
+    fileSize: v.optional(v.number()),
+    contentType: v.optional(v.string()),
+    uploadedByEmail: v.string(),
+    uploadedByName: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_suggestion", ["suggestionId"]),
   administrationQuotas: defineTable({
     monthKey: v.string(),
     departmentKey: v.string(),

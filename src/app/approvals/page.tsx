@@ -34,6 +34,10 @@ function getRequestDisplayTitle(request: {
   return request.title?.trim() || `${request.clientName} :: ${normalizeRequestCategory(request.category)}`;
 }
 
+function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryIds?: string[] }) {
+  return Boolean(request.finplanEntered || request.finplanEntryIds?.length);
+}
+
 const statusOptions = [
   { value: "all", label: "Все" },
   { value: "draft", label: "Черновик" },
@@ -562,21 +566,37 @@ export default function ApprovalsPage() {
                           </span>
                         </HoverHint>
                       </div>
-                      <span
-                        className={`h-fit rounded-full border px-3 py-1 text-xs font-medium ${
-                          kind === "payment"
-                            ? buhStatusSummary?.className
+                      <div className="flex flex-col items-start gap-2 md:items-end">
+                        <span
+                          className={`h-fit rounded-full border px-3 py-1 text-xs font-medium ${
+                            kind === "payment"
+                              ? buhStatusSummary?.className
+                              : kind === "hod"
+                                ? "border-violet-200 bg-violet-50 text-violet-700"
+                              : "border-amber-200 bg-amber-100 text-amber-800"
+                          }`}
+                        >
+                          {kind === "payment"
+                            ? buhStatusSummary?.label
                             : kind === "hod"
-                              ? "border-violet-200 bg-violet-50 text-violet-700"
-                            : "border-amber-200 bg-amber-100 text-amber-800"
-                        }`}
-                      >
-                        {kind === "payment"
-                          ? buhStatusSummary?.label
-                          : kind === "hod"
-                            ? "Провалидируйте затраты"
-                            : "Ждет вашего решения"}
-                      </span>
+                              ? "Провалидируйте затраты"
+                              : "Ждет вашего решения"}
+                        </span>
+                        {hasFinplanEntryMark(request) ? (
+                          <HoverHint
+                            label={
+                              request.finplanEntryIds?.length
+                                ? `Строки в финплане: ${request.finplanEntryIds.join(", ")}`
+                                : "BUH отметил, что строки затрат занесены в финплан"
+                            }
+                            className="w-fit"
+                          >
+                            <span className="h-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+                              Затраты занесены
+                            </span>
+                          </HoverHint>
+                        ) : null}
+                      </div>
                         </Link>
                       );
                     })()

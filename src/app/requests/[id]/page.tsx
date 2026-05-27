@@ -2123,15 +2123,18 @@ export default function RequestDetailPage() {
                         setOperationalFieldsSavedAt(null);
                         setSavingOperationalFields(true);
                         try {
+                          const finplanEntryIds = canManageOperationalFields
+                            ? finplanEntryIdsRaw
+                                .split("\n")
+                                .map((item) => item.trim())
+                                .filter(Boolean)
+                            : undefined;
                           await updateOperationalFields({
                             id: request._id,
-                            finplanEntered: canManageOperationalFields ? finplanEntered : undefined,
-                            finplanEntryIds: canManageOperationalFields
-                              ? finplanEntryIdsRaw
-                                  .split("\n")
-                                  .map((item) => item.trim())
-                                  .filter(Boolean)
+                            finplanEntered: canManageOperationalFields
+                              ? finplanEntered || Boolean(finplanEntryIds?.length)
                               : undefined,
+                            finplanEntryIds,
                             paymentDeadline:
                               canManageOperationalFields && operationalPaymentDeadline
                                 ? new Date(`${operationalPaymentDeadline}T00:00:00`).getTime()
@@ -2144,6 +2147,9 @@ export default function RequestDetailPage() {
                               ? fotAllSpecialistsRecorded
                               : undefined,
                           });
+                          if (finplanEntryIds?.length) {
+                            setFinplanEntered(true);
+                          }
                           setOperationalFieldsSavedAt(Date.now());
                         } catch (err) {
                           setError(err instanceof Error ? err.message : "Не удалось сохранить финансовые отметки");

@@ -3496,6 +3496,9 @@ export const updateOperationalFields = mutation({
     if (args.finplanEntryIds !== undefined) {
       const values = args.finplanEntryIds.map((item) => item.trim()).filter(Boolean);
       patch.finplanEntryIds = values.length ? values : undefined;
+      if (values.length) {
+        patch.finplanEntered = true;
+      }
     }
     if (args.fotAllSpecialistsRecorded !== undefined) {
       patch.fotAllSpecialistsRecorded = args.fotAllSpecialistsRecorded;
