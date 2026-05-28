@@ -34,15 +34,16 @@ export function requestHasOutsourceSpecialists(request: any) {
   });
 }
 
+function requestHasSpecialists(request: any) {
+  return (request.specialists ?? []).length > 0;
+}
+
 export function hasSpecialBuhAccessToRequest(roleRecord: any, request: any) {
   const roles = roleRecord?.roles ?? [];
   if (roles.includes("BUH Payment")) {
     return ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status);
   }
-  if (roles.includes("BUH Inside") && requestHasInsideSpecialists(request)) {
-    return true;
-  }
-  if (roles.includes("BUH Outsource") && requestHasOutsourceSpecialists(request)) {
+  if ((roles.includes("BUH Inside") || roles.includes("BUH Outsource")) && requestHasSpecialists(request)) {
     return true;
   }
   return false;
