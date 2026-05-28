@@ -102,6 +102,9 @@ const requestStatus = v.union(
   v.literal("closed"),
 );
 
+const SPECIALIST_BUH_ROLES = ["BUH Inside", "BUH Outsource"] as const;
+type SpecialistBuhRole = (typeof SPECIALIST_BUH_ROLES)[number];
+
 const requestCategoryCodes: Record<string, string> = {
   "Welcome-бонус": "WB",
   "Подарки": "GI",
@@ -299,6 +302,17 @@ function hasContestSpecialists(
 
 function requestHasSpecialists(request: { specialists?: Array<unknown> }) {
   return Boolean(request.specialists?.length);
+}
+
+function getSpecialistBuhRolesForRequest(request: { specialists?: Array<unknown> }) {
+  const roles = new Set<SpecialistBuhRole>();
+  if (requestHasInsideSpecialists(request)) {
+    roles.add("BUH Inside");
+  }
+  if (requestHasOutsourceSpecialists(request)) {
+    roles.add("BUH Outsource");
+  }
+  return Array.from(roles);
 }
 
 function hasContestDepartments(
@@ -2292,7 +2306,7 @@ export const previewEditImpact = query({
       throw new Error("Not authorized");
     }
 
-    const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
+    const normalizedSpecialists = normalizeSpecialists(args.specialists ?? request.specialists ?? []);
     const normalizedCategory = normalizeRequestCategory(args.category);
     const normalizedDepartment = normalizeHodDepartment(args.department);
     const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
@@ -2411,8 +2425,10 @@ export const editRequest = mutation({
       throw new Error("Not authorized");
     }
 
+    const specialistInput = args.specialists ?? request.specialists ?? [];
     validateRequestPayload({
       ...args,
+      specialists: specialistInput,
       existingContractAttachmentCount: request.contractAttachmentCount ?? 0,
     });
     const normalizedCategory = normalizeRequestCategory(args.category);
@@ -2426,7 +2442,7 @@ export const editRequest = mutation({
     const identity = await ctx.auth.getUserIdentity();
     const actorName = roleRecord?.fullName ?? identity?.name ?? undefined;
     const creatorRoles = roleRecord?.roles ?? [];
-    const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
+    const normalizedSpecialists = normalizeSpecialists(specialistInput);
     const normalizedDepartment = normalizeHodDepartment(args.department);
     const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
@@ -2639,6 +2655,12 @@ export const editRequest = mutation({
       ...patch,
     };
     const changes = diffRequestFields(previousForDiff, nextForDiff);
+    const summaryLines = changes.map(
+      (change) => `${change.field}: ${change.fromValue || "—"} → ${change.toValue || "—"}`,
+    );
+    const specialistsChanged = changes.some(
+      (change) => change.field === requestFieldLabels.specialists,
+    );
     const historyGroupId = `${now}-${Math.round(Math.random() * 1_000_000)}`;
     const historySummaryLines = [
       ...editImpact.confirmationLines,
@@ -2732,10 +2754,6 @@ export const editRequest = mutation({
       const infoRecipients = Array.from(
         new Set([...editImpact.notifyApprovedEmails, ...buhEmails]),
       );
-      const summaryLines = changes.map(
-        (change) => `${change.field}: ${change.fromValue || "—"} → ${change.toValue || "—"}`,
-      );
-
       if (removedRoleRecipients.length > 0) {
         await ctx.scheduler.runAfter(0, internal.emails.sendApprovalCanceled, {
           requestId: args.id,
@@ -2773,12 +2791,37 @@ export const editRequest = mutation({
     const hasInsideSpecialists = requestHasInsideSpecialists({ specialists: normalizedSpecialists });
     const hadOutsourceSpecialists = requestHasOutsourceSpecialists(request);
     const hasOutsourceSpecialists = requestHasOutsourceSpecialists({ specialists: normalizedSpecialists });
-    if (
-      (hasInsideSpecialists || hasOutsourceSpecialists) &&
-      (submitDraft || shouldResubmit || (!hadInsideSpecialists && hasInsideSpecialists) || (!hadOutsourceSpecialists && hasOutsourceSpecialists))
-    ) {
+    const specialistBuhRolesToNotify = Array.from(
+      new Set([
+        ...(specialistsChanged ? getSpecialistBuhRolesForRequest(request) : []),
+        ...getSpecialistBuhRolesForRequest({ specialists: normalizedSpecialists }),
+      ]),
+    );
+    const shouldNotifySpecialistBuh =
+      (
+        (hasInsideSpecialists || hasOutsourceSpecialists) &&
+        (
+          submitDraft ||
+          shouldResubmit ||
+          (!hadInsideSpecialists && hasInsideSpecialists) ||
+          (!hadOutsourceSpecialists && hasOutsourceSpecialists)
+        )
+      ) ||
+      (
+        request.status !== "draft" &&
+        specialistsChanged &&
+        specialistBuhRolesToNotify.length > 0
+      );
+    if (shouldNotifySpecialistBuh) {
       await ctx.scheduler.runAfter(0, internal.emails.sendSpecialistBuhNotifications, {
         requestId: args.id,
+        targetRoles: specialistBuhRolesToNotify,
+        summaryLines:
+          request.status !== "draft" && specialistsChanged && summaryLines.length
+            ? summaryLines
+            : undefined,
+        actorEmail: request.status !== "draft" && specialistsChanged ? email : undefined,
+        actorName: request.status !== "draft" && specialistsChanged ? actorName : undefined,
       });
     }
     if (nextStatus === "pending" && args.approvalDeadline && (submitDraft || shouldResubmit || approvalDeadlineChanged)) {

@@ -230,6 +230,11 @@ export default function NewRequestPage() {
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
   const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(category), [category]);
   const requestSupportsSpecialists = useMemo(() => supportsRequestSpecialists(category), [category]);
+  const requestHadSpecialists = useMemo(
+    () => Boolean(data?.request?.specialists?.length),
+    [data?.request?.specialists],
+  );
+  const canEditSpecialists = requestSupportsSpecialists || requestHadSpecialists;
   const isWelcomeBonus = category === "Welcome-бонус";
   const selectedDepartment = requestArea;
   const categoryOptions = useMemo(
@@ -397,7 +402,7 @@ export default function NewRequestPage() {
   );
   const requestHasSpecialists = useMemo(
     () =>
-      requestSupportsSpecialists &&
+      canEditSpecialists &&
       specialistsPayload.some(
         (item) =>
           item.name ||
@@ -411,7 +416,7 @@ export default function NewRequestPage() {
           item.amountIncludesTaxes ||
           item.amountExcludesTaxes,
       ),
-    [requestSupportsSpecialists, specialistsPayload],
+    [canEditSpecialists, specialistsPayload],
   );
   const specialistAmount = useMemo(
     () =>
@@ -423,7 +428,7 @@ export default function NewRequestPage() {
       Array.from(
         new Set(
           [
-            ...(requestSupportsSpecialists
+            ...(canEditSpecialists
               ? specialistsPayload
                   .filter((item) => item.sourceType === "internal" && item.department && !item.validationSkipped)
                   .map((item) => item.department as string)
@@ -435,7 +440,7 @@ export default function NewRequestPage() {
           ].filter((department): department is string => Boolean(department)),
         ),
       ),
-    [category, requestSupportsSpecialists, specialistsPayload],
+    [canEditSpecialists, category, specialistsPayload],
   );
   const effectiveRequiredHodDepartments = useMemo(
     () =>
@@ -885,7 +890,7 @@ export default function NewRequestPage() {
         contacts: [],
         relatedRequests: relatedRequestsList,
         links: [],
-        specialists: requestSupportsSpecialists ? specialistsPayload : undefined,
+        specialists: canEditSpecialists ? specialistsPayload : undefined,
         financePlanLinks:
           showTransitFields && financeLinksList.length
             ? financeLinksList
@@ -1050,7 +1055,7 @@ export default function NewRequestPage() {
                 </div>
               </div>
 
-              {requestSupportsSpecialists ? (
+              {canEditSpecialists ? (
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
                     Добавьте штатных специалистов и специалистов подрядчика, если затрата связана с ними.

@@ -30,6 +30,8 @@ const roleEnum = v.union(
   v.literal("ADMIN"),
 );
 
+const SPECIALIST_BUH_ROLES = ["BUH Inside", "BUH Outsource"] as const;
+
 function formatApprovalStatusLabel(status: string) {
   if (status === "approved") {
     return "Согласовано";
@@ -308,6 +310,10 @@ export const sendRequestCreatedToBuh = internalAction({
 export const sendSpecialistBuhNotifications = internalAction({
   args: {
     requestId: v.id("requests"),
+    targetRoles: v.optional(v.array(roleEnum)),
+    summaryLines: v.optional(v.array(v.string())),
+    actorEmail: v.optional(v.string()),
+    actorName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const data = await ctx.runQuery(internal.emails.getRequestData, {
@@ -317,10 +323,18 @@ export const sendSpecialistBuhNotifications = internalAction({
       return;
     }
     const { request, roles } = data;
-    const recipientRoles = [
-      requestHasInsideSpecialists(request) ? "BUH Inside" : undefined,
-      requestHasOutsourceSpecialists(request) ? "BUH Outsource" : undefined,
-    ].filter(Boolean) as string[];
+    const recipientRoles = args.targetRoles?.length
+      ? Array.from(
+          new Set(
+            args.targetRoles.filter((role) =>
+              (SPECIALIST_BUH_ROLES as readonly string[]).includes(role),
+            ),
+          ),
+        )
+      : [
+          requestHasInsideSpecialists(request) ? "BUH Inside" : undefined,
+          requestHasOutsourceSpecialists(request) ? "BUH Outsource" : undefined,
+        ].filter(Boolean) as string[];
     if (!recipientRoles.length) {
       return;
     }
@@ -332,14 +346,24 @@ export const sendSpecialistBuhNotifications = internalAction({
     }
     const link = `${getBaseUrl()}/requests/${request._id}`;
     const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const isUpdate = Boolean(args.summaryLines?.length);
+    const actor = args.actorName ? `${args.actorName} (${args.actorEmail})` : args.actorEmail;
     await sendEmail(ctx, {
       requestId: args.requestId,
-      emailType: "specialist_buh_notification",
+      emailType: isUpdate ? "specialist_buh_update_notification" : "specialist_buh_notification",
       to: Array.from(new Set(recipients)),
-      subject: `В заявке есть специалисты: ${request.requestCode ?? request.category}`,
+      subject: isUpdate
+        ? `Изменены специалисты в заявке: ${request.requestCode ?? request.category}`
+        : `В заявке есть специалисты: ${request.requestCode ?? request.category}`,
       html: `
-        <p>В заявке есть штатные специалисты или подрядчики, требующие внимания бухгалтерии.</p>
+        <p>${
+          isUpdate
+            ? "В заявке изменились штатные специалисты или подрядчики."
+            : "В заявке есть штатные специалисты или подрядчики, требующие внимания бухгалтерии."
+        }</p>
         <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        ${actor ? `<p>Кто изменил: ${actor}</p>` : ""}
+        ${isUpdate ? `<ul>${(args.summaryLines ?? []).map((line) => `<li>${line}</li>`).join("")}</ul>` : ""}
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
