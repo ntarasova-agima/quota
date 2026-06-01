@@ -98,6 +98,7 @@ export const listPendingForMe = query({
         getPendingSpecialistValidationDepartments({
           category: request.category,
           specialists: request.specialists,
+          requiredRoles: request.requiredRoles,
           requiredHodDepartments: request.requiredHodDepartments,
         }).some((department) => Boolean(department && actingHodDepartments.includes(department)))
           ? "hod"
@@ -149,6 +150,7 @@ export const listPendingForMe = query({
         const pendingDepartments = getPendingSpecialistValidationDepartments({
           category: request.category,
           specialists: request.specialists,
+          requiredRoles: request.requiredRoles,
           requiredHodDepartments: request.requiredHodDepartments,
         }).filter((department) => Boolean(department && actingHodDepartments.includes(department)));
         if (!pendingDepartments.length) {
@@ -360,6 +362,7 @@ export const decide = mutation({
     const status = getRequestApprovalStatus({
       category: request.category,
       specialists: request.specialists,
+      requiredRoles: nextRequiredRoles,
       requiredHodDepartments: nextRequiredHodDepartments,
       approvals,
     });
@@ -459,6 +462,11 @@ export const decide = mutation({
         resolvedDepartment: (approval.department ?? args.department?.trim()) || undefined,
         resolverEmail: email,
         resolverName: roleRecord.fullName ?? undefined,
+      });
+    }
+    if (args.decision === "approved" && status === "approved") {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+        requestId: request._id,
       });
     }
 
@@ -573,6 +581,7 @@ export const adminApproveAsRole = mutation({
     const status = getRequestApprovalStatus({
       category: request.category,
       specialists: request.specialists,
+      requiredRoles: request.requiredRoles,
       requiredHodDepartments: request.requiredHodDepartments,
       approvals,
     });
@@ -603,6 +612,11 @@ export const adminApproveAsRole = mutation({
       reviewerEmail: email,
       requestStatus: status,
     });
+    if (status === "approved") {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+        requestId: request._id,
+      });
+    }
     return { status };
   },
 });
@@ -667,6 +681,7 @@ export const adminRemoveAdditionalApproval = mutation({
     const status = getRequestApprovalStatus({
       category: request.category,
       specialists: request.specialists,
+      requiredRoles: nextRequiredRoles,
       requiredHodDepartments: nextRequiredHodDepartments,
       approvals: remainingApprovals,
     });

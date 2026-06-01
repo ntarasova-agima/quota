@@ -106,6 +106,26 @@ function getDateKey(timestamp?: number) {
   return timestamp ? new Date(timestamp).toISOString().slice(0, 10) : undefined;
 }
 
+type PaymentPlanningRole = {
+  active?: boolean;
+  email: string;
+  roles: string[];
+};
+
+function getPaymentPlanningRecipients(roles: PaymentPlanningRole[]) {
+  return Array.from(
+    new Set(
+      roles
+        .filter(
+          (role) =>
+            role.active &&
+            (role.roles.includes("BUH Payment") || hasFinanceApproverRole(role)),
+        )
+        .map((role) => role.email),
+    ),
+  );
+}
+
 function formatDate(timestamp?: number) {
   return timestamp ? new Date(timestamp).toLocaleDateString("ru-RU") : "не указана";
 }
@@ -510,6 +530,48 @@ export const sendApprovalReminder = internalAction({
   },
 });
 
+export const sendPaymentPlanningRequested = internalAction({
+  args: {
+    requestId: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      throw new Error("Request not found");
+    }
+    const { request, roles } = data;
+    const recipients = getPaymentPlanningRecipients(roles);
+    if (recipients.length === 0) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const owner = getRequestOwnerLabel(request);
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const paymentDeadline = getPaymentDeadlineLabel(request);
+    const author = request.createdByName
+      ? `${request.createdByName} (${request.createdByEmail})`
+      : request.createdByEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "payment_planning_requested",
+      to: recipients,
+      subject: `Заявка согласована: запланируйте оплату ${request.requestCode ?? request.category}`,
+      html: `
+        <p>Заявка полностью согласована. Нужно запланировать оплату.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>Номер заявки: ${request.requestCode ?? "не указан"}</p>
+        <p>${owner.label}: ${owner.value}</p>
+        <p>Автор заявки: ${author}</p>
+        <p>Дедлайн оплаты: ${paymentDeadline}</p>
+        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
 export const sendPaymentRequested = internalAction({
   args: {
     requestId: v.id("requests"),
@@ -521,14 +583,8 @@ export const sendPaymentRequested = internalAction({
     if (!data) {
       throw new Error("Request not found");
     }
-    const { request, roles, approvals } = data;
-    const buhRecipients = roles
-      .filter(
-        (role) =>
-          role.active &&
-          (role.roles.includes("BUH Payment") || hasFinanceApproverRole(role)),
-      )
-      .map((role) => role.email);
+    const { request, roles } = data;
+    const buhRecipients = getPaymentPlanningRecipients(roles);
     if (buhRecipients.length === 0) {
       return;
     }
@@ -542,7 +598,7 @@ export const sendPaymentRequested = internalAction({
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "payment_requested",
-      to: Array.from(new Set(buhRecipients)),
+      to: buhRecipients,
       subject: `Требуется оплата: ${request.category}, ${owner.value}`,
       html: `
         <p>Заявка переведена в статус <strong>Требуется оплата</strong>.</p>

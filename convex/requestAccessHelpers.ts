@@ -66,6 +66,7 @@ export function hasHodAccessToRequest(roleRecord: any, request: any) {
   }
   const explicitlyRequiredDepartments = getEffectiveRequiredHodDepartments({
     category: request.category,
+    requiredRoles: request.requiredRoles,
     requiredHodDepartments: request.requiredHodDepartments,
     specialists: request.specialists,
   });

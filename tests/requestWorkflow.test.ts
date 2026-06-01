@@ -65,6 +65,43 @@ describe("requestWorkflow", () => {
     ]);
   });
 
+  it("does not add management HOD to transit requests unless HOD is selected", () => {
+    const departments = getEffectiveRequiredHodDepartments({
+      category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+      requiredRoles: [],
+      requiredHodDepartments: ["Производственный менеджмент"],
+    });
+
+    expect(departments).toEqual([]);
+    expect(
+      getEffectiveRequiredRoles({
+        requiredRoles: [],
+        requiredHodDepartments: departments,
+        category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+      }),
+    ).toEqual(["BUH Transit"]);
+  });
+
+  it("keeps manual HOD approval available for transit requests", () => {
+    const departments = getEffectiveRequiredHodDepartments({
+      category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+      requiredRoles: ["HOD"],
+      requiredHodDepartments: ["Производственный менеджмент"],
+    });
+
+    expect(departments).toEqual(["Производственный менеджмент"]);
+    expect(
+      buildApprovalTargets({
+        requiredRoles: ["HOD"],
+        requiredHodDepartments: departments,
+        category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+      }),
+    ).toEqual([
+      { role: "HOD", department: "Производственный менеджмент" },
+      { role: "BUH Transit" },
+    ]);
+  });
+
   it("requires NBD for welcome bonus and contest requests only", () => {
     expect(
       getEffectiveRequiredRoles({

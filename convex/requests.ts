@@ -1283,6 +1283,7 @@ function validateRequestPayload(args: any) {
   const normalizedSpecialists = normalizeSpecialists(args.specialists ?? []);
   const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
     category: args.category,
+    requiredRoles: args.requiredRoles,
     requiredHodDepartments: args.requiredHodDepartments,
     specialists: normalizedSpecialists,
   });
@@ -2313,6 +2314,7 @@ export const previewEditImpact = query({
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
       category: normalizedCategory,
+      requiredRoles: args.requiredRoles,
       requiredHodDepartments: args.requiredHodDepartments,
       specialists: normalizedSpecialists,
     });
@@ -2448,6 +2450,7 @@ export const editRequest = mutation({
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
       category: normalizedCategory,
+      requiredRoles: args.requiredRoles,
       requiredHodDepartments: args.requiredHodDepartments,
       specialists: normalizedSpecialists,
     });
@@ -2598,6 +2601,7 @@ export const editRequest = mutation({
             : getRequestApprovalStatus({
                 category: args.category,
                 specialists: normalizedSpecialists,
+                requiredRoles: effectiveRequiredRoles,
                 requiredHodDepartments: effectiveRequiredHodDepartments,
                 approvals: updatedApprovals,
               });
@@ -2719,6 +2723,11 @@ export const editRequest = mutation({
 
     if (submitDraft && !specialistNeedsHodValidation) {
       await ctx.scheduler.runAfter(0, internal.emails.sendRequestSubmitted, {
+        requestId: args.id,
+      });
+    }
+    if (request.status !== "approved" && nextStatus === "approved") {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
         requestId: args.id,
       });
     }
@@ -2873,6 +2882,7 @@ export const createRequest = mutation({
     const normalizedSpecialists = normalizeSpecialists(payloadArgs.specialists ?? []);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
       category: normalizedCategory,
+      requiredRoles: args.requiredRoles,
       requiredHodDepartments: args.requiredHodDepartments,
       specialists: normalizedSpecialists,
     });
@@ -2896,6 +2906,7 @@ export const createRequest = mutation({
       : getRequestApprovalStatus({
           category: normalizedCategory,
           specialists: normalizedSpecialists,
+          requiredRoles: effectiveRequiredRoles,
           requiredHodDepartments: effectiveRequiredHodDepartments,
           approvals: approvalTargets.map((target) => ({
             role: target.role,
@@ -3023,6 +3034,11 @@ export const createRequest = mutation({
           },
         );
       }
+    }
+    if (payloadArgs.submit && status === "approved") {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+        requestId,
+      });
     }
     await ctx.scheduler.runAfter(0, internal.emails.sendRequestCreatedToBuh, {
       requestId,
@@ -3192,6 +3208,7 @@ export const updateContestSpecialist = mutation({
     const approvalStatus = getRequestApprovalStatus({
       category: request.category,
       specialists,
+      requiredRoles: request.requiredRoles,
       requiredHodDepartments: request.requiredHodDepartments,
       approvals: updatedApprovals,
     });
@@ -3235,7 +3252,46 @@ export const updateContestSpecialist = mutation({
         ? "Все нужные цеха провалидировали прямые затраты. Заявка отправлена на согласование."
         : undefined,
     });
+    if (request.status !== "approved" && nextStatus === "approved") {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+        requestId: request._id,
+      });
+    }
     return { updated: true };
+  },
+});
+
+export const adminSendPaymentPlanningNotification = mutation({
+  args: {
+    id: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    if (!roleRecord?.active || !roleRecord.roles?.includes("ADMIN")) {
+      throw new Error("Not authorized");
+    }
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    if (request.status !== "approved") {
+      throw new Error("Отбивку на оплату можно отправить только по согласованной заявке");
+    }
+    await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+      requestId: request._id,
+    });
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "payment_planning_notification_queued",
+      title: "Запрошена отбивка на планирование оплаты",
+      actorEmail: email,
+      actorName: roleRecord.fullName ?? undefined,
+    });
+    return { queued: true };
   },
 });
 

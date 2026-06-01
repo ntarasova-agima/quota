@@ -48,6 +48,7 @@ import {
 import {
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
+  CLIENT_SERVICES_TRANSIT_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
@@ -88,6 +89,10 @@ type PendingEditConfirmation = {
   confirmationLines: string[];
   infoLines: string[];
 };
+
+function isTransitRequestCategory(category: string) {
+  return normalizeRequestCategory(category) === CLIENT_SERVICES_TRANSIT_CATEGORY;
+}
 
 export default function NewRequestPage() {
   const params = useParams();
@@ -446,12 +451,15 @@ export default function NewRequestPage() {
     () =>
       Array.from(
         new Set(
-          [...requiredHodDepartments, ...autoRequiredHodDepartments].filter(
+          [
+            ...(requiredRoles.includes("HOD") ? requiredHodDepartments : []),
+            ...autoRequiredHodDepartments,
+          ].filter(
             (department): department is string => Boolean(department),
           ),
         ),
       ),
-    [autoRequiredHodDepartments, requiredHodDepartments],
+    [autoRequiredHodDepartments, requiredHodDepartments, requiredRoles],
   );
   const effectiveAmountWithoutVatInput = useMemo(
     () =>
@@ -687,7 +695,7 @@ export default function NewRequestPage() {
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
     }
-    if (!isHodSelectableCategory(nextCategory)) {
+    if (!isHodSelectableCategory(nextCategory) || isTransitRequestCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
     }
@@ -702,7 +710,7 @@ export default function NewRequestPage() {
     if (nextCategory === "Welcome-бонус") {
       setPaymentMethod("");
     }
-    if (!isHodSelectableCategory(nextCategory)) {
+    if (!isHodSelectableCategory(nextCategory) || isTransitRequestCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
     }
@@ -742,8 +750,9 @@ export default function NewRequestPage() {
         setRequiredHodDepartments([]);
       }
       if (role === "HOD" && !isRemoving) {
+        const defaultDepartment = normalizeHodDepartment(selectedDepartment) ?? FINANCE_LEGAL_DEPARTMENT;
         setRequiredHodDepartments((departments) =>
-          departments.length ? departments : [FINANCE_LEGAL_DEPARTMENT],
+          departments.length ? departments : [defaultDepartment],
         );
       }
       return isRemoving ? current.filter((item) => item !== role) : [...current, role];

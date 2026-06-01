@@ -57,6 +57,7 @@ export function getRequiredSpecialistHodDepartments(
 
 export function getEffectiveRequiredHodDepartments(params: {
   category: string;
+  requiredRoles?: string[];
   requiredHodDepartments?: string[];
   specialists?: SpecialistEntryLike[];
 }) {
@@ -64,8 +65,9 @@ export function getEffectiveRequiredHodDepartments(params: {
   if (!isHodSelectableCategory(normalizedCategory)) {
     return [];
   }
+  const includeManualHodDepartments = params.requiredRoles?.includes("HOD") ?? true;
   return normalizeDepartmentList([
-    ...(params.requiredHodDepartments ?? []),
+    ...(includeManualHodDepartments ? params.requiredHodDepartments ?? [] : []),
     ...getAutoRequiredHodDepartmentsForRequest({
       category: normalizedCategory,
       specialists: params.specialists,
@@ -159,10 +161,16 @@ export function hasPendingSpecialistValidationForDepartment(
 }
 
 export function getPendingSpecialistValidationDepartments(
-  request: { category: string; specialists?: SpecialistEntryLike[]; requiredHodDepartments?: string[] },
+  request: {
+    category: string;
+    specialists?: SpecialistEntryLike[];
+    requiredRoles?: string[];
+    requiredHodDepartments?: string[];
+  },
 ) {
   const relevantDepartments = getEffectiveRequiredHodDepartments({
     category: request.category,
+    requiredRoles: request.requiredRoles,
     requiredHodDepartments: request.requiredHodDepartments,
     specialists: request.specialists,
   });
@@ -174,6 +182,7 @@ export function getPendingSpecialistValidationDepartments(
 export function getRequestApprovalStatus(params: {
   category: string;
   specialists?: SpecialistEntryLike[];
+  requiredRoles?: string[];
   requiredHodDepartments?: string[];
   approvals: ApprovalEntryLike[];
 }) {
@@ -185,6 +194,7 @@ export function getRequestApprovalStatus(params: {
     getPendingSpecialistValidationDepartments({
       category: params.category,
       specialists: params.specialists,
+      requiredRoles: params.requiredRoles,
       requiredHodDepartments: params.requiredHodDepartments,
     }).length > 0
   ) {
