@@ -13,10 +13,6 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         if (!isAllowedSignInEmail(normalizedIdentifier)) {
           throw new Error("Войти в Aurum можно только с почтой @agima.ru");
         }
-        const baseUrl = (process.env.EMAIL_BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
-        const encodedCode = encodeURIComponent(token);
-        const encodedEmail = encodeURIComponent(normalizedIdentifier);
-        const safeUrl = `${baseUrl}/sign-in?email=${encodedEmail}&code=${encodedCode}#code=${encodedCode}&email=${encodedEmail}`;
         const emailApiBaseUrl = process.env.EMAIL_API_BASE_URL ?? process.env.EMAIL_BASE_URL ?? "http://localhost:3000";
         const response = await fetch(`${emailApiBaseUrl.replace(/\/+$/, "")}/api/email/send`, {
           method: "POST",
@@ -27,11 +23,18 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           body: JSON.stringify({
             to: [normalizedIdentifier],
             subject: "Код для входа в Aurum",
+            text: [
+              "Код для входа в Aurum:",
+              token,
+              "",
+              "Скопируйте код и вставьте его на странице входа.",
+              "Если кодов пришло несколько, используйте самый новый.",
+            ].join("\n"),
             html: `
               <p>Код для входа в Aurum:</p>
-              <p><strong>${token}</strong></p>
-              <p>Или перейдите по ссылке:</p>
-              <p><a href="${safeUrl}">${safeUrl}</a></p>
+              <p style="font-size: 24px; line-height: 1.3;"><strong>${token}</strong></p>
+              <p>Скопируйте код и вставьте его на странице входа.</p>
+              <p>Если кодов пришло несколько, используйте самый новый.</p>
             `,
           }),
         });

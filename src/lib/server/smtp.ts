@@ -32,17 +32,28 @@ export function getSmtpConfig() {
   };
 }
 
-export async function sendSmtpMail(params: {
-  to: string | string[];
-  subject: string;
-  html: string;
-}) {
-  const config = getSmtpConfig();
-  const transporter = nodemailer.createTransport({
+let transporter: nodemailer.Transporter | null = null;
+let transporterKey = "";
+
+function getTransporter(config: ReturnType<typeof getSmtpConfig>) {
+  const nextKey = JSON.stringify({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    authUser: config.auth?.user,
+    servername: config.servername,
+  });
+  if (transporter && transporterKey === nextKey) {
+    return transporter;
+  }
+  transporter = nodemailer.createTransport({
     host: config.host,
     port: config.port,
     secure: config.secure,
     auth: config.auth,
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 100,
     connectionTimeout: 5000,
     greetingTimeout: 5000,
     socketTimeout: 8000,
@@ -50,11 +61,24 @@ export async function sendSmtpMail(params: {
       servername: config.servername,
     },
   });
+  transporterKey = nextKey;
+  return transporter;
+}
 
-  await transporter.sendMail({
+export async function sendSmtpMail(params: {
+  to: string | string[];
+  subject: string;
+  html: string;
+  text?: string;
+}) {
+  const config = getSmtpConfig();
+  const mailTransporter = getTransporter(config);
+
+  await mailTransporter.sendMail({
     from: config.from,
     to: params.to,
     subject: params.subject,
     html: params.html,
+    text: params.text,
   });
 }

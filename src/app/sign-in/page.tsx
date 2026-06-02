@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label";
 import { isAllowedSignInEmail, normalizeEmail } from "@/lib/authRules";
 import { api } from "@/lib/convex";
 
+const RESEND_DELAY_SECONDS = 30;
+
 const captureParams = `
 (() => {
   try {
@@ -67,7 +69,9 @@ export default function SignInPage() {
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"email" | "code">("email");
   const [error, setError] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const [autoAttempted, setAutoAttempted] = useState(false);
   const [linkCode, setLinkCode] = useState<string | undefined>(undefined);
   const [linkEmail, setLinkEmail] = useState<string | undefined>(undefined);
@@ -89,6 +93,16 @@ export default function SignInPage() {
     }
     setError(getSignInErrorMessage(signInError));
   }, [signInError]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setResendCooldown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [resendCooldown]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -204,6 +218,7 @@ export default function SignInPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setStatusMessage(null);
     setSubmitting(true);
     try {
       const normalizedEmail = normalizeEmail(email);
@@ -214,6 +229,8 @@ export default function SignInPage() {
       if (step === "email") {
         await signIn("email", { email: normalizedEmail, redirectTo: "/requests" });
         setStep("code");
+        setResendCooldown(RESEND_DELAY_SECONDS);
+        setStatusMessage("Код отправлен. Если писем придет несколько, используйте самый новый.");
       } else {
         await signIn("email", { email: normalizedEmail, code, redirectTo: "/requests" });
         if (typeof window !== "undefined") {
@@ -230,10 +247,33 @@ export default function SignInPage() {
         }
         setCode("");
         setStep("email");
+        setStatusMessage(null);
         setError(message);
       } else {
         setError(message);
       }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleResendCode() {
+    setError(null);
+    setStatusMessage(null);
+    setSubmitting(true);
+    try {
+      const normalizedEmail = normalizeEmail(email);
+      if (!isAllowedSignInEmail(normalizedEmail)) {
+        throw new Error("Войти в Aurum можно только с почтой @agima.ru");
+      }
+      await signIn("email", { email: normalizedEmail, redirectTo: "/requests" });
+      setEmail(normalizedEmail);
+      setCode("");
+      setStep("code");
+      setResendCooldown(RESEND_DELAY_SECONDS);
+      setStatusMessage("Новый код отправлен. Если писем придет несколько, используйте самый новый.");
+    } catch (err) {
+      setError(getSignInErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -291,6 +331,12 @@ export default function SignInPage() {
                 </div>
               )}
 
+              {statusMessage && !error ? (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                  {statusMessage}
+                </div>
+              ) : null}
+
               <Button
                 type="submit"
                 className="w-full"
@@ -298,6 +344,19 @@ export default function SignInPage() {
               >
                 {step === "email" ? "Отправить код" : "Подтвердить"}
               </Button>
+              {step === "code" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={submitting || resendCooldown > 0}
+                  onClick={handleResendCode}
+                >
+                  {resendCooldown > 0
+                    ? `Отправить еще раз через ${resendCooldown} с`
+                    : "Отправить код еще раз"}
+                </Button>
+              ) : null}
             </form>
           </CardContent>
         </Card>
