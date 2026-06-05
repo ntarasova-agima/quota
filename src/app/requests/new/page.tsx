@@ -53,7 +53,6 @@ import {
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
-  normalizeFundingSource,
   normalizeRequestCategory,
   supportsRequestSpecialists,
   usesServiceRecipientLabel,
@@ -79,6 +78,7 @@ import {
   MAX_REQUEST_ATTACHMENTS,
   MAX_REQUEST_ATTACHMENT_SIZE,
 } from "@/lib/requestAttachments";
+import { resolveCopiedRequestCoreFields } from "@/lib/requestCopy";
 
 function isTransitRequestCategory(category: string) {
   return normalizeRequestCategory(category) === CLIENT_SERVICES_TRANSIT_CATEGORY;
@@ -289,9 +289,11 @@ export default function NewRequestPage() {
     }
 
     const request = copySourceData.request;
-    const normalizedFundingSource = normalizeFundingSource(request.fundingSource);
-    const normalizedStoredCategory = normalizeRequestCategory(request.category);
-    const nextDepartment = (normalizeHodDepartment(request.department) ?? request.requestArea ?? "Аккаунтинг") as RequestArea;
+    const {
+      category: normalizedStoredCategory,
+      department: nextDepartment,
+      fundingSource: normalizedFundingSource,
+    } = resolveCopiedRequestCoreFields(request);
     const normalizedParticipants =
       request.specialists?.map((item) => ({
         id: crypto.randomUUID(),
