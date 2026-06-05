@@ -102,6 +102,7 @@ export default function NewRequestPage() {
     api.requests.getRequest,
     copyFromRequestId ? { id: copyFromRequestId as any } : "skip",
   );
+  const isCopySourceLoading = Boolean(copyFromRequestId && copySourceData === undefined);
   const today = useMemo(() => new Date(), []);
   const minApprovalDateValue = useMemo(() => {
     const next = new Date(today);
@@ -128,14 +129,14 @@ export default function NewRequestPage() {
   }, [today]);
 
   const [requestArea, setRequestArea] = useState<RequestArea>("Аккаунтинг");
-  const [category, setCategory] = useState("Welcome-бонус");
+  const [category, setCategory] = useState(() => (copyFromRequestId ? "" : "Welcome-бонус"));
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [amountWithVat, setAmountWithVat] = useState("");
   const [vatRate, setVatRate] = useState(String(DEFAULT_VAT_RATE));
   const [vatInputSource, setVatInputSource] = useState<VatAmountSource>("without");
   const [currency, setCurrency] = useState("RUB");
-  const [fundingSource, setFundingSource] = useState("Квоты AGIMA");
+  const [fundingSource, setFundingSource] = useState(() => (copyFromRequestId ? "" : "Квоты AGIMA"));
   const [justification, setJustification] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
@@ -317,6 +318,9 @@ export default function NewRequestPage() {
       .map(({ sourceType: _sourceType, ...item }) => item);
     const loadedEnforcedRoles = getEnforcedRoleSet(normalizedStoredCategory, normalizedFundingSource);
 
+    setError(null);
+    setFundingError(null);
+    setShowValidationErrors(false);
     setRequestArea(nextDepartment);
     setCategory(normalizedStoredCategory);
     setTitle(request.title ?? "");
@@ -969,6 +973,17 @@ export default function NewRequestPage() {
     await submitRequest(true);
   }
 
+  function renderSelectDisplay(value: string, placeholder: string) {
+    return (
+      <span
+        data-slot="select-value"
+        className={value ? "block truncate text-foreground" : "block truncate text-muted-foreground"}
+      >
+        {value || placeholder}
+      </span>
+    );
+  }
+
   return (
     <RequireAuth>
       <div className="min-h-screen bg-background text-foreground">
@@ -979,6 +994,9 @@ export default function NewRequestPage() {
               <CardTitle>Новая заявка</CardTitle>
             </CardHeader>
             <CardContent>
+              {isCopySourceLoading ? (
+                <p className="text-sm text-muted-foreground">Копируем заявку...</p>
+              ) : (
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
                 <div className="grid gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
                   <div className="space-y-2">
@@ -997,7 +1015,7 @@ export default function NewRequestPage() {
                         className={wrappedSelectTriggerClass}
                         aria-invalid={categoryInvalid ? true : undefined}
                       >
-                        <SelectValue placeholder="Выберите тип заявки" />
+                        {renderSelectDisplay(category, "Выберите тип заявки")}
                       </SelectTrigger>
                       <SelectContent>
                         {displayedCategoryOptions.map((item) => (
@@ -1015,7 +1033,7 @@ export default function NewRequestPage() {
                         className={wrappedSelectTriggerClass}
                         aria-invalid={fundingError ? true : undefined}
                       >
-                        <SelectValue placeholder="Выберите источник" />
+                        {renderSelectDisplay(fundingSource, "Выберите источник")}
                       </SelectTrigger>
                       <SelectContent>
                         {displayedFundingSources.map((item) => (
@@ -1831,6 +1849,7 @@ export default function NewRequestPage() {
                 </Button>
               </div>
               </form>
+              )}
             </CardContent>
           </Card>
         </main>
