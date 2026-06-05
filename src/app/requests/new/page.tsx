@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Paperclip, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -96,7 +96,8 @@ export default function NewRequestPage() {
   const saveAttachment = useMutation(api.attachments.saveAttachment);
   const profile = useQuery(api.roles.myProfile);
   const router = useRouter();
-  const [copyFromRequestId, setCopyFromRequestId] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const copyFromRequestId = searchParams.get("copyFrom");
   const copySourceData = useQuery(
     api.requests.getRequest,
     copyFromRequestId ? { id: copyFromRequestId as any } : "skip",
@@ -239,6 +240,14 @@ export default function NewRequestPage() {
     () => getCategoriesForDepartment(selectedDepartment),
     [selectedDepartment],
   );
+  const displayedCategoryOptions = useMemo(
+    () => Array.from(new Set([...categoryOptions, ...(category ? [category] : [])])),
+    [category, categoryOptions],
+  );
+  const displayedFundingSources = useMemo(
+    () => Array.from(new Set([...FUNDING_SOURCES, ...(fundingSource ? [fundingSource] : [])])),
+    [fundingSource],
+  );
   const showTransitFields = fundingSource === "Отгрузки проекта";
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
   const paidByError = useMemo(
@@ -253,11 +262,6 @@ export default function NewRequestPage() {
     !isWelcomeBonus &&
     !isServiceCategory;
   const financeLinksRequired = fundingSource === "Отгрузки проекта";
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setCopyFromRequestId(params.get("copyFrom"));
-  }, []);
 
   useEffect(() => {
     if (copyFromRequestId) {
@@ -996,7 +1000,7 @@ export default function NewRequestPage() {
                         <SelectValue placeholder="Выберите тип заявки" />
                       </SelectTrigger>
                       <SelectContent>
-                        {categoryOptions.map((item) => (
+                        {displayedCategoryOptions.map((item) => (
                           <SelectItem key={item} value={item} className="whitespace-normal">
                             {item}
                           </SelectItem>
@@ -1014,7 +1018,7 @@ export default function NewRequestPage() {
                         <SelectValue placeholder="Выберите источник" />
                       </SelectTrigger>
                       <SelectContent>
-                        {FUNDING_SOURCES.map((item) => (
+                        {displayedFundingSources.map((item) => (
                           <SelectItem key={item} value={item}>
                             {item}
                           </SelectItem>
