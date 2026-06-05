@@ -41,6 +41,8 @@ import {
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
   isPaidByDateAllowed,
+  normalizeContestSpecialistSource,
+  timestampToDateInput,
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
@@ -51,6 +53,7 @@ import {
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
+  normalizeFundingSource,
   normalizeRequestCategory,
   supportsRequestSpecialists,
   usesServiceRecipientLabel,
@@ -81,12 +84,23 @@ function isTransitRequestCategory(category: string) {
   return normalizeRequestCategory(category) === CLIENT_SERVICES_TRANSIT_CATEGORY;
 }
 
+function getEnforcedRoleSet(category: string, fundingSource: string) {
+  const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
+  getAutoRequiredRolesForRequest({ category }).forEach((role) => roles.add(role as RoleOption));
+  return roles;
+}
+
 export default function NewRequestPage() {
   const createRequest = useMutation(api.requests.createRequest);
   const generateAttachmentUploadUrl = useMutation(api.attachments.generateUploadUrl);
   const saveAttachment = useMutation(api.attachments.saveAttachment);
   const profile = useQuery(api.roles.myProfile);
   const router = useRouter();
+  const [copyFromRequestId, setCopyFromRequestId] = useState<string | null>(null);
+  const copySourceData = useQuery(
+    api.requests.getRequest,
+    copyFromRequestId ? { id: copyFromRequestId as any } : "skip",
+  );
   const today = useMemo(() => new Date(), []);
   const minApprovalDateValue = useMemo(() => {
     const next = new Date(today);
@@ -168,6 +182,7 @@ export default function NewRequestPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const contractFileInputRef = useRef<HTMLInputElement | null>(null);
   const previousEnforcedRolesRef = useRef<Set<RoleOption>>(new Set());
+  const copiedRequestIdRef = useRef<string | null>(null);
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
@@ -240,12 +255,130 @@ export default function NewRequestPage() {
   const financeLinksRequired = fundingSource === "Отгрузки проекта";
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setCopyFromRequestId(params.get("copyFrom"));
+  }, []);
+
+  useEffect(() => {
+    if (copyFromRequestId) {
+      return;
+    }
     const profileDepartment = normalizeHodDepartment(profile?.department ?? undefined);
     if (!profileDepartment || profileDepartment === requestArea) {
       return;
     }
     handleRequestAreaChange(profileDepartment as RequestArea);
-  }, [profile?.department]);
+  }, [copyFromRequestId, profile?.department]);
+
+  useEffect(() => {
+    if (!copyFromRequestId || copiedRequestIdRef.current === copyFromRequestId) {
+      return;
+    }
+    if (copySourceData === undefined) {
+      return;
+    }
+    if (copySourceData === null) {
+      setError("Не удалось найти заявку для копирования или у вас нет доступа.");
+      copiedRequestIdRef.current = copyFromRequestId;
+      return;
+    }
+
+    const request = copySourceData.request;
+    const normalizedFundingSource = normalizeFundingSource(request.fundingSource);
+    const normalizedStoredCategory = normalizeRequestCategory(request.category);
+    const nextDepartment = (normalizeHodDepartment(request.department) ?? request.requestArea ?? "Аккаунтинг") as RequestArea;
+    const normalizedParticipants =
+      request.specialists?.map((item) => ({
+        id: crypto.randomUUID(),
+        name: item.name ?? "",
+        contractorLegalEntity: item.contractorLegalEntity ?? "",
+        department: item.department ?? "",
+        hours: item.hours !== undefined ? String(item.hours) : "",
+        directCost: item.directCost !== undefined ? String(item.directCost) : "",
+        taxAmount: item.taxAmount !== undefined ? String(item.taxAmount) : "",
+        contractorTypes: (item.contractorTypes ?? []).map((type) => type === "другое" ? "другое/не знаю" : type),
+        taxUnknown: item.taxUnknown ?? false,
+        amountIncludesTaxes: item.amountIncludesTaxes ?? false,
+        amountExcludesTaxes: item.amountExcludesTaxes ?? false,
+        validationSkipped: item.validationSkipped ?? false,
+        hodConfirmed: false,
+        buhConfirmed: false,
+        sourceType: normalizeContestSpecialistSource(item.sourceType),
+      })) ?? [];
+    const internalRows = normalizedParticipants
+      .filter((item) => item.sourceType === "internal")
+      .map(({ sourceType: _sourceType, ...item }) => item);
+    const contractorRows = normalizedParticipants
+      .filter((item) => item.sourceType === "contractor")
+      .map(({ sourceType: _sourceType, ...item }) => item);
+    const loadedEnforcedRoles = getEnforcedRoleSet(normalizedStoredCategory, normalizedFundingSource);
+
+    setRequestArea(nextDepartment);
+    setCategory(normalizedStoredCategory);
+    setTitle(request.title ?? "");
+    setAmount(request.amount !== undefined ? String(request.amount) : "");
+    setAmountWithVat(request.amountWithVat !== undefined ? String(request.amountWithVat) : "");
+    setVatRate(String(request.vatRate ?? DEFAULT_VAT_RATE));
+    setVatInputSource("without");
+    setCurrency(request.currency ?? "RUB");
+    setFundingSource(normalizedFundingSource);
+    setJustification([request.justification, request.details].filter(Boolean).join("\n\n"));
+    setInvestmentReturn(request.investmentReturn ?? "");
+    setClientName(request.clientName ?? "");
+    setCounterparty(request.counterparty ?? "");
+    setPaymentMethod(request.paymentMethod ?? "");
+    setContractLink(request.contractLink ?? "");
+    setDueDiligenceChecked(request.dueDiligenceChecked ?? false);
+    setDueDiligenceJiraLink(request.dueDiligenceJiraLink ?? "");
+    setPrepaymentRequired(request.prepaymentRequired ?? false);
+    setPrepaymentAmount(request.prepaymentAmount !== undefined ? String(request.prepaymentAmount) : "");
+    setPrepaymentAmountWithVat(request.prepaymentAmountWithVat !== undefined ? String(request.prepaymentAmountWithVat) : "");
+    setPrepaymentDate(timestampToDateInput(request.prepaymentDate));
+    setRelatedRequests((request.relatedRequests ?? []).join("\n"));
+    setRelatedRequestsExpanded(Boolean(request.relatedRequests?.length));
+    setInternalSpecialists(
+      internalRows.length ? internalRows : [createContestParticipantDraft()],
+    );
+    setContractors(
+      contractorRows.length ? contractorRows : [createContestParticipantDraft()],
+    );
+    setFinanceLinks("");
+    setFinplanEntered(false);
+    setFinplanEntryIds("");
+    setIncomingAmount(request.incomingAmount !== undefined ? String(request.incomingAmount) : "");
+    setIncomingAmountWithVat(
+      request.incomingAmountWithVat !== undefined
+        ? String(request.incomingAmountWithVat)
+        : request.incomingAmount !== undefined
+          ? String(request.incomingAmount)
+          : "",
+    );
+    setShipmentDate("");
+    setApprovalDeadline(defaultDeadline);
+    setNeededBy(defaultDeadline);
+    setPaymentDeadline(defaultDeadline);
+    setPaidBy(timestampToDateInput(request.paidBy));
+    setRequiredRoles(
+      Array.from(
+        new Set([
+          ...((request.requiredRoles as RoleOption[] | undefined) ?? [...DEFAULT_REQUIRED_ROLES]),
+          ...loadedEnforcedRoles,
+        ]),
+      ),
+    );
+    previousEnforcedRolesRef.current = loadedEnforcedRoles;
+    setRequiredHodDepartments(request.requiredHodDepartments ?? []);
+    setSelectedFiles([]);
+    setSelectedContractFiles([]);
+    setFileActionError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    if (contractFileInputRef.current) {
+      contractFileInputRef.current.value = "";
+    }
+    copiedRequestIdRef.current = copyFromRequestId;
+  }, [copyFromRequestId, copySourceData, defaultDeadline]);
   const relatedRequestsList = useMemo(
     () =>
       relatedRequests
@@ -364,11 +497,10 @@ export default function NewRequestPage() {
     [finplanEntryIds],
   );
 
-  const enforcedRoles = useMemo(() => {
-    const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
-    getAutoRequiredRolesForRequest({ category }).forEach((role) => roles.add(role as RoleOption));
-    return roles;
-  }, [category, fundingSource]);
+  const enforcedRoles = useMemo(
+    () => getEnforcedRoleSet(category, fundingSource),
+    [category, fundingSource],
+  );
   const displayedRoleOptions = useMemo(() => {
     const roles = new Set<RoleOption>(ROLE_OPTIONS);
     enforcedRoles.forEach((role) => roles.add(role));

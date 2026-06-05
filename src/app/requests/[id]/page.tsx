@@ -56,7 +56,7 @@ import {
   sanitizeNumericInput,
   syncVatInputPair,
 } from "@/lib/vat";
-import { CheckCircle2, Paperclip, Upload } from "lucide-react";
+import { CheckCircle2, Copy, Paperclip, Upload } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
 
 type SpecialistView = {
@@ -1730,29 +1730,37 @@ export default function RequestDetailPage() {
                 Таймлайн
               </Button>
             </div>
-            {canEditRequest ? (
+            <div className="flex flex-wrap items-center gap-2">
               <Button asChild variant="outline">
-                <Link href={`/requests/${requestId}/edit`}>Редактировать заявку</Link>
+                <Link href={`/requests/new?copyFrom=${request._id}`}>
+                  <Copy className="h-4 w-4" />
+                  Копировать заявку
+                </Link>
               </Button>
-            ) : null}
-            {isAdmin && request.status === "pending" ? (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={approvalReminderSent}
-                onClick={async () => {
-                  setError(null);
-                  try {
-                    await remindApproval({ requestId: request._id });
-                    setApprovalReminderSent(true);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : "Не удалось отправить напоминание");
-                  }
-                }}
-              >
-                {approvalReminderSent ? "✓ Напоминание отправлено!" : "Напомнить о согласовании"}
-              </Button>
-            ) : null}
+              {canEditRequest ? (
+                <Button asChild variant="outline">
+                  <Link href={`/requests/${requestId}/edit`}>Редактировать заявку</Link>
+                </Button>
+              ) : null}
+              {isAdmin && request.status === "pending" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={approvalReminderSent}
+                  onClick={async () => {
+                    setError(null);
+                    try {
+                      await remindApproval({ requestId: request._id });
+                      setApprovalReminderSent(true);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Не удалось отправить напоминание");
+                    }
+                  }}
+                >
+                  {approvalReminderSent ? "✓ Напоминание отправлено!" : "Напомнить о согласовании"}
+                </Button>
+              ) : null}
+            </div>
           </div>
 
           <div className={activeTab === "details" ? "space-y-6" : "hidden"}>
