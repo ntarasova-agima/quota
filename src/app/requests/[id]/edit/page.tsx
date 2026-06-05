@@ -94,6 +94,12 @@ function isTransitRequestCategory(category: string) {
   return normalizeRequestCategory(category) === CLIENT_SERVICES_TRANSIT_CATEGORY;
 }
 
+function getEnforcedRoleSet(category: string, fundingSource: string) {
+  const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
+  getAutoRequiredRolesForRequest({ category }).forEach((role) => roles.add(role as RoleOption));
+  return roles;
+}
+
 export default function NewRequestPage() {
   const params = useParams();
   const requestId = params.id as any;
@@ -171,7 +177,7 @@ export default function NewRequestPage() {
   const [paymentDeadline, setPaymentDeadline] = useState(defaultDeadline);
   const [paidBy, setPaidBy] = useState("");
   const [requiredRoles, setRequiredRoles] = useState<RoleOption[]>([...DEFAULT_REQUIRED_ROLES]);
-  const [requiredHodDepartments, setRequiredHodDepartments] = useState<string[]>([FINANCE_LEGAL_DEPARTMENT]);
+  const [requiredHodDepartments, setRequiredHodDepartments] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fundingError, setFundingError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -184,6 +190,7 @@ export default function NewRequestPage() {
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const contractFileInputRef = useRef<HTMLInputElement | null>(null);
+  const previousEnforcedRolesRef = useRef<Set<RoleOption>>(new Set());
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
@@ -363,7 +370,16 @@ export default function NewRequestPage() {
           : defaultDeadline,
     );
     setPaidBy(request.paidBy ? new Date(request.paidBy).toISOString().slice(0, 10) : "");
-    setRequiredRoles((request.requiredRoles as RoleOption[]) ?? [...DEFAULT_REQUIRED_ROLES]);
+    const loadedEnforcedRoles = getEnforcedRoleSet(normalizedStoredCategory, normalizedFundingSource);
+    setRequiredRoles(
+      Array.from(
+        new Set([
+          ...((request.requiredRoles as RoleOption[] | undefined) ?? [...DEFAULT_REQUIRED_ROLES]),
+          ...loadedEnforcedRoles,
+        ]),
+      ),
+    );
+    previousEnforcedRolesRef.current = loadedEnforcedRoles;
     setRequiredHodDepartments(request.requiredHodDepartments ?? []);
   }, [data?.request?._id, defaultDeadline]);
 
@@ -619,11 +635,10 @@ export default function NewRequestPage() {
     Boolean(fundingError) ||
     Boolean(paidByError);
 
-  const enforcedRoles = useMemo(() => {
-    const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
-    getAutoRequiredRolesForRequest({ category }).forEach((role) => roles.add(role as RoleOption));
-    return roles;
-  }, [category, fundingSource]);
+  const enforcedRoles = useMemo(
+    () => getEnforcedRoleSet(category, fundingSource),
+    [category, fundingSource],
+  );
   const displayedRoleOptions = useMemo(() => {
     const roles = new Set<RoleOption>(ROLE_OPTIONS);
     enforcedRoles.forEach((role) => roles.add(role));
@@ -631,18 +646,26 @@ export default function NewRequestPage() {
   }, [enforcedRoles]);
 
   useEffect(() => {
+    if (!data?.request) {
+      return;
+    }
     setRequiredRoles((current) => {
+      const previouslyEnforcedRoles = previousEnforcedRolesRef.current;
       const next = new Set(
         current.filter(
           (role) =>
-            !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role) ||
-            enforcedRoles.has(role),
+            enforcedRoles.has(role) ||
+            (
+              !previouslyEnforcedRoles.has(role) &&
+              !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role)
+            ),
         ),
       );
       enforcedRoles.forEach((role) => next.add(role));
+      previousEnforcedRolesRef.current = new Set(enforcedRoles);
       return Array.from(next);
     });
-  }, [enforcedRoles]);
+  }, [data?.request?._id, enforcedRoles]);
 
   useEffect(() => {
     if (!isFundingSourceAllowedForCategory(category, fundingSource)) {

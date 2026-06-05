@@ -23,6 +23,7 @@ import {
   getApprovalIdentity,
   getEffectiveRequiredHodDepartments,
   getEffectiveRequiredRoles,
+  getMandatoryApprovalTargets,
   getRequestApprovalStatus,
   getRequiredSpecialistHodDepartments,
   normalizeDepartmentList,
@@ -2101,10 +2102,19 @@ export const getRequest = query({
       .query("approvals")
       .withIndex("by_request", (q) => q.eq("requestId", args.id))
       .collect();
+    const mandatoryApprovalIdentities = new Set(
+      getMandatoryApprovalTargets({
+        category: request.category,
+        specialists: request.specialists,
+      }).map((target) => getApprovalIdentity(target)),
+    );
     const isCreator = request.createdBy === userId || request.createdByEmail === email;
     return {
       request,
-      approvals,
+      approvals: approvals.map((approval) => ({
+        ...approval,
+        isMandatory: mandatoryApprovalIdentities.has(getApprovalIdentity(approval)),
+      })),
       isCreator,
       canHodEditSpecialists: canHodView,
       canManageFiles: isCreator || canViewAll || canHodView || canViewByHistory,

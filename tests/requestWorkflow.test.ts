@@ -9,6 +9,8 @@ import {
   buildApprovalTargets,
   getEffectiveRequiredHodDepartments,
   getEffectiveRequiredRoles,
+  getMandatoryApprovalTargets,
+  isMandatoryApproval,
 } from "../convex/requestWorkflow";
 
 describe("requestWorkflow", () => {
@@ -100,6 +102,41 @@ describe("requestWorkflow", () => {
       { role: "HOD", department: "Производственный менеджмент" },
       { role: "BUH Transit" },
     ]);
+  });
+
+  it("marks only BUH Transit as mandatory for transit requests without auto HOD", () => {
+    expect(
+      getMandatoryApprovalTargets({
+        category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+      }),
+    ).toEqual([{ role: "BUH Transit" }]);
+    expect(
+      isMandatoryApproval(
+        { category: CLIENT_SERVICES_TRANSIT_CATEGORY },
+        { role: "NBD" },
+      ),
+    ).toBe(false);
+    expect(
+      isMandatoryApproval(
+        { category: CLIENT_SERVICES_TRANSIT_CATEGORY },
+        { role: "HOD", department: "Производственный менеджмент" },
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps NBD mandatory for welcome bonus but optional outside NBD categories", () => {
+    expect(
+      isMandatoryApproval(
+        { category: "Welcome-бонус" },
+        { role: "NBD" },
+      ),
+    ).toBe(true);
+    expect(
+      isMandatoryApproval(
+        { category: CLIENT_SERVICES_TRANSIT_CATEGORY },
+        { role: "NBD" },
+      ),
+    ).toBe(false);
   });
 
   it("requires NBD for welcome bonus and contest requests only", () => {

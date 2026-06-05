@@ -154,7 +154,7 @@ export default function NewRequestPage() {
   const [paymentDeadline, setPaymentDeadline] = useState(defaultDeadline);
   const [paidBy, setPaidBy] = useState("");
   const [requiredRoles, setRequiredRoles] = useState<RoleOption[]>([...DEFAULT_REQUIRED_ROLES]);
-  const [requiredHodDepartments, setRequiredHodDepartments] = useState<string[]>([FINANCE_LEGAL_DEPARTMENT]);
+  const [requiredHodDepartments, setRequiredHodDepartments] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fundingError, setFundingError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -167,6 +167,7 @@ export default function NewRequestPage() {
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const contractFileInputRef = useRef<HTMLInputElement | null>(null);
+  const previousEnforcedRolesRef = useRef<Set<RoleOption>>(new Set());
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
@@ -510,14 +511,19 @@ export default function NewRequestPage() {
 
   useEffect(() => {
     setRequiredRoles((current) => {
+      const previouslyEnforcedRoles = previousEnforcedRolesRef.current;
       const next = new Set(
         current.filter(
           (role) =>
-            !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role) ||
-            enforcedRoles.has(role),
+            enforcedRoles.has(role) ||
+            (
+              !previouslyEnforcedRoles.has(role) &&
+              !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role)
+            ),
         ),
       );
       enforcedRoles.forEach((role) => next.add(role));
+      previousEnforcedRolesRef.current = new Set(enforcedRoles);
       return Array.from(next);
     });
   }, [enforcedRoles]);

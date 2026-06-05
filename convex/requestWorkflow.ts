@@ -126,6 +126,34 @@ export function buildApprovalTargets(params: {
   return targets;
 }
 
+export function getMandatoryApprovalTargets(params: {
+  category: string;
+  specialists?: SpecialistEntryLike[];
+}) {
+  const requiredHodDepartments = getEffectiveRequiredHodDepartments({
+    category: params.category,
+    requiredRoles: [],
+    requiredHodDepartments: [],
+    specialists: params.specialists,
+  });
+  return buildApprovalTargets({
+    requiredRoles: [],
+    requiredHodDepartments,
+    category: params.category,
+  });
+}
+
+export function isMandatoryApproval(
+  request: { category: string; specialists?: SpecialistEntryLike[] },
+  approval: { role: string; department?: string },
+) {
+  const approvalIdentity = getApprovalIdentity(approval);
+  return getMandatoryApprovalTargets({
+    category: request.category,
+    specialists: request.specialists,
+  }).some((target) => getApprovalIdentity(target) === approvalIdentity);
+}
+
 export function canDepartmentValidateSpecialist(
   specialist: SpecialistEntryLike,
   department: string,

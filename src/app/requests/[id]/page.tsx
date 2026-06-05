@@ -566,6 +566,7 @@ export default function RequestDetailPage() {
     canLoadRequestRelatedData ? { requestId } : "skip",
   );
   const decide = useMutation(api.approvals.decide);
+  const skipOptionalApproval = useMutation(api.approvals.skipOptionalApproval);
   const remindApproval = useMutation(api.approvals.remindApproval);
   const adminApproveAsRole = useMutation(api.approvals.adminApproveAsRole);
   const cancelRequest = useMutation(api.requests.cancelRequest);
@@ -1565,6 +1566,28 @@ export default function RequestDetailPage() {
           ? "Комментарий обязателен для отказа"
           : message,
       );
+    } finally {
+      setSubmittingRole(null);
+    }
+  }
+
+  async function handleSkipOptionalApproval(
+    approval: { _id: Id<"approvals">; role: string; department?: string },
+  ) {
+    setError(null);
+    const approvalKey = getApprovalIdentity({
+      _id: approval._id,
+      role: approval.role,
+      department: approval.department,
+    });
+    setSubmittingRole(approvalKey);
+    try {
+      await skipOptionalApproval({
+        approvalId: approval._id,
+      });
+      router.refresh();
+    } catch (err) {
+      setError(getDisplayErrorMessage(err, "Не удалось пропустить согласование"));
     } finally {
       setSubmittingRole(null);
     }
@@ -3894,6 +3917,18 @@ export default function RequestDetailPage() {
                                 >
                                   Отклонить
                                 </Button>
+                                {!approval.isMandatory ? (
+                                  <HoverHint label="Если ваше согласование не требуется">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      onClick={() => handleSkipOptionalApproval(approval)}
+                                      disabled={submittingRole === approvalKey}
+                                    >
+                                      Пропустить согласование
+                                    </Button>
+                                  </HoverHint>
+                                ) : null}
                               </div>
                             </div>
                           ) : null}

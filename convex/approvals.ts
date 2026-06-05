@@ -9,6 +9,7 @@ import {
   getApprovalIdentity,
   getPendingSpecialistValidationDepartments,
   getRequestApprovalStatus,
+  isMandatoryApproval,
 } from "./requestWorkflow";
 import {
   canActAsApprovalRole,
@@ -471,6 +472,110 @@ export const decide = mutation({
     }
 
     return { status };
+  },
+});
+
+export const skipOptionalApproval = mutation({
+  args: {
+    approvalId: v.id("approvals"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const roleRecord = await ctx.db
+      .query("roles")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .first();
+    const approval = await ctx.db.get(args.approvalId);
+    if (!approval) {
+      throw new Error("Approval entry not found");
+    }
+    if (approval.status !== "pending") {
+      throw new Error("Already decided");
+    }
+    const request = await ctx.db.get(approval.requestId);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    if (request.isCanceled) {
+      throw new Error("Сначала возобновите заявку");
+    }
+    if (request.status === "draft") {
+      throw new Error("Cannot decide on a draft request");
+    }
+    const canActAsRole =
+      canActAsApprovalRole(roleRecord, approval.role, approval.department) ||
+      (approval.role === "BUH" && hasFinanceApproverRole(roleRecord));
+    if (!roleRecord || !roleRecord.active || !canActAsRole) {
+      throw new Error("Not authorized for this role");
+    }
+    if (isMandatoryApproval(request, approval)) {
+      throw new Error("Это обязательное согласование нельзя пропустить");
+    }
+
+    const approvalsBefore = await ctx.db
+      .query("approvals")
+      .withIndex("by_request", (q) => q.eq("requestId", approval.requestId))
+      .collect();
+    const remainingApprovals = approvalsBefore.filter((item) => item._id !== approval._id);
+    const nextRequiredHodDepartments =
+      approval.role === "HOD"
+        ? (request.requiredHodDepartments ?? []).filter(
+            (department: string) => department !== (approval.department ?? ""),
+          )
+        : (request.requiredHodDepartments ?? []);
+    const hasSameRoleApproval = remainingApprovals.some((item) => item.role === approval.role);
+    const hasHodApproval = remainingApprovals.some((item) => item.role === "HOD");
+    const nextRequiredRoles = (request.requiredRoles ?? []).filter((role: string) => {
+      if (role !== approval.role) {
+        return true;
+      }
+      if (role === "HOD") {
+        return hasHodApproval;
+      }
+      return hasSameRoleApproval;
+    });
+    const status = getRequestApprovalStatus({
+      category: request.category,
+      specialists: request.specialists,
+      requiredRoles: nextRequiredRoles,
+      requiredHodDepartments: nextRequiredHodDepartments,
+      approvals: remainingApprovals,
+    });
+    const now = Date.now();
+
+    await ctx.db.delete(approval._id);
+    await ctx.db.patch(request._id, {
+      requiredRoles: nextRequiredRoles as any,
+      requiredHodDepartments: nextRequiredHodDepartments.length ? nextRequiredHodDepartments : undefined,
+      status,
+      updatedAt: now,
+    });
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "optional_approval_skipped",
+      title: `Согласующий пропустил необязательное согласование ${approval.role}${approval.department ? ` · ${approval.department}` : ""}`,
+      actorEmail: email,
+      actorName: roleRecord.fullName ?? undefined,
+      metadata: {
+        role: approval.role,
+        department: approval.department,
+        previousStatus: request.status,
+        nextStatus: status,
+      },
+    });
+    if (status === "approved") {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+        requestId: request._id,
+      });
+    }
+    return { status, skipped: true };
   },
 });
 
