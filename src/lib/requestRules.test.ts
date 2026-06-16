@@ -58,14 +58,18 @@ describe("requestRules", () => {
     expect(getCategoriesForDepartment("Аккаунтинг")).toContain("Подарки");
     expect(getCategoriesForDepartment("Аккаунтинг")).toContain(PURCHASE_CATEGORY);
     expect(getCategoriesForDepartment("Аккаунтинг")).toContain(CLIENT_SERVICES_TRANSIT_CATEGORY);
+    expect(getCategoriesForDepartment("Администрация")).toEqual([PURCHASE_CATEGORY, CLIENT_SERVICES_TRANSIT_CATEGORY]);
     expect(getCategoriesForDepartment("Разработка")).toEqual([PURCHASE_CATEGORY, CLIENT_SERVICES_TRANSIT_CATEGORY]);
   });
 
   it("checks category availability by department", () => {
     expect(isCategoryAllowedForDepartment("Подарки", "Аккаунтинг")).toBe(true);
     expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Аккаунтинг")).toBe(true);
+    expect(isCategoryAllowedForDepartment(PURCHASE_CATEGORY, "Администрация")).toBe(true);
+    expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Администрация")).toBe(true);
     expect(isCategoryAllowedForDepartment(CLIENT_SERVICES_TRANSIT_CATEGORY, "Разработка")).toBe(true);
     expect(isCategoryAllowedForDepartment(PURCHASE_CATEGORY, "Разработка")).toBe(true);
+    expect(isCategoryAllowedForDepartment("Подарки", "Администрация")).toBe(false);
     expect(isCategoryAllowedForDepartment("Подарки", "Разработка")).toBe(false);
   });
 

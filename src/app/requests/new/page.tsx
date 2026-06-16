@@ -103,6 +103,7 @@ export default function NewRequestPage() {
     copyFromRequestId ? { id: copyFromRequestId as any } : "skip",
   );
   const isCopySourceLoading = Boolean(copyFromRequestId && copySourceData === undefined);
+  const isInitialProfileLoading = Boolean(!copyFromRequestId && profile === undefined);
   const today = useMemo(() => new Date(), []);
   const minApprovalDateValue = useMemo(() => {
     const next = new Date(today);
@@ -996,8 +997,10 @@ export default function NewRequestPage() {
               <CardTitle>Новая заявка</CardTitle>
             </CardHeader>
             <CardContent>
-              {isCopySourceLoading ? (
-                <p className="text-sm text-muted-foreground">Копируем заявку...</p>
+              {isCopySourceLoading || isInitialProfileLoading ? (
+                <p className="text-sm text-muted-foreground">
+                  {isCopySourceLoading ? "Копируем заявку..." : "Подготавливаем форму..."}
+                </p>
               ) : (
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
                 <div className="grid gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
