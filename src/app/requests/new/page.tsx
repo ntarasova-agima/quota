@@ -979,17 +979,6 @@ export default function NewRequestPage() {
     await submitRequest(true);
   }
 
-  function renderSelectDisplay(value: string, placeholder: string) {
-    return (
-      <span
-        data-slot="select-value"
-        className={value ? "block truncate text-foreground" : "block truncate text-muted-foreground"}
-      >
-        {value || placeholder}
-      </span>
-    );
-  }
-
   return (
     <RequireAuth>
       <div className="min-h-screen bg-background text-foreground">
@@ -1021,7 +1010,7 @@ export default function NewRequestPage() {
                         className={wrappedSelectTriggerClass}
                         aria-invalid={categoryInvalid ? true : undefined}
                       >
-                        {renderSelectDisplay(category, "Выберите тип заявки")}
+                        <SelectValue placeholder="Выберите тип заявки" />
                       </SelectTrigger>
                       <SelectContent>
                         {displayedCategoryOptions.map((item) => (
@@ -1039,7 +1028,7 @@ export default function NewRequestPage() {
                         className={wrappedSelectTriggerClass}
                         aria-invalid={fundingError ? true : undefined}
                       >
-                        {renderSelectDisplay(fundingSource, "Выберите источник")}
+                        <SelectValue placeholder="Выберите источник" />
                       </SelectTrigger>
                       <SelectContent>
                         {displayedFundingSources.map((item) => (
