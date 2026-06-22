@@ -1181,6 +1181,18 @@ export default function RequestDetailPage() {
     overrides: Partial<SpecialistView> = {},
   ) {
     const sourceType = normalizeContestSpecialistSource(overrides.sourceType ?? draft.sourceType);
+    const currentSpecialist = (request.specialists ?? []).find((item) => item.id === specialistId) as
+      | SpecialistView
+      | undefined;
+    const nextFotRecorded = Boolean(overrides.fotRecorded ?? draft.fotRecorded);
+    const nextFotMonth = (overrides.fotMonth ?? draft.fotMonth)?.trim() || undefined;
+    const fotChanged =
+      sourceType !== "contractor" &&
+      canManageSpecialistFot &&
+      (
+        nextFotRecorded !== Boolean(currentSpecialist?.fotRecorded) ||
+        nextFotMonth !== (currentSpecialist?.fotMonth?.trim() || undefined)
+      );
     await updateContestSpecialist({
       requestId: request._id,
       specialistId,
@@ -1204,6 +1216,14 @@ export default function RequestDetailPage() {
       hodConfirmed: overrides.hodConfirmed ?? draft.hodConfirmed,
       buhConfirmed: overrides.buhConfirmed ?? draft.buhConfirmed,
     });
+    if (fotChanged) {
+      await updateSpecialistFot({
+        requestId: request._id,
+        specialistId,
+        fotRecorded: nextFotRecorded,
+        fotMonth: nextFotMonth,
+      });
+    }
   }
 
   async function uploadFiles(files: File[]) {
@@ -3328,7 +3348,7 @@ export default function RequestDetailPage() {
                               ) : null}
                               {(canEditThis || !isDraftContractor) ? (
                                 <div className="flex flex-wrap items-end gap-3">
-                                  {canEditThis ? (
+                                  {canEditThis || (!isDraftContractor && canManageSpecialistFot) ? (
                                   <Button
                                     type="button"
                                     variant="outline"
@@ -3390,43 +3410,6 @@ export default function RequestDetailPage() {
                                           className="h-9 w-40"
                                         />
                                       </div>
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={!canManageSpecialistFot || savingSpecialistId === item.id}
-                                        onClick={async () => {
-                                          setSavingSpecialistId(item.id);
-                                          setError(null);
-                                          try {
-                                            const nextFotRecorded = Boolean(draft.fotRecorded);
-                                            await updateSpecialistFot({
-                                              requestId: request._id,
-                                              specialistId: item.id,
-                                              fotRecorded: nextFotRecorded,
-                                              fotMonth: draft.fotMonth || undefined,
-                                            });
-                                            setSpecialistDrafts((current) => ({
-                                              ...current,
-                                              [item.id]: {
-                                                ...draft,
-                                                fotRecorded: nextFotRecorded,
-                                              },
-                                            }));
-                                            router.refresh();
-                                          } catch (err) {
-                                            setError(
-                                              err instanceof Error
-                                                ? err.message
-                                                : "Не удалось сохранить ФОТ специалиста",
-                                            );
-                                          } finally {
-                                            setSavingSpecialistId(null);
-                                          }
-                                        }}
-                                      >
-                                        Сохранить ФОТ
-                                      </Button>
                                       {draft.fotRecorded && draft.fotRecordedByEmail ? (
                                         <div className="w-full text-xs text-muted-foreground">
                                           Отметил: {draft.fotRecordedByName ? `${draft.fotRecordedByName} · ` : ""}
