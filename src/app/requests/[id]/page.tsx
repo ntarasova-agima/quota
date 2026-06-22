@@ -637,7 +637,6 @@ export default function RequestDetailPage() {
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
   const [finplanEntered, setFinplanEntered] = useState(false);
   const [finplanEntryIdsRaw, setFinplanEntryIdsRaw] = useState("");
-  const [operationalShipmentDate, setOperationalShipmentDate] = useState("");
   const [fotAllSpecialistsRecorded, setFotAllSpecialistsRecorded] = useState(false);
   const [savingOperationalFields, setSavingOperationalFields] = useState(false);
   const [operationalFieldsSavedAt, setOperationalFieldsSavedAt] = useState<number | null>(null);
@@ -886,11 +885,6 @@ export default function RequestDetailPage() {
       setCustomTagName("");
       setFinplanEntered(data.request.finplanEntered ?? false);
       setFinplanEntryIdsRaw(getUnifiedFinplanCostIds(data.request).join("\n"));
-      setOperationalShipmentDate(
-        data.request.shipmentDate
-          ? new Date(data.request.shipmentDate).toISOString().slice(0, 10)
-          : "",
-      );
       setFotAllSpecialistsRecorded(data.request.fotAllSpecialistsRecorded ?? false);
       setPaymentPlannedDate(
         data.request.paymentPlannedAt
@@ -1010,6 +1004,8 @@ export default function RequestDetailPage() {
   }
 
   const { request, approvals } = data;
+  const isRubRequest = request.currency === "RUB";
+  const parsedPaymentCurrencyRate = isRubRequest ? undefined : parseMoneyInput(paymentCurrencyRate);
   const unifiedFinplanCostIds = getUnifiedFinplanCostIds(request);
   const isServiceCategory = isServiceRecipientCategory(request.category);
   const remainingPaymentAmounts = getPaymentRemainingAmounts(request);
@@ -1349,7 +1345,7 @@ export default function RequestDetailPage() {
         plannedPaymentAmountWithVat:
           planningMode === "partial" ? plannedAmounts.amountWithVat : undefined,
         planningMode,
-        paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+        paymentCurrencyRate: parsedPaymentCurrencyRate,
         allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
       });
       router.refresh();
@@ -1420,7 +1416,7 @@ export default function RequestDetailPage() {
         actualPaidAmount: executedAmounts.amountWithoutVat,
         actualPaidAmountWithVat: executedAmounts.amountWithVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
-        paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+        paymentCurrencyRate: parsedPaymentCurrencyRate,
       });
       router.refresh();
     } catch (err) {
@@ -1475,7 +1471,7 @@ export default function RequestDetailPage() {
         actualPaidAmount: executedAmounts.amountWithoutVat,
         actualPaidAmountWithVat: executedAmounts.amountWithVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
-        paymentCurrencyRate: parseMoneyInput(paymentCurrencyRate),
+        paymentCurrencyRate: parsedPaymentCurrencyRate,
       });
       router.refresh();
     } catch (err) {
@@ -1923,7 +1919,7 @@ export default function RequestDetailPage() {
                   </p>
                 </div>
               ) : null}
-              {request.paymentCurrencyRate !== undefined ? (
+              {request.paymentCurrencyRate !== undefined && !isRubRequest ? (
                 <div>
                   <div className="text-muted-foreground">Курс валюты</div>
                   <p className="mt-1">{request.paymentCurrencyRate}</p>
@@ -2072,14 +2068,18 @@ export default function RequestDetailPage() {
               {(canManageOperationalFields || canManageFot) && (
                 <div className="space-y-3 rounded-xl border border-border p-4">
                   <div>
-                    <div className="text-lg font-semibold">Финансовые отметки</div>
+                    <div className="text-lg font-semibold">
+                      {canManageOperationalFields ? "Затраты в финплане" : "ФОТ специалистов"}
+                    </div>
                     <p className="text-sm text-muted-foreground">
-                      Здесь финотдел может уточнить финплан и дату отгрузки по проекту.
+                      {canManageOperationalFields
+                        ? "BUH отмечает, что затраты занесены, и указывает ID затрат."
+                        : "BUH Inside отмечает, что ФОТ специалистов вынесен."}
                     </p>
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-4">
                     {canManageOperationalFields ? (
-                      <>
+                      <div className="space-y-4">
                         <label className="flex items-center gap-2 text-sm font-medium">
                           <Checkbox
                             checked={finplanEntered}
@@ -2088,9 +2088,9 @@ export default function RequestDetailPage() {
                               setFinplanEntered(checked === true);
                             }}
                           />
-                          Занесено в финплан
+                          Затраты занесены в финплан
                         </label>
-                        <div className="space-y-2 sm:col-span-2">
+                        <div className="space-y-2">
                           <Label>ID затрат в Финплане</Label>
                           <Textarea
                             value={finplanEntryIdsRaw}
@@ -2102,21 +2102,10 @@ export default function RequestDetailPage() {
                             rows={2}
                           />
                         </div>
-                        <div className="space-y-2">
-                          <Label>Дата отгрузки по проекту</Label>
-                          <Input
-                            type="date"
-                            value={operationalShipmentDate}
-                            onChange={(event) => {
-                              markOperationalFieldsDirty();
-                              setOperationalShipmentDate(event.target.value);
-                            }}
-                          />
-                        </div>
-                      </>
+                      </div>
                     ) : null}
                     {canManageFot ? (
-                      <div className="space-y-1 sm:col-span-2">
+                      <div className="space-y-1 border-t border-border/70 pt-4 first:border-t-0 first:pt-0">
                         <label className="flex items-center gap-2 text-sm font-medium">
                           <Checkbox
                             checked={fotAllSpecialistsRecorded}
@@ -2157,10 +2146,6 @@ export default function RequestDetailPage() {
                               ? finplanEntered || Boolean(finplanEntryIds?.length)
                               : undefined,
                             finplanEntryIds,
-                            shipmentDate:
-                              canManageOperationalFields && operationalShipmentDate
-                                ? new Date(`${operationalShipmentDate}T00:00:00`).getTime()
-                                : undefined,
                             fotAllSpecialistsRecorded: canUpdateFotMark
                               ? fotAllSpecialistsRecorded
                               : undefined,
@@ -2170,18 +2155,18 @@ export default function RequestDetailPage() {
                           }
                           setOperationalFieldsSavedAt(Date.now());
                         } catch (err) {
-                          setError(err instanceof Error ? err.message : "Не удалось сохранить финансовые отметки");
+                          setError(err instanceof Error ? err.message : "Не удалось сохранить отметки");
                         } finally {
                           setSavingOperationalFields(false);
                         }
                       }}
                     >
-                      {savingOperationalFields ? "Сохраняем..." : "Сохранить финансовые отметки"}
+                      {savingOperationalFields ? "Сохраняем..." : "Сохранить отметки"}
                     </Button>
                     {operationalFieldsSavedAt ? (
                       <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
                         <CheckCircle2 className="h-4 w-4" />
-                        Финансовые отметки сохранены
+                        Отметки сохранены
                       </span>
                     ) : null}
                   </div>
@@ -2303,20 +2288,22 @@ export default function RequestDetailPage() {
                   </div>
                   {(canSetPaymentPlanned || canSetPaid) && (
                     <div className="space-y-3 rounded-lg border border-border p-3">
-                      <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)]">
-                        <div className="space-y-2">
-                          <Label htmlFor="paymentCurrencyRate">Курс валюты</Label>
-                          <Input
-                            id="paymentCurrencyRate"
-                            inputMode="decimal"
-                            value={paymentCurrencyRate}
-                            onChange={(event) =>
-                              setPaymentCurrencyRate(sanitizeNumericInput(event.target.value))
-                            }
-                            placeholder={request.currency === "RUB" ? "Не обязателен для RUB" : "Например, 92.4"}
-                          />
+                      {!isRubRequest ? (
+                        <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)]">
+                          <div className="space-y-2">
+                            <Label htmlFor="paymentCurrencyRate">Курс валюты</Label>
+                            <Input
+                              id="paymentCurrencyRate"
+                              inputMode="decimal"
+                              value={paymentCurrencyRate}
+                              onChange={(event) =>
+                                setPaymentCurrencyRate(sanitizeNumericInput(event.target.value))
+                              }
+                              placeholder="Например, 92.4"
+                            />
+                          </div>
                         </div>
-                      </div>
+                      ) : null}
 
                       <div className="space-y-2 rounded-lg border border-border/70 p-3">
                         <div className="text-sm font-medium">Сумма оплаты</div>
@@ -2371,7 +2358,7 @@ export default function RequestDetailPage() {
 
                       {(canSetPaymentPlanned || canSetPaid) ? (
                         <div className="space-y-3 rounded-lg border border-border/70 p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="space-y-1">
                               <div className="text-sm font-medium">Платежи</div>
                               <p className="text-xs text-muted-foreground">
@@ -2384,35 +2371,33 @@ export default function RequestDetailPage() {
                               </p>
                             </div>
                             {canSendPaymentReminder ? (
-                              <div className="space-y-2">
-                                <p className="text-xs text-muted-foreground max-w-sm text-right">
+                              <div className="ml-auto flex max-w-sm flex-col items-end gap-2 text-right">
+                                <p className="text-xs text-muted-foreground">
                                   В день оплаты финотдел получит автоматическое уведомление. Нажмите, если хотите напомнить дополнительно
                                 </p>
-                                <div className="flex justify-end">
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={paymentReminderSent}
-                                    onClick={async () => {
-                                      setPaymentActionError(null);
-                                      if (!canSendPaymentReminderForStatus(request.status)) {
-                                        setPaymentActionError(
-                                          "Напоминание можно отправить только по заявке, ожидающей оплаты.",
-                                        );
-                                        return;
-                                      }
-                                      try {
-                                        await remindPayment({ requestId: request._id });
-                                        setPaymentReminderSent(true);
-                                      } catch (err) {
-                                        setPaymentActionError(getPaymentReminderErrorMessage(err));
-                                      }
-                                    }}
-                                  >
-                                    {paymentReminderSent ? "✓ Напоминание отправлено!" : "Напомнить об оплате"}
-                                  </Button>
-                                </div>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={paymentReminderSent}
+                                  onClick={async () => {
+                                    setPaymentActionError(null);
+                                    if (!canSendPaymentReminderForStatus(request.status)) {
+                                      setPaymentActionError(
+                                        "Напоминание можно отправить только по заявке, ожидающей оплаты.",
+                                      );
+                                      return;
+                                    }
+                                    try {
+                                      await remindPayment({ requestId: request._id });
+                                      setPaymentReminderSent(true);
+                                    } catch (err) {
+                                      setPaymentActionError(getPaymentReminderErrorMessage(err));
+                                    }
+                                  }}
+                                >
+                                  {paymentReminderSent ? "✓ Напоминание отправлено!" : "Напомнить об оплате"}
+                                </Button>
                               </div>
                             ) : null}
                           </div>

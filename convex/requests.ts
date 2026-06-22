@@ -3677,6 +3677,9 @@ export const updateOperationalFields = mutation({
     if (args.paymentDeadline !== undefined) {
       throw new Error("Дедлайн оплаты меняет автор заявки через редактирование заявки");
     }
+    if (args.shipmentDate !== undefined) {
+      throw new Error("Дата отгрузки меняется автором через редактирование заявки");
+    }
 
     validateOptionalMoney(args.amount, "Сумма без НДС");
     validateOptionalMoney(args.amountWithVat, "Сумма с НДС");
@@ -3700,9 +3703,6 @@ export const updateOperationalFields = mutation({
       patch.amount = effectiveAmounts.amount;
       patch.amountWithVat = effectiveAmounts.amountWithVat;
       patch.vatRate = effectiveAmounts.vatRate;
-    }
-    if (args.shipmentDate !== undefined) {
-      patch.shipmentDate = args.shipmentDate;
     }
     if (args.finplanEntered !== undefined) {
       patch.finplanEntered = args.finplanEntered;
@@ -3743,7 +3743,7 @@ export const updateOperationalFields = mutation({
     if (
       changes.length > 0 &&
       normalizeEmail(request.createdByEmail) !== normalizeEmail(email) &&
-      (effectiveAmounts || args.shipmentDate !== undefined)
+      effectiveAmounts
     ) {
       await ctx.scheduler.runAfter(0, internal.emails.sendOperationalFieldsChanged, {
         requestId: request._id,
@@ -3890,7 +3890,8 @@ export const updatePaymentStatus = mutation({
       throw new Error("Укажите дату оплаты");
     }
 
-    const effectiveCurrencyRate = args.paymentCurrencyRate ?? request.paymentCurrencyRate;
+    const effectiveCurrencyRate =
+      request.currency === "RUB" ? undefined : args.paymentCurrencyRate ?? request.paymentCurrencyRate;
     const previousTargetAmounts = getRequestPaymentTargetAmounts(request);
     if (
       request.currency !== "RUB" &&
