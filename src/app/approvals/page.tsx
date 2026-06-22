@@ -39,8 +39,17 @@ function getRequestDisplayTitle(request: {
   return request.title?.trim() || `${request.clientName} :: ${normalizeRequestCategory(request.category)}`;
 }
 
-function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryIds?: string[] }) {
-  return Boolean(request.finplanEntered || request.finplanEntryIds?.length);
+function getFinplanCostIds(request: { finplanEntryIds?: string[]; finplanCostIds?: string[] }) {
+  return Array.from(
+    new Set([
+      ...(request.finplanEntryIds ?? []),
+      ...(request.finplanCostIds ?? []),
+    ].map((item) => item.trim()).filter(Boolean)),
+  );
+}
+
+function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryIds?: string[]; finplanCostIds?: string[] }) {
+  return Boolean(request.finplanEntered || getFinplanCostIds(request).length);
 }
 
 const statusOptions = [
@@ -592,8 +601,8 @@ export default function ApprovalsPage() {
                         {hasFinplanEntryMark(request) ? (
                           <HoverHint
                             label={
-                              request.finplanEntryIds?.length
-                                ? `Строки в финплане: ${request.finplanEntryIds.join(", ")}`
+                              getFinplanCostIds(request).length
+                                ? `Строки в финплане: ${getFinplanCostIds(request).join(", ")}`
                                 : "BUH отметил, что строки затрат занесены в финплан"
                             }
                             className="w-fit"

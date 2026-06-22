@@ -490,6 +490,22 @@ function getCurrentPlannedAmounts(request: {
   });
 }
 
+function normalizeFinplanIds(values: string[]) {
+  return Array.from(
+    new Set(values.map((item) => item.trim()).filter(Boolean)),
+  );
+}
+
+function getUnifiedFinplanCostIds(request: {
+  finplanEntryIds?: string[];
+  finplanCostIds?: string[];
+}) {
+  return normalizeFinplanIds([
+    ...(request.finplanEntryIds ?? []),
+    ...(request.finplanCostIds ?? []),
+  ]);
+}
+
 function buildPaymentTimelineRows(request: {
   paymentSplits?: Array<any>;
   plannedPaymentSplits?: Array<any>;
@@ -619,7 +635,6 @@ export default function RequestDetailPage() {
   const [customTagName, setCustomTagName] = useState("");
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
-  const [finplanCostIdsRaw, setFinplanCostIdsRaw] = useState("");
   const [finplanEntered, setFinplanEntered] = useState(false);
   const [finplanEntryIdsRaw, setFinplanEntryIdsRaw] = useState("");
   const [operationalPaymentDeadline, setOperationalPaymentDeadline] = useState("");
@@ -870,9 +885,8 @@ export default function RequestDetailPage() {
       setSelectedFundingSource(normalizeFundingSource(data.request.fundingSource));
       setSelectedBusinessCategory(data.request.businessCategory ?? EMPTY_BUSINESS_CATEGORY);
       setCustomTagName("");
-      setFinplanCostIdsRaw((data.request.finplanCostIds ?? []).join(", "));
       setFinplanEntered(data.request.finplanEntered ?? false);
-      setFinplanEntryIdsRaw((data.request.finplanEntryIds ?? []).join("\n"));
+      setFinplanEntryIdsRaw(getUnifiedFinplanCostIds(data.request).join("\n"));
       setOperationalPaymentDeadline(
         data.request.paymentDeadline
           ? new Date(data.request.paymentDeadline).toISOString().slice(0, 10)
@@ -1004,6 +1018,7 @@ export default function RequestDetailPage() {
   }
 
   const { request, approvals } = data;
+  const unifiedFinplanCostIds = getUnifiedFinplanCostIds(request);
   const isServiceCategory = isServiceRecipientCategory(request.category);
   const remainingPaymentAmounts = getPaymentRemainingAmounts(request);
   const paymentTimelineRows = buildPaymentTimelineRows(request);
@@ -1066,7 +1081,7 @@ export default function RequestDetailPage() {
   const canManageOperationalFields =
     isAdmin ||
     isFinanceApprover ||
-    myRoles.some((role) => ["BUH", "BUH Transit"].includes(role)) ||
+    myRoles.some((role) => ["BUH", "BUH Payment", "BUH Transit"].includes(role)) ||
     (myRoles.includes("BUH Outsource") && hasOutsourceSpecialists);
   const canSendPaymentReminder =
     canSendPaymentReminderForStatus(request.status) &&
@@ -1334,7 +1349,7 @@ export default function RequestDetailPage() {
         id: request._id,
         status: "payment_planned",
         paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
-        finplanCostIdsRaw,
+        finplanEntryIdsRaw,
         actualPaidAmount: parseMoneyInput(paymentTargetAmount),
         actualPaidAmountWithVat: parseMoneyInput(paymentTargetAmountWithVat),
         plannedPaymentAmount:
@@ -1409,7 +1424,7 @@ export default function RequestDetailPage() {
       await updatePaymentStatus({
         id: request._id,
         status: "partially_paid",
-        finplanCostIdsRaw,
+        finplanEntryIdsRaw,
         actualPaidAmount: executedAmounts.amountWithoutVat,
         actualPaidAmountWithVat: executedAmounts.amountWithVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
@@ -1464,7 +1479,7 @@ export default function RequestDetailPage() {
       await updatePaymentStatus({
         id: request._id,
         status: closesWholeRequest ? "paid" : "partially_paid",
-        finplanCostIdsRaw,
+        finplanEntryIdsRaw,
         actualPaidAmount: executedAmounts.amountWithoutVat,
         actualPaidAmountWithVat: executedAmounts.amountWithVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
@@ -1934,24 +1949,6 @@ export default function RequestDetailPage() {
                   </p>
                 </div>
               ) : null}
-              {request.finplanCostIds?.length ? (
-                <div>
-                  <div className="text-muted-foreground">ID затрат в Финплане</div>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {request.finplanCostIds.map((id) => (
-                      <a
-                        key={id}
-                        href={`https://finplan.agimagroup.ru/finance/costs/?filter=${id}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded border border-border px-2 py-1 text-xs text-primary underline"
-                      >
-                        {id}
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
               {!(canSetPaymentPlanned || canSetPaid) && paymentTimelineRows.length ? (
                 <div className="space-y-2">
                   <div className="text-muted-foreground">Платежи</div>
@@ -2102,7 +2099,7 @@ export default function RequestDetailPage() {
                           Занесено в финплан
                         </label>
                         <div className="space-y-2 sm:col-span-2">
-                          <Label>ID затраты в Финплане</Label>
+                          <Label>ID затрат в Финплане</Label>
                           <Textarea
                             value={finplanEntryIdsRaw}
                             onChange={(event) => {
@@ -2169,7 +2166,7 @@ export default function RequestDetailPage() {
                         try {
                           const finplanEntryIds = canManageOperationalFields
                             ? finplanEntryIdsRaw
-                                .split("\n")
+                                .split(/[\s,]+/)
                                 .map((item) => item.trim())
                                 .filter(Boolean)
                             : undefined;
@@ -2253,7 +2250,7 @@ export default function RequestDetailPage() {
                             await updatePaymentStatus({
                               id: request._id,
                               status: "awaiting_payment",
-                              finplanCostIdsRaw,
+                              finplanEntryIdsRaw,
                             });
                             router.refresh();
                           } catch (err) {
@@ -2329,16 +2326,7 @@ export default function RequestDetailPage() {
                   </div>
                   {(canSetPaymentPlanned || canSetPaid) && (
                     <div className="space-y-3 rounded-lg border border-border p-3">
-                      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)]">
-                        <div className="space-y-2">
-                          <Label htmlFor="finplanIds">ID затрат в Финплане</Label>
-                          <Input
-                            id="finplanIds"
-                            value={finplanCostIdsRaw}
-                            onChange={(event) => setFinplanCostIdsRaw(event.target.value)}
-                            placeholder="12345, 67890"
-                          />
-                        </div>
+                      <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)]">
                         <div className="space-y-2">
                           <Label htmlFor="paymentCurrencyRate">Курс валюты</Label>
                           <Input
@@ -3239,7 +3227,7 @@ export default function RequestDetailPage() {
                   </>
                 ) : null}
               </div>
-              {(request.finplanEntered || request.finplanEntryIds?.length || request.fotAllSpecialistsRecorded) ? (
+              {(request.finplanEntered || unifiedFinplanCostIds.length || request.fotAllSpecialistsRecorded) ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <div className="text-muted-foreground">Занесено в финплан</div>
@@ -3251,11 +3239,11 @@ export default function RequestDetailPage() {
                       <p className="mt-1">Да</p>
                     </div>
                   ) : null}
-                  {request.finplanEntryIds?.length ? (
+                  {unifiedFinplanCostIds.length ? (
                     <div className="sm:col-span-2">
-                      <div className="text-muted-foreground">ID затраты в Финплане</div>
+                      <div className="text-muted-foreground">ID затрат в Финплане</div>
                       <ul className="mt-1 list-disc pl-5">
-                        {request.finplanEntryIds.map((item) => (
+                        {unifiedFinplanCostIds.map((item) => (
                           <li key={item}>{item}</li>
                         ))}
                       </ul>

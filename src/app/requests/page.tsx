@@ -53,12 +53,21 @@ function getPendingStatusPresentation(isActionableForViewer: boolean) {
       };
 }
 
-function FinplanEnteredBadge({ finplanEntryIds }: { finplanEntryIds?: string[] }) {
+function getFinplanCostIds(request: { finplanEntryIds?: string[]; finplanCostIds?: string[] }) {
+  return Array.from(
+    new Set([
+      ...(request.finplanEntryIds ?? []),
+      ...(request.finplanCostIds ?? []),
+    ].map((item) => item.trim()).filter(Boolean)),
+  );
+}
+
+function FinplanEnteredBadge({ finplanCostIds }: { finplanCostIds?: string[] }) {
   return (
     <HoverHint
       label={
-        finplanEntryIds?.length
-          ? `Строки в финплане: ${finplanEntryIds.join(", ")}`
+        finplanCostIds?.length
+          ? `Строки в финплане: ${finplanCostIds.join(", ")}`
           : "BUH отметил, что строки затрат занесены в финплан"
       }
       className="w-fit"
@@ -70,8 +79,8 @@ function FinplanEnteredBadge({ finplanEntryIds }: { finplanEntryIds?: string[] }
   );
 }
 
-function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryIds?: string[] }) {
-  return Boolean(request.finplanEntered || request.finplanEntryIds?.length);
+function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryIds?: string[]; finplanCostIds?: string[] }) {
+  return Boolean(request.finplanEntered || getFinplanCostIds(request).length);
 }
 
 const statusOptions = [
@@ -631,7 +640,7 @@ export default function RequestsPage() {
                             {statusSummary.label}
                           </span>
                           {hasFinplanEntryMark(request) ? (
-                            <FinplanEnteredBadge finplanEntryIds={request.finplanEntryIds} />
+                            <FinplanEnteredBadge finplanCostIds={getFinplanCostIds(request)} />
                           ) : null}
                         </div>
                       </div>
@@ -953,7 +962,7 @@ export default function RequestsPage() {
                               {statusSummary.label}
                             </span>
                             {hasFinplanEntryMark(request) ? (
-                              <FinplanEnteredBadge finplanEntryIds={request.finplanEntryIds} />
+                              <FinplanEnteredBadge finplanCostIds={getFinplanCostIds(request)} />
                             ) : null}
                           </div>
                         </Link>

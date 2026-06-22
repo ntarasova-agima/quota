@@ -476,16 +476,28 @@ async function getRoleNotificationRecipients(
   return Array.from(recipients);
 }
 
-function parseFinplanCostIds(input: string) {
+function normalizeFinplanIds(values: string[]) {
   return Array.from(
     new Set(
-      input
-        .split(/[,\s]+/)
+      values
         .map((item) => item.trim())
-        .filter(Boolean)
-        .filter((item) => /^\d+$/.test(item)),
+        .filter(Boolean),
     ),
   );
+}
+
+function parseFinplanIdsInput(input: string) {
+  return normalizeFinplanIds(input.split(/[\s,]+/));
+}
+
+function getUnifiedFinplanCostIds(request: {
+  finplanEntryIds?: string[];
+  finplanCostIds?: string[];
+}) {
+  return normalizeFinplanIds([
+    ...(request.finplanEntryIds ?? []),
+    ...(request.finplanCostIds ?? []),
+  ]);
 }
 
 function isPositiveFinite(value: number | undefined) {
@@ -592,6 +604,7 @@ function archiveCurrentPlannedPayment(
     plannedPaymentAmountWithVat?: number;
     plannedPaymentSplits?: Array<any>;
     paymentSplits?: Array<any>;
+    finplanEntryIds?: string[];
     finplanCostIds?: string[];
     vatRate?: number;
   },
@@ -619,7 +632,9 @@ function archiveCurrentPlannedPayment(
       vatRate: request.vatRate,
       currencyRate: params.currencyRate,
       plannedAt: request.paymentPlannedAt,
-      finplanCostIds: request.finplanCostIds?.length ? request.finplanCostIds : undefined,
+      finplanCostIds: getUnifiedFinplanCostIds(request).length
+        ? getUnifiedFinplanCostIds(request)
+        : undefined,
       actorEmail: request.paymentPlannedByEmail ?? params.actorEmail,
       actorName: request.paymentPlannedByName ?? params.actorName,
       createdAt: params.now,
@@ -988,7 +1003,7 @@ const requestFieldLabels: Record<string, string> = {
   links: "Ссылки на материалы",
   financePlanLinks: "ID отгрузки в Финплане",
   finplanEntered: "Занесено в финплан",
-  finplanEntryIds: "ID затраты в Финплане",
+  finplanEntryIds: "ID затрат в Финплане",
   incomingAmount: "Сумма отгрузки без НДС",
   incomingAmountWithVat: "Сумма отгрузки с НДС",
   incomingRatio: "Коэффициент транзита",
@@ -3610,7 +3625,7 @@ export const updateOperationalFields = mutation({
     const roles = record?.roles ?? [];
     const canManageAll =
       roles.some((role: string) =>
-        ["BUH", "ADMIN", "BUH Transit"].includes(role),
+        ["BUH", "ADMIN", "BUH Payment", "BUH Transit"].includes(role),
       ) || hasFinanceApproverRole(record);
     const canManageInside =
       roles.includes("BUH Inside") && requestHasInsideSpecialists(request);
@@ -3678,8 +3693,9 @@ export const updateOperationalFields = mutation({
       patch.finplanEntered = args.finplanEntered;
     }
     if (args.finplanEntryIds !== undefined) {
-      const values = args.finplanEntryIds.map((item) => item.trim()).filter(Boolean);
+      const values = normalizeFinplanIds(args.finplanEntryIds);
       patch.finplanEntryIds = values.length ? values : undefined;
+      patch.finplanCostIds = undefined;
       if (values.length) {
         patch.finplanEntered = true;
       }
@@ -3739,6 +3755,7 @@ export const updatePaymentStatus = mutation({
       v.literal("reopen"),
     ),
     paymentPlannedAt: v.optional(v.number()),
+    finplanEntryIdsRaw: v.optional(v.string()),
     finplanCostIdsRaw: v.optional(v.string()),
     actualPaidAmount: v.optional(v.number()),
     actualPaidAmountWithVat: v.optional(v.number()),
@@ -3837,9 +3854,16 @@ export const updatePaymentStatus = mutation({
       validateQuotaResolutionBeforePayment(request);
     }
 
-    const finplanCostIds = args.finplanCostIdsRaw
-      ? parseFinplanCostIds(args.finplanCostIdsRaw)
-      : request.finplanCostIds ?? [];
+    const rawFinplanIds = args.finplanEntryIdsRaw ?? args.finplanCostIdsRaw;
+    const finplanCostIds =
+      rawFinplanIds !== undefined
+        ? parseFinplanIdsInput(rawFinplanIds)
+        : getUnifiedFinplanCostIds(request);
+    const requestFinplanCostPatch = {
+      finplanEntryIds: finplanCostIds.length ? finplanCostIds : undefined,
+      finplanCostIds: undefined,
+      ...(finplanCostIds.length ? { finplanEntered: true } : {}),
+    };
 
     validateOptionalMoney(args.actualPaidAmount, "Сумма оплаты без НДС");
     validateOptionalMoney(args.actualPaidAmountWithVat, "Сумма оплаты с НДС");
@@ -3878,7 +3902,7 @@ export const updatePaymentStatus = mutation({
         plannedPaymentAmount: undefined,
         plannedPaymentAmountWithVat: undefined,
         paymentCurrencyRate: undefined,
-        finplanCostIds: finplanCostIds.length ? finplanCostIds : undefined,
+        ...requestFinplanCostPatch,
         paymentSplits: undefined,
         plannedPaymentSplits: undefined,
         actualPaidAmount: undefined,
@@ -4048,7 +4072,7 @@ export const updatePaymentStatus = mutation({
         paymentResidualAmount: remainingAmount,
         paymentResidualAmountWithVat: remainingAmountWithVat,
         paymentCurrencyRate: effectiveCurrencyRate,
-        finplanCostIds: finplanCostIds.length ? finplanCostIds : undefined,
+        ...requestFinplanCostPatch,
         plannedPaymentSplits: nextPlannedPaymentSplits.length ? nextPlannedPaymentSplits : undefined,
         paymentReminderSentAt: undefined,
         paymentDeadlineReminderLastDateKey: undefined,
@@ -4178,9 +4202,7 @@ export const updatePaymentStatus = mutation({
         plannedPaymentAmount: updatedPlannedQueue.plannedPaymentAmount,
         plannedPaymentAmountWithVat: updatedPlannedQueue.plannedPaymentAmountWithVat,
         paymentCurrencyRate: effectiveCurrencyRate,
-        finplanCostIds: finplanCostIds.length
-          ? Array.from(new Set([...(request.finplanCostIds ?? []), ...finplanCostIds]))
-          : request.finplanCostIds,
+        ...requestFinplanCostPatch,
         actualPaidAmount: cumulativePaid,
         actualPaidAmountWithVat: cumulativePaidWithVat > 0 ? cumulativePaidWithVat : undefined,
         paymentReminderSentAt: undefined,
@@ -4249,7 +4271,7 @@ export const updatePaymentStatus = mutation({
         paidAt,
         paidByEmail: email,
         paidByName: actorName,
-        finplanCostIds: finplanCostIds.length ? finplanCostIds : undefined,
+        ...requestFinplanCostPatch,
         actualPaidAmount: finalPaidAmount,
         actualPaidAmountWithVat: finalPaidAmountWithVat,
         paymentResidualAmount: undefined,
