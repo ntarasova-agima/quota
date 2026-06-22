@@ -7,7 +7,12 @@ import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import DateRangeFilter from "@/components/date-range-filter";
 import RequestMetaSummary from "@/components/request-meta-summary";
-import { getBuhPaymentStatusSummary, getUnallocatedPaymentAmounts } from "@/lib/requestStatus";
+import {
+  getBuhPaymentStatusSummary,
+  getPaymentDeadlineTimestamp,
+  getPaymentTaskTimestamp,
+  getUnallocatedPaymentAmounts,
+} from "@/lib/requestStatus";
 import { formatAmountPair } from "@/lib/vat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -100,7 +105,7 @@ export default function ApprovalsPage() {
     () => hasFinanceApproverRole({ roles: myRoles ?? [], hodDepartments: myProfile?.hodDepartments ?? [] }),
     [myProfile?.hodDepartments, myRoles],
   );
-  const isFinanceRole = myRoles?.includes("BUH") || isFinanceHead;
+  const isFinanceRole = myRoles?.includes("BUH") || myRoles?.includes("BUH Payment") || isFinanceHead;
   const canFilterByTags = myRoles?.some((role) => ["CFD", "BUH", "COO", "ADMIN"].includes(role)) || isFinanceHead;
   const cfdTags = useQuery(api.cfdTags.list, canFilterByTags ? {} : "skip");
   const todayStart = useMemo(() => {
@@ -153,13 +158,14 @@ export default function ApprovalsPage() {
     }
     if (isFinanceRole && buhQuickFilter !== "all") {
       filtered = filtered.filter(({ kind, request }) => {
-        if (kind !== "payment" || !request.neededBy) {
+        const paymentTaskAt = getPaymentTaskTimestamp(request);
+        if (kind !== "payment" || !paymentTaskAt) {
           return false;
         }
         if (buhQuickFilter === "today") {
-          return request.neededBy >= todayStart && request.neededBy < tomorrowStart;
+          return paymentTaskAt >= todayStart && paymentTaskAt < tomorrowStart;
         }
-        return request.neededBy < todayStart;
+        return paymentTaskAt < todayStart;
       });
     }
     if (statusFilters.length > 0) {
@@ -461,6 +467,7 @@ export default function ApprovalsPage() {
                         kind === "payment" ? getBuhPaymentStatusSummary(request) : null;
                       const unallocatedPaymentAmounts =
                         kind === "payment" ? getUnallocatedPaymentAmounts(request) : null;
+                      const paymentDeadline = getPaymentDeadlineTimestamp(request);
 
                       return (
                         <Link
@@ -508,8 +515,8 @@ export default function ApprovalsPage() {
                                 <HoverHint label="Дата, к которой заявку нужно оплатить">
                                   <span>
                                     Дедлайн оплаты:{" "}
-                                    {request.neededBy
-                                      ? new Date(request.neededBy).toLocaleDateString("ru-RU")
+                                    {paymentDeadline
+                                      ? new Date(paymentDeadline).toLocaleDateString("ru-RU")
                                       : "не указан"}
                                   </span>
                                 </HoverHint>

@@ -19,7 +19,14 @@ type RequestLike = {
     amountWithoutVat?: number;
     amountWithVat?: number;
     vatRate?: number;
+    plannedAt?: number;
   }>;
+  paymentSplits?: Array<{
+    nextPaymentAt?: number;
+  }>;
+  paymentDeadline?: number;
+  neededBy?: number;
+  paymentPlannedAt?: number;
   paymentResidualAmount?: number;
   paymentResidualAmountWithVat?: number;
   vatRate?: number;
@@ -28,6 +35,59 @@ type RequestLike = {
 type ApprovalLike = {
   status: "pending" | "approved" | "rejected";
 };
+
+export const OPEN_PAYMENT_TASK_STATUSES = [
+  "approved",
+  "awaiting_payment",
+  "payment_planned",
+  "partially_paid",
+] as const;
+
+export function getPaymentDeadlineTimestamp(request: Pick<RequestLike, "paymentDeadline" | "neededBy">) {
+  return request.paymentDeadline ?? request.neededBy;
+}
+
+function isUsableTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+export function getPaymentTaskTimestamp(
+  request: Pick<
+    RequestLike,
+    "status" | "paymentDeadline" | "neededBy" | "paymentPlannedAt" | "plannedPaymentSplits" | "paymentSplits"
+  >,
+) {
+  if (["payment_planned", "partially_paid"].includes(request.status)) {
+    const plannedDates = [
+      request.paymentPlannedAt,
+      ...(request.plannedPaymentSplits ?? []).map((split) => split.plannedAt),
+      ...(request.paymentSplits ?? []).map((split) => split.nextPaymentAt),
+    ].filter(isUsableTimestamp);
+    if (plannedDates.length > 0) {
+      return Math.min(...plannedDates);
+    }
+  }
+  return getPaymentDeadlineTimestamp(request);
+}
+
+export function isOpenPaymentTask(
+  request: Pick<
+    RequestLike,
+    | "status"
+    | "isCanceled"
+    | "paymentDeadline"
+    | "neededBy"
+    | "paymentPlannedAt"
+    | "plannedPaymentSplits"
+    | "paymentSplits"
+  >,
+) {
+  return (
+    !request.isCanceled &&
+    OPEN_PAYMENT_TASK_STATUSES.includes(request.status as (typeof OPEN_PAYMENT_TASK_STATUSES)[number]) &&
+    getPaymentTaskTimestamp(request) !== undefined
+  );
+}
 
 function resolvePaymentAmountPair(params: {
   amountWithoutVat?: number;

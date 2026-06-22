@@ -23,7 +23,11 @@ import { api } from "@/lib/convex";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
-import { getBuhPaymentStatusSummary, getRequestStatusSummary } from "@/lib/requestStatus";
+import {
+  getBuhPaymentStatusSummary,
+  getRequestStatusSummary,
+  isOpenPaymentTask,
+} from "@/lib/requestStatus";
 import { EMPTY_BUSINESS_CATEGORY, EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
 import { hasFinanceApproverRole } from "@/lib/financeRole";
 import { normalizeRequestCategory } from "@/lib/requestRules";
@@ -177,7 +181,7 @@ export default function RequestsPage() {
     [isFinanceHead, myRoles],
   );
   const isFinanceRole = useMemo(
-    () => myRoles?.includes("BUH") || isFinanceHead,
+    () => myRoles?.includes("BUH") || myRoles?.includes("BUH Payment") || isFinanceHead,
     [isFinanceHead, myRoles],
   );
   const rawView = searchParams.get("view") ?? "my";
@@ -438,7 +442,7 @@ export default function RequestsPage() {
                 {myRequestItems.length ? (
                   myRequestItems.map(({ request, approvals }) => {
                     const baseStatusSummary =
-                      isFinanceRole && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                      isFinanceRole && isOpenPaymentTask(request)
                         ? getBuhPaymentStatusSummary(request)
                         : getRequestStatusSummary(request, approvals);
                     const isActionableForViewer =
@@ -845,14 +849,14 @@ export default function RequestsPage() {
               <CardContent>
                 {isFinanceRole && paymentDueFilter !== "all" ? (
                   <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    Показываем заявки с остатком к оплате, включая частично оплаченные.
+                    Показываем согласованные заявки с платежными сроками, включая запланированные и частично оплаченные.
                   </div>
                 ) : null}
                 <div className="space-y-3">
                   {allRequestItems.length ? (
                     allRequestItems.map(({ request, approvals }) => {
                       const baseStatusSummary =
-                        isFinanceRole && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                        isFinanceRole && isOpenPaymentTask(request)
                           ? getBuhPaymentStatusSummary(request)
                           : getRequestStatusSummary(request, approvals);
                       const isActionableForViewer =

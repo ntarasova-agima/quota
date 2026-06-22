@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   getApprovalStatusClass,
   getBuhPaymentStatusSummary,
+  getPaymentDeadlineTimestamp,
+  getPaymentTaskTimestamp,
   getRequestStatusSummary,
   getUnallocatedPaymentAmounts,
   hasUnallocatedPayment,
+  isOpenPaymentTask,
 } from "./requestStatus";
 
 describe("requestStatus", () => {
@@ -90,5 +93,32 @@ describe("requestStatus", () => {
       amountWithoutVat: 500,
       amountWithVat: 610,
     });
+  });
+
+  it("treats fully approved requests with payment dates as open payment tasks", () => {
+    expect(isOpenPaymentTask({ status: "approved", paymentDeadline: 1000 })).toBe(true);
+    expect(isOpenPaymentTask({ status: "approved" })).toBe(false);
+    expect(isOpenPaymentTask({ status: "paid", paymentDeadline: 1000 })).toBe(false);
+  });
+
+  it("uses planned payment dates before deadline dates for payment task filters", () => {
+    expect(
+      getPaymentTaskTimestamp({
+        status: "payment_planned",
+        paymentDeadline: 5000,
+        paymentPlannedAt: 3000,
+      }),
+    ).toBe(3000);
+
+    expect(
+      getPaymentTaskTimestamp({
+        status: "partially_paid",
+        paymentDeadline: 7000,
+        plannedPaymentSplits: [{ plannedAt: 6000 }],
+        paymentSplits: [{ nextPaymentAt: 4000 }],
+      }),
+    ).toBe(4000);
+
+    expect(getPaymentDeadlineTimestamp({ paymentDeadline: 9000, neededBy: 1000 })).toBe(9000);
   });
 });

@@ -21,6 +21,7 @@ import {
   getBuhPaymentStatusSummary,
   getRequestStatusSummary,
   getUnallocatedPaymentAmounts,
+  isOpenPaymentTask,
 } from "@/lib/requestStatus";
 import { EMPTY_BUSINESS_CATEGORY, FUNDING_SOURCES, HOD_DEPARTMENTS } from "@/lib/constants";
 import { getRoleLabel } from "@/lib/roleLabels";
@@ -115,7 +116,8 @@ type MentionCandidate = {
 };
 
 const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "HOD"] as const;
-const PAYMENT_REMINDER_STATUSES = ["awaiting_payment", "payment_planned", "partially_paid"] as const;
+const PAYMENT_ACTION_STATUSES = ["approved", "awaiting_payment", "payment_planned", "partially_paid"] as const;
+const PAYMENT_REMINDER_STATUSES = PAYMENT_ACTION_STATUSES;
 
 const MAX_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_SIZE = 40 * 1024 * 1024;
@@ -147,10 +149,14 @@ function canSendPaymentReminderForStatus(status: string | undefined) {
   return PAYMENT_REMINDER_STATUSES.includes(status as (typeof PAYMENT_REMINDER_STATUSES)[number]);
 }
 
+function canUpdatePaymentForStatus(status: string | undefined) {
+  return PAYMENT_ACTION_STATUSES.includes(status as (typeof PAYMENT_ACTION_STATUSES)[number]);
+}
+
 function getPaymentReminderErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  if (message.includes("Напоминание об оплате можно отправить только по заявке в оплате")) {
-    return "Напоминание можно отправить только по заявке, которая уже передана в оплату.";
+  if (message.includes("Напоминание об оплате можно отправить только по заявке")) {
+    return "Напоминание можно отправить только по заявке, ожидающей оплаты.";
   }
   return message || "Не удалось отправить напоминание об оплате";
 }
@@ -1159,7 +1165,7 @@ export default function RequestDetailPage() {
     ? normalizeEmail(viewerAccessQuery.trim())
     : null;
   const baseStatusSummary =
-    canSetPaymentPlanned && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+    canSetPaymentPlanned && isOpenPaymentTask(request)
       ? getBuhPaymentStatusSummary(request)
       : getRequestStatusSummary(request, approvals);
   const isActionableForViewer =
@@ -1179,7 +1185,7 @@ export default function RequestDetailPage() {
           ["payment_planned", "partially_paid"].includes(request.status) &&
           hasUnallocatedPayment
         ? "Есть нераспределенный платеж"
-      : canSetPaymentPlanned && ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+      : canSetPaymentPlanned && isOpenPaymentTask(request)
         ? "Нужно запланировать или оплатить"
         : isCreator && request.status === "paid"
           ? "Закройте заявку до конца следующего рабочего дня"
@@ -2567,7 +2573,7 @@ export default function RequestDetailPage() {
                                             className="h-9 border-cyan-600 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
                                             disabled={
                                               updatingStatus ||
-                                              !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                              !canUpdatePaymentForStatus(request.status)
                                             }
                                             onClick={handlePartialPayment}
                                           >
@@ -2578,7 +2584,7 @@ export default function RequestDetailPage() {
                                             className="h-9 border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
                                             disabled={
                                               updatingStatus ||
-                                              !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                              !canUpdatePaymentForStatus(request.status)
                                             }
                                             onClick={handlePaid}
                                           >
@@ -2676,7 +2682,7 @@ export default function RequestDetailPage() {
                                   className="h-9 border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100"
                                   disabled={
                                     updatingStatus ||
-                                    !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                    !canUpdatePaymentForStatus(request.status)
                                   }
                                   onClick={() => handlePlanPayment("full")}
                                 >
@@ -2688,7 +2694,7 @@ export default function RequestDetailPage() {
                                   className="h-9 border-blue-300 text-blue-700 hover:bg-blue-50"
                                   disabled={
                                     updatingStatus ||
-                                    !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+                                    !canUpdatePaymentForStatus(request.status)
                                   }
                                   onClick={() => handlePlanPayment("partial")}
                                 >

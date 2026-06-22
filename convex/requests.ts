@@ -70,6 +70,11 @@ import {
 import { isAgimaEmail, normalizeEmail } from "../src/lib/authRules";
 import { hasAnyRole, hasFinanceApproverRole } from "../src/lib/financeRole";
 import {
+  OPEN_PAYMENT_TASK_STATUSES,
+  getPaymentTaskTimestamp,
+  isOpenPaymentTask,
+} from "../src/lib/requestStatus";
+import {
   getAmountWithVat,
   normalizeVatRate,
   resolveVatAmounts,
@@ -1550,7 +1555,7 @@ async function loadRequestsForAllList(
   if (args.paymentDueFilter) {
     return (
       await Promise.all(
-        ["awaiting_payment", "payment_planned", "partially_paid"].map((status) =>
+        OPEN_PAYMENT_TASK_STATUSES.map((status) =>
           ctx.db
             .query("requests")
             .withIndex("by_status", (q: any) => q.eq("status", status as any))
@@ -1582,14 +1587,6 @@ function getRequestPaymentDeadline(request: { paymentDeadline?: number; neededBy
   return request.paymentDeadline ?? request.neededBy;
 }
 
-function isOpenPaymentTask(request: { status: string; paymentDeadline?: number; neededBy?: number; isCanceled?: boolean }) {
-  return (
-    !request.isCanceled &&
-    getRequestPaymentDeadline(request) !== undefined &&
-    ["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
-  );
-}
-
 async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymentDeadline?: number) {
   if (!paymentDeadline) {
     return;
@@ -1614,6 +1611,16 @@ async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymen
       reminderKind: "overdue",
     },
   );
+}
+
+async function sendPaymentPlanningRequestedAndScheduleReminders(
+  ctx: any,
+  request: { _id: any; paymentDeadline?: number; neededBy?: number },
+) {
+  await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+    requestId: request._id,
+  });
+  await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
 }
 
 async function schedulePlannedPaymentReminder(ctx: any, requestId: any, paymentPlannedAt?: number) {
@@ -1901,18 +1908,18 @@ export const listAllRequests = query({
         return false;
       }
       if (args.paymentDueFilter === "today") {
-        const paymentDeadline = getRequestPaymentDeadline(req);
+        const paymentTaskAt = getPaymentTaskTimestamp(req);
         if (
           !isOpenPaymentTask(req) ||
-          paymentDeadline! < todayBounds.start ||
-          paymentDeadline! > todayBounds.end
+          paymentTaskAt! < todayBounds.start ||
+          paymentTaskAt! > todayBounds.end
         ) {
           return false;
         }
       }
       if (args.paymentDueFilter === "overdue") {
-        const paymentDeadline = getRequestPaymentDeadline(req);
-        if (!isOpenPaymentTask(req) || paymentDeadline! >= todayBounds.start) {
+        const paymentTaskAt = getPaymentTaskTimestamp(req);
+        if (!isOpenPaymentTask(req) || paymentTaskAt! >= todayBounds.start) {
           return false;
         }
       }
@@ -2737,8 +2744,10 @@ export const editRequest = mutation({
       });
     }
     if (request.status !== "approved" && nextStatus === "approved") {
-      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-        requestId: args.id,
+      await sendPaymentPlanningRequestedAndScheduleReminders(ctx, {
+        _id: args.id,
+        paymentDeadline: nextForDiff.paymentDeadline,
+        neededBy: nextForDiff.neededBy,
       });
     }
     if (request.status !== "draft") {
@@ -3046,8 +3055,10 @@ export const createRequest = mutation({
       }
     }
     if (payloadArgs.submit && status === "approved") {
-      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-        requestId,
+      await sendPaymentPlanningRequestedAndScheduleReminders(ctx, {
+        _id: requestId,
+        paymentDeadline: payloadArgs.paymentDeadline,
+        neededBy: payloadArgs.neededBy,
       });
     }
     await ctx.scheduler.runAfter(0, internal.emails.sendRequestCreatedToBuh, {
@@ -3263,9 +3274,7 @@ export const updateContestSpecialist = mutation({
         : undefined,
     });
     if (request.status !== "approved" && nextStatus === "approved") {
-      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-        requestId: request._id,
-      });
+      await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
     }
     return { updated: true };
   },
@@ -3291,9 +3300,7 @@ export const adminSendPaymentPlanningNotification = mutation({
     if (request.status !== "approved") {
       throw new Error("Отбивку на оплату можно отправить только по согласованной заявке");
     }
-    await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-      requestId: request._id,
-    });
+    await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
     await logTimelineEvent(ctx, {
       requestId: request._id,
       type: "payment_planning_notification_queued",
@@ -3302,6 +3309,43 @@ export const adminSendPaymentPlanningNotification = mutation({
       actorName: roleRecord.fullName ?? undefined,
     });
     return { queued: true };
+  },
+});
+
+export const adminBackfillPaymentDeadlineReminders = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    if (!roleRecord?.active || !roleRecord.roles?.includes("ADMIN")) {
+      throw new Error("Not authorized");
+    }
+    const candidates = (
+      await Promise.all(
+        OPEN_PAYMENT_TASK_STATUSES.map((status) =>
+          ctx.db
+            .query("requests")
+            .withIndex("by_status", (q: any) => q.eq("status", status as any))
+            .collect(),
+        ),
+      )
+    ).flat();
+    let scheduled = 0;
+    for (const request of candidates) {
+      if (!isOpenPaymentTask(request)) {
+        continue;
+      }
+      const paymentDeadline = getRequestPaymentDeadline(request);
+      if (!paymentDeadline) {
+        continue;
+      }
+      await schedulePaymentDeadlineReminders(ctx, request._id, paymentDeadline);
+      scheduled += 1;
+    }
+    return { scheduled };
   },
 });
 
@@ -3736,21 +3780,21 @@ export const updatePaymentStatus = mutation({
     }
     if (
       args.status === "payment_planned" &&
-      !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+      !["approved", "awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
     ) {
-      throw new Error("Планировать оплату можно только после передачи в оплату");
+      throw new Error("Планировать оплату можно только по согласованной заявке");
     }
     if (
       args.status === "partially_paid" &&
-      !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+      !["approved", "awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
     ) {
-      throw new Error("Частичную оплату можно отметить только после передачи в оплату");
+      throw new Error("Частичную оплату можно отметить только по согласованной заявке");
     }
     if (
       args.status === "paid" &&
-      !["awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status)
+      !["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status)
     ) {
-      throw new Error("Статус Оплачено доступен только после передачи в оплату");
+      throw new Error("Статус Оплачено доступен только по согласованной заявке");
     }
     if (args.status === "closed" && !["approved", "paid"].includes(request.status)) {
       throw new Error("Закрыть можно только согласованную или оплаченную заявку");
@@ -4452,8 +4496,8 @@ export const remindPayment = mutation({
     if (!canRemind) {
       throw new Error("Not authorized");
     }
-    if (!["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)) {
-      throw new Error("Напоминание об оплате можно отправить только по заявке в оплате");
+    if (!isOpenPaymentTask(request)) {
+      throw new Error("Напоминание об оплате можно отправить только по заявке, ожидающей оплаты");
     }
     await ctx.scheduler.runAfter(0, internal.emails.sendManualPaymentReminder, {
       requestId: args.requestId,

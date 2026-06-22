@@ -16,6 +16,11 @@ import {
   getActingHodDepartments,
   hasFinanceApproverRole,
 } from "../src/lib/financeRole";
+import {
+  OPEN_PAYMENT_TASK_STATUSES,
+  getPaymentDeadlineTimestamp,
+  isOpenPaymentTask,
+} from "../src/lib/requestStatus";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -40,6 +45,49 @@ const additionalApprovalRoleEnum = v.union(
   v.literal("HOD"),
 );
 const forwardModeEnum = v.union(v.literal("approve"), v.literal("defer"));
+
+function startOfDate(timestamp: number) {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+async function schedulePaymentDeadlineReminders(ctx: any, request: { _id: any; paymentDeadline?: number; neededBy?: number }) {
+  const paymentDeadline = getPaymentDeadlineTimestamp(request);
+  if (!paymentDeadline) {
+    return;
+  }
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  await ctx.scheduler.runAfter(
+    Math.max(0, startOfDate(paymentDeadline) - dayMs - now),
+    internal.emails.sendPaymentDeadlineReminder,
+    {
+      requestId: request._id,
+      paymentDeadline,
+      reminderKind: "before",
+    },
+  );
+  await ctx.scheduler.runAfter(
+    Math.max(0, startOfDate(paymentDeadline) + dayMs - now),
+    internal.emails.sendPaymentDeadlineReminder,
+    {
+      requestId: request._id,
+      paymentDeadline,
+      reminderKind: "overdue",
+    },
+  );
+}
+
+async function sendPaymentPlanningRequestedAndScheduleReminders(
+  ctx: any,
+  request: { _id: any; paymentDeadline?: number; neededBy?: number },
+) {
+  await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+    requestId: request._id,
+  });
+  await schedulePaymentDeadlineReminders(ctx, request);
+}
 
 export const listPendingForMe = query({
   args: {},
@@ -110,7 +158,7 @@ export const listPendingForMe = query({
     if (roles.some((role) => ["BUH", "BUH Payment"].includes(role)) || canActAsFinance) {
       const paymentRequests = (
         await Promise.all(
-          ["awaiting_payment", "payment_planned", "partially_paid"].map((status) =>
+          OPEN_PAYMENT_TASK_STATUSES.map((status) =>
             ctx.db
               .query("requests")
               .withIndex("by_status", (q) => q.eq("status", status as any))
@@ -122,7 +170,7 @@ export const listPendingForMe = query({
         if (
           seen.has(request._id) ||
           request.isCanceled ||
-          !["awaiting_payment", "payment_planned", "partially_paid"].includes(request.status)
+          !isOpenPaymentTask(request)
         ) {
           continue;
         }
@@ -466,9 +514,7 @@ export const decide = mutation({
       });
     }
     if (args.decision === "approved" && status === "approved") {
-      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-        requestId: request._id,
-      });
+      await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
     }
 
     return { status };
@@ -571,9 +617,7 @@ export const skipOptionalApproval = mutation({
       },
     });
     if (status === "approved") {
-      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-        requestId: request._id,
-      });
+      await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
     }
     return { status, skipped: true };
   },
@@ -718,9 +762,7 @@ export const adminApproveAsRole = mutation({
       requestStatus: status,
     });
     if (status === "approved") {
-      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-        requestId: request._id,
-      });
+      await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
     }
     return { status };
   },
