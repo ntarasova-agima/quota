@@ -1202,9 +1202,16 @@ export default function RequestDetailPage() {
       requestId: request._id,
       specialistId,
       name: (overrides.name ?? draft.name ?? "").trim(),
-      contractorLegalEntity: (overrides.contractorLegalEntity ?? draft.contractorLegalEntity)?.trim() || undefined,
+      sourceType: normalizeContestSpecialistSource(overrides.sourceType ?? draft.sourceType),
+      contractorLegalEntity:
+        normalizeContestSpecialistSource(overrides.sourceType ?? draft.sourceType) === "contractor"
+          ? (overrides.contractorLegalEntity ?? draft.contractorLegalEntity)?.trim() || undefined
+          : undefined,
       department: overrides.department ?? draft.department,
-      contractorTypes: overrides.contractorTypes ?? draft.contractorTypes,
+      contractorTypes:
+        normalizeContestSpecialistSource(overrides.sourceType ?? draft.sourceType) === "contractor"
+          ? overrides.contractorTypes ?? draft.contractorTypes
+          : [],
       hours: overrides.hours ?? draft.hours,
       directCost: overrides.directCost ?? draft.directCost,
       taxAmount: overrides.taxAmount ?? draft.taxAmount,
@@ -3357,6 +3364,8 @@ export default function RequestDetailPage() {
                       {section.items.length ? (
                         section.items.map((item) => {
                           const draft = specialistDrafts[item.id] ?? item;
+                          const draftSourceType = normalizeContestSpecialistSource(draft.sourceType);
+                          const isDraftContractor = draftSourceType === "contractor";
                           const canBuhValidateThis =
                             !item.validationSkipped &&
                             (myRoles.includes("BUH") ||
@@ -3387,11 +3396,41 @@ export default function RequestDetailPage() {
                             >
                               <div
                                 className={
-                                  section.key === "contractor"
-                                    ? "grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]"
-                                    : "grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]"
+                                  isDraftContractor
+                                    ? "grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]"
+                                    : "grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]"
                                 }
                               >
+                                <Select
+                                  value={draftSourceType}
+                                  onValueChange={(value) => {
+                                    const nextSourceType = normalizeContestSpecialistSource(value);
+                                    setSpecialistDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: {
+                                        ...draft,
+                                        sourceType: nextSourceType,
+                                        contractorLegalEntity:
+                                          nextSourceType === "contractor"
+                                            ? draft.contractorLegalEntity
+                                            : undefined,
+                                        contractorTypes:
+                                          nextSourceType === "contractor"
+                                            ? draft.contractorTypes
+                                            : [],
+                                      },
+                                    }));
+                                  }}
+                                  disabled={!canEditThis}
+                                >
+                                  <SelectTrigger className="min-w-0 w-full">
+                                    <SelectValue placeholder="Тип" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="internal">Штатник</SelectItem>
+                                    <SelectItem value="contractor">Подрядчик</SelectItem>
+                                  </SelectContent>
+                                </Select>
                                 <Input
                                   className="min-w-0"
                                   value={draft.name}
@@ -3402,9 +3441,9 @@ export default function RequestDetailPage() {
                                     }))
                                   }
                                   disabled={!canEditThis}
-                                  placeholder={section.key === "contractor" ? "Подрядчик" : "Специалист"}
+                                  placeholder={isDraftContractor ? "Подрядчик" : "Специалист"}
                                 />
-                                {section.key === "contractor" ? (
+                                {isDraftContractor ? (
                                   <Input
                                     className="min-w-0"
                                     value={draft.contractorLegalEntity ?? ""}
@@ -3499,7 +3538,7 @@ export default function RequestDetailPage() {
                                   placeholder="Налоги"
                                 />
                               </div>
-                              {section.key === "contractor" ? (
+                              {isDraftContractor ? (
                                 <div className="space-y-2">
                                   <div className="text-sm font-medium">Тип подрядчика</div>
                                   <div className="flex flex-wrap gap-3">

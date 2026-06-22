@@ -3121,6 +3121,7 @@ export const updateContestSpecialist = mutation({
     specialistId: v.string(),
     name: v.string(),
     contractorLegalEntity: v.optional(v.string()),
+    sourceType: v.optional(v.string()),
     department: v.optional(v.string()),
     contractorTypes: v.optional(v.array(v.string())),
     hours: v.optional(v.number()),
@@ -3187,17 +3188,9 @@ export const updateContestSpecialist = mutation({
     }
     const nextSpecialist = {
       ...current,
+      sourceType: normalizeContestSpecialistSource(args.sourceType ?? current.sourceType),
       name: args.name.trim(),
-      contractorLegalEntity: args.contractorLegalEntity?.trim() || undefined,
       department: nextDepartment,
-      contractorTypes: Array.from(
-        new Set(
-          (args.contractorTypes ?? current.contractorTypes ?? [])
-            .map((value) => value?.trim())
-            .map((value) => (value === "другое" ? "другое/не знаю" : value))
-            .filter(Boolean) as string[],
-        ),
-      ),
       hours:
         typeof args.hours === "number" && Number.isFinite(args.hours)
           ? args.hours
@@ -3216,6 +3209,21 @@ export const updateContestSpecialist = mutation({
       hodConfirmed: args.hodConfirmed ?? current.hodConfirmed ?? false,
       buhConfirmed: args.buhConfirmed ?? current.buhConfirmed ?? false,
     };
+    nextSpecialist.contractorLegalEntity =
+      nextSpecialist.sourceType === "contractor"
+        ? args.contractorLegalEntity?.trim() || undefined
+        : undefined;
+    nextSpecialist.contractorTypes =
+      nextSpecialist.sourceType === "contractor"
+        ? Array.from(
+            new Set(
+              (args.contractorTypes ?? current.contractorTypes ?? [])
+                .map((value) => value?.trim())
+                .map((value) => (value === "другое" ? "другое/не знаю" : value))
+                .filter(Boolean) as string[],
+            ),
+          )
+        : [];
     if (nextSpecialist.amountIncludesTaxes && nextSpecialist.amountExcludesTaxes) {
       throw new Error("Выберите только один вариант: сумма уже с налогами или сумма не включает налоги");
     }
@@ -3255,6 +3263,9 @@ export const updateContestSpecialist = mutation({
       { specialists },
     );
     if (specialistChanges.length) {
+      const summaryLines = specialistChanges.map(
+        (change) => `${change.field}: ${change.fromValue || "—"} → ${change.toValue || "—"}`,
+      );
       await recordRequestChanges(
         ctx,
         request._id,
@@ -3262,6 +3273,21 @@ export const updateContestSpecialist = mutation({
         roleRecord?.fullName ?? undefined,
         specialistChanges,
       );
+      const specialistBuhRolesToNotify = Array.from(
+        new Set([
+          ...getSpecialistBuhRolesForRequest(request),
+          ...getSpecialistBuhRolesForRequest({ specialists }),
+        ]),
+      );
+      if (specialistBuhRolesToNotify.length > 0) {
+        await ctx.scheduler.runAfter(0, internal.emails.sendSpecialistBuhNotifications, {
+          requestId: request._id,
+          targetRoles: specialistBuhRolesToNotify,
+          summaryLines,
+          actorEmail: email,
+          actorName: roleRecord?.fullName ?? undefined,
+        });
+      }
     }
     await logTimelineEvent(ctx, {
       requestId: request._id,
@@ -3275,6 +3301,11 @@ export const updateContestSpecialist = mutation({
     });
     if (request.status !== "approved" && nextStatus === "approved") {
       await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
+    }
+    if (request.status !== "hod_pending" && nextStatus === "hod_pending") {
+      await ctx.scheduler.runAfter(0, internal.emails.sendHodValidationRequest, {
+        requestId: request._id,
+      });
     }
     return { updated: true };
   },
