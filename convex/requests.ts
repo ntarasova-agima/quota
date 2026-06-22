@@ -1236,6 +1236,111 @@ function diffRequestFields(previous: any, next: any) {
     .filter(Boolean) as Array<{ field: string; fromValue?: string; toValue?: string }>;
 }
 
+function getSpecialistDisplayName(item: any) {
+  return item?.name?.trim() || item?.contractorLegalEntity?.trim() || "Специалист без имени";
+}
+
+function getSpecialistSourceLabel(value?: string) {
+  return normalizeContestSpecialistSource(value) === "contractor" ? "Подрядчик" : "Штат";
+}
+
+function formatSpecialistSummaryValue(field: string, value: unknown) {
+  if (value === undefined || value === null || value === "") {
+    return "—";
+  }
+  if (field === "sourceType") {
+    return getSpecialistSourceLabel(String(value));
+  }
+  if (field === "contractorTypes" && Array.isArray(value)) {
+    return value.length ? value.join(", ") : "—";
+  }
+  if (field === "fotMonth" && typeof value === "string") {
+    return formatMonthKeyLabel(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "да" : "нет";
+  }
+  return String(value);
+}
+
+function summarizeSpecialistChanges(previousSpecialists: any[] = [], nextSpecialists: any[] = []) {
+  const previousById = new Map(previousSpecialists.map((item, index) => [item.id ?? `index-${index}`, item]));
+  const nextById = new Map(nextSpecialists.map((item, index) => [item.id ?? `index-${index}`, item]));
+  const ids = Array.from(new Set([...previousById.keys(), ...nextById.keys()]));
+  const fieldLabels: Record<string, string> = {
+    sourceType: "тип специалиста",
+    name: "имя",
+    contractorLegalEntity: "ЮЛ",
+    contractorTypes: "тип подрядчика",
+    department: "цех",
+    hours: "часы",
+    directCost: "сумма",
+    taxAmount: "налоги",
+    taxUnknown: "налоги не определены",
+    amountIncludesTaxes: "сумма уже с налогами",
+    amountExcludesTaxes: "сумма не включает налоги",
+    validationSkipped: "валидация не требуется",
+    hodConfirmed: "подтверждено HOD",
+    buhConfirmed: "подтверждено BUH",
+    fotRecorded: "ФОТ вынесен",
+    fotMonth: "месяц ФОТ",
+  };
+  const sideEffectFieldsOnTypeChange = new Set([
+    "contractorLegalEntity",
+    "contractorTypes",
+    "taxAmount",
+    "taxUnknown",
+    "amountIncludesTaxes",
+    "amountExcludesTaxes",
+    "validationSkipped",
+    "hodConfirmed",
+    "buhConfirmed",
+    "fotRecorded",
+    "fotMonth",
+    "fotRecordedAt",
+    "fotRecordedByEmail",
+    "fotRecordedByName",
+  ]);
+  const comparableFields = Object.keys(fieldLabels);
+
+  return ids.flatMap((id) => {
+    const previous = previousById.get(id);
+    const next = nextById.get(id);
+    const name = getSpecialistDisplayName(next ?? previous);
+    if (!previous && next) {
+      return [`${name}: добавлен ${getSpecialistSourceLabel(next.sourceType)}`];
+    }
+    if (previous && !next) {
+      return [`${name}: удален`];
+    }
+    if (!previous || !next) {
+      return [];
+    }
+
+    const sourceChanged =
+      normalizeContestSpecialistSource(previous.sourceType) !==
+      normalizeContestSpecialistSource(next.sourceType);
+    const details = comparableFields
+      .filter((field) => !(sourceChanged && sideEffectFieldsOnTypeChange.has(field)))
+      .flatMap((field) => {
+        const previousValue = field === "sourceType"
+          ? normalizeContestSpecialistSource(previous[field])
+          : previous[field];
+        const nextValue = field === "sourceType"
+          ? normalizeContestSpecialistSource(next[field])
+          : next[field];
+        if (JSON.stringify(previousValue ?? null) === JSON.stringify(nextValue ?? null)) {
+          return [];
+        }
+        return [
+          `${fieldLabels[field]} ${formatSpecialistSummaryValue(field, previousValue)} → ${formatSpecialistSummaryValue(field, nextValue)}`,
+        ];
+      });
+
+    return details.length ? [`${name}: ${details.join("; ")}`] : [];
+  });
+}
+
 function summarizeEditEffects(lines: string[]) {
   return lines.length ? lines.join(" ") : "Изменения сохранены.";
 }
@@ -2826,6 +2931,9 @@ export const editRequest = mutation({
     const specialistsChanged = changes.some(
       (change) => change.field === requestFieldLabels.specialists,
     );
+    const specialistSummaryLines = specialistsChanged
+      ? summarizeSpecialistChanges(request.specialists ?? [], normalizedSpecialists)
+      : [];
     const historyGroupId = `${now}-${Math.round(Math.random() * 1_000_000)}`;
     const historySummaryLines = [
       ...editImpact.confirmationLines,
@@ -2997,8 +3105,8 @@ export const editRequest = mutation({
         requestId: args.id,
         targetRoles: specialistBuhRolesToNotify,
         summaryLines:
-          request.status !== "draft" && specialistsChanged && summaryLines.length
-            ? summaryLines
+          request.status !== "draft" && specialistsChanged
+            ? (specialistSummaryLines.length ? specialistSummaryLines : summaryLines)
             : undefined,
         actorEmail: request.status !== "draft" && specialistsChanged ? email : undefined,
         actorName: request.status !== "draft" && specialistsChanged ? actorName : undefined,
@@ -3440,9 +3548,12 @@ export const updateContestSpecialist = mutation({
       { specialists },
     );
     if (specialistChanges.length) {
-      const summaryLines = specialistChanges.map(
-        (change) => `${change.field}: ${change.fromValue || "—"} → ${change.toValue || "—"}`,
-      );
+      const specialistSummaryLines = summarizeSpecialistChanges(request.specialists ?? [], specialists);
+      const summaryLines = specialistSummaryLines.length
+        ? specialistSummaryLines
+        : specialistChanges.map(
+            (change) => `${change.field}: ${change.fromValue || "—"} → ${change.toValue || "—"}`,
+          );
       await recordRequestChanges(
         ctx,
         request._id,

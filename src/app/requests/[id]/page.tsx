@@ -3399,7 +3399,7 @@ export default function RequestDetailPage() {
                                           setSavingSpecialistId(item.id);
                                           setError(null);
                                           try {
-                                            const nextFotRecorded = Boolean(draft.fotRecorded || !item.fotRecorded);
+                                            const nextFotRecorded = Boolean(draft.fotRecorded);
                                             await updateSpecialistFot({
                                               requestId: request._id,
                                               specialistId: item.id,
@@ -3425,7 +3425,7 @@ export default function RequestDetailPage() {
                                           }
                                         }}
                                       >
-                                        {item.fotRecorded && !draft.fotRecorded ? "Снять ФОТ" : "ФОТ вынесен"}
+                                        Сохранить ФОТ
                                       </Button>
                                       {draft.fotRecorded && draft.fotRecordedByEmail ? (
                                         <div className="w-full text-xs text-muted-foreground">
