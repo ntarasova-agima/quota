@@ -2426,7 +2426,7 @@ export default function RequestDetailPage() {
                                       setPaymentActionError(null);
                                       if (!canSendPaymentReminderForStatus(request.status)) {
                                         setPaymentActionError(
-                                          "Напоминание можно отправить только по заявке, которая уже передана в оплату.",
+                                          "Напоминание можно отправить только по заявке, ожидающей оплаты.",
                                         );
                                         return;
                                       }
@@ -2701,6 +2701,93 @@ export default function RequestDetailPage() {
                                   {partialPlanButtonLabel}
                                 </Button>
                               </div>
+                              {!activePlannedPaymentRow && canSetPaid ? (
+                                <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
+                                  <div className="text-sm font-medium">Если уже оплачено</div>
+                                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] xl:items-end">
+                                    <div className="space-y-2">
+                                      <Label htmlFor="paymentExecutedAmountDirect">Сумма без НДС</Label>
+                                      <Input
+                                        id="paymentExecutedAmountDirect"
+                                        inputMode="decimal"
+                                        value={paymentExecutedAmount}
+                                        onChange={(event) => {
+                                          const nextAmount = sanitizeNumericInput(event.target.value);
+                                          setPaymentExecutedAmount(nextAmount);
+                                          setPaymentActionError(null);
+                                          const synced = syncVatInputPair({
+                                            amountWithoutVatInput: nextAmount,
+                                            amountWithVatInput: paymentExecutedAmountWithVat,
+                                            vatRateInput: String(paymentVatRate),
+                                            source: "without",
+                                          });
+                                          setPaymentExecutedAmountWithVat(synced.amountWithVatInput);
+                                        }}
+                                        placeholder={`Например, ${remainingPaymentAmounts.amountWithoutVat ?? request.amount}`}
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label htmlFor="paymentExecutedAmountWithVatDirect">Сумма с НДС</Label>
+                                      <Input
+                                        id="paymentExecutedAmountWithVatDirect"
+                                        inputMode="decimal"
+                                        value={paymentExecutedAmountWithVat}
+                                        onChange={(event) => {
+                                          const nextAmountWithVat = sanitizeNumericInput(event.target.value);
+                                          setPaymentExecutedAmountWithVat(nextAmountWithVat);
+                                          setPaymentActionError(null);
+                                          const synced = syncVatInputPair({
+                                            amountWithoutVatInput: paymentExecutedAmount,
+                                            amountWithVatInput: nextAmountWithVat,
+                                            vatRateInput: String(paymentVatRate),
+                                            source: "with",
+                                          });
+                                          setPaymentExecutedAmount(synced.amountWithoutVatInput);
+                                        }}
+                                        placeholder={`Например, ${
+                                          remainingPaymentAmounts.amountWithVat ??
+                                          request.amountWithVat ??
+                                          calculateAmountWithVat(request.amount, paymentVatRate)
+                                        }`}
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label htmlFor="paymentExecutedDateDirect">Дата оплаты</Label>
+                                      <Input
+                                        id="paymentExecutedDateDirect"
+                                        type="date"
+                                        value={paymentExecutedDate}
+                                        onChange={(event) => {
+                                          setPaymentExecutedDate(event.target.value);
+                                          setPaymentActionError(null);
+                                        }}
+                                      />
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      className="h-9 border-cyan-600 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
+                                      disabled={
+                                        updatingStatus ||
+                                        !canUpdatePaymentForStatus(request.status)
+                                      }
+                                      onClick={handlePartialPayment}
+                                    >
+                                      Частично оплачено
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      className="h-9 border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
+                                      disabled={
+                                        updatingStatus ||
+                                        !canUpdatePaymentForStatus(request.status)
+                                      }
+                                      onClick={handlePaid}
+                                    >
+                                      Оплачено
+                                    </Button>
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
 
