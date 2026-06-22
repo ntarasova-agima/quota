@@ -477,6 +477,7 @@ export default function ApprovalsPage() {
                       const unallocatedPaymentAmounts =
                         kind === "payment" ? getUnallocatedPaymentAmounts(request) : null;
                       const paymentDeadline = getPaymentDeadlineTimestamp(request);
+                      const paymentTaskAt = kind === "payment" ? getPaymentTaskTimestamp(request) : undefined;
 
                       return (
                         <Link
@@ -523,7 +524,7 @@ export default function ApprovalsPage() {
                               <div>
                                 <HoverHint label="Дата, к которой заявку нужно оплатить">
                                   <span>
-                                    Дедлайн оплаты:{" "}
+                                    Дедлайн автора:{" "}
                                     {paymentDeadline
                                       ? new Date(paymentDeadline).toLocaleDateString("ru-RU")
                                       : "не указан"}
@@ -531,11 +532,11 @@ export default function ApprovalsPage() {
                                 </HoverHint>
                               </div>
                               <div>
-                                <HoverHint label="Дата, которую указал BUH для оплаты">
+                                <HoverHint label="Дата, по которой идут напоминания и считается просрочка">
                                   <span>
-                                    Когда оплатим:{" "}
-                                    {request.paymentPlannedAt
-                                      ? new Date(request.paymentPlannedAt).toLocaleDateString("ru-RU")
+                                    Рабочая дата оплаты:{" "}
+                                    {paymentTaskAt
+                                      ? new Date(paymentTaskAt).toLocaleDateString("ru-RU")
                                       : "не запланировано"}
                                   </span>
                                 </HoverHint>

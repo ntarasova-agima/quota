@@ -637,7 +637,6 @@ export default function RequestDetailPage() {
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
   const [finplanEntered, setFinplanEntered] = useState(false);
   const [finplanEntryIdsRaw, setFinplanEntryIdsRaw] = useState("");
-  const [operationalPaymentDeadline, setOperationalPaymentDeadline] = useState("");
   const [operationalShipmentDate, setOperationalShipmentDate] = useState("");
   const [fotAllSpecialistsRecorded, setFotAllSpecialistsRecorded] = useState(false);
   const [savingOperationalFields, setSavingOperationalFields] = useState(false);
@@ -887,13 +886,6 @@ export default function RequestDetailPage() {
       setCustomTagName("");
       setFinplanEntered(data.request.finplanEntered ?? false);
       setFinplanEntryIdsRaw(getUnifiedFinplanCostIds(data.request).join("\n"));
-      setOperationalPaymentDeadline(
-        data.request.paymentDeadline
-          ? new Date(data.request.paymentDeadline).toISOString().slice(0, 10)
-          : data.request.neededBy
-            ? new Date(data.request.neededBy).toISOString().slice(0, 10)
-            : "",
-      );
       setOperationalShipmentDate(
         data.request.shipmentDate
           ? new Date(data.request.shipmentDate).toISOString().slice(0, 10)
@@ -2082,7 +2074,7 @@ export default function RequestDetailPage() {
                   <div>
                     <div className="text-lg font-semibold">Финансовые отметки</div>
                     <p className="text-sm text-muted-foreground">
-                      Здесь финотдел может уточнить финплан, дедлайн оплаты и дату отгрузки по проекту.
+                      Здесь финотдел может уточнить финплан и дату отгрузки по проекту.
                     </p>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -2108,17 +2100,6 @@ export default function RequestDetailPage() {
                             }}
                             placeholder="ID затрат или ссылки на строки, по одной в строке"
                             rows={2}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Дедлайн оплаты</Label>
-                          <Input
-                            type="date"
-                            value={operationalPaymentDeadline}
-                            onChange={(event) => {
-                              markOperationalFieldsDirty();
-                              setOperationalPaymentDeadline(event.target.value);
-                            }}
                           />
                         </div>
                         <div className="space-y-2">
@@ -2176,10 +2157,6 @@ export default function RequestDetailPage() {
                               ? finplanEntered || Boolean(finplanEntryIds?.length)
                               : undefined,
                             finplanEntryIds,
-                            paymentDeadline:
-                              canManageOperationalFields && operationalPaymentDeadline
-                                ? new Date(`${operationalPaymentDeadline}T00:00:00`).getTime()
-                                : undefined,
                             shipmentDate:
                               canManageOperationalFields && operationalShipmentDate
                                 ? new Date(`${operationalShipmentDate}T00:00:00`).getTime()
@@ -3213,9 +3190,9 @@ export default function RequestDetailPage() {
                       </p>
                     </div>
                     <div>
-                      <div className="text-muted-foreground">Дедлайн оплаты</div>
+                      <div className="text-muted-foreground">Дедлайн оплаты от автора</div>
                       <p className="mt-1">
-                        <HoverHint label="Когда нужно оплатить">
+                        <HoverHint label="Дата, которую указал автор заявки. После планирования оплаты рабочей датой считается дата BUH.">
                           <span>
                             {(request.paymentDeadline ?? request.neededBy)
                               ? new Date(request.paymentDeadline ?? request.neededBy!).toLocaleDateString("ru-RU")

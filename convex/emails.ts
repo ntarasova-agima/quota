@@ -13,6 +13,10 @@ import {
 import { supportsRequestSpecialists, usesServiceRecipientLabel } from "../src/lib/requestRules";
 import { hasFinanceApproverRole } from "../src/lib/financeRole";
 import { formatAmountPair } from "../src/lib/vat";
+import {
+  getPaymentDeadlineTimestamp,
+  getPaymentTaskTimestamp,
+} from "../src/lib/requestStatus";
 
 const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
 const roleEnum = v.union(
@@ -98,8 +102,17 @@ function requestHasOutsourceSpecialists(request: any) {
 }
 
 function getPaymentDeadlineLabel(request: any) {
-  const timestamp = request.paymentDeadline ?? request.neededBy;
+  const timestamp = getPaymentDeadlineTimestamp(request);
   return timestamp ? new Date(timestamp).toLocaleDateString("ru-RU") : "не задан";
+}
+
+function isPaymentUsingPlannedDate(request: any, timestamp?: number) {
+  const authorDeadline = getPaymentDeadlineTimestamp(request);
+  return Boolean(
+    timestamp &&
+      ["payment_planned", "partially_paid"].includes(request.status) &&
+      getDateKey(timestamp) !== getDateKey(authorDeadline),
+  );
 }
 
 function getDateKey(timestamp?: number) {
@@ -1062,12 +1075,18 @@ export const sendPaymentPlanned = internalAction({
     }
     const { request } = data;
     const link = `${getBaseUrl()}/requests/${request._id}`;
-    const paymentDeadline = request.paymentDeadline ?? request.neededBy;
+    const paymentDeadline = getPaymentDeadlineTimestamp(request);
     const plannedDateDiffersFromDeadline = Boolean(
       request.paymentPlannedAt &&
         paymentDeadline &&
         getDateKey(request.paymentPlannedAt) !== getDateKey(paymentDeadline),
     );
+    const plannedDateRelation =
+      request.paymentPlannedAt && paymentDeadline
+        ? request.paymentPlannedAt > paymentDeadline
+          ? "позже"
+          : "раньше"
+        : undefined;
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "payment_planned",
@@ -1080,8 +1099,9 @@ export const sendPaymentPlanned = internalAction({
         <p>Дата оплаты: ${formatDate(request.paymentPlannedAt)}</p>
         ${
           plannedDateDiffersFromDeadline
-            ? `<p><strong>Дата оплаты отличается от дедлайна автора.</strong></p>
-               <p>Дедлайн оплаты в заявке: ${formatDate(paymentDeadline)}</p>`
+            ? `<p><strong>Дата оплаты ${plannedDateRelation} дедлайна автора.</strong></p>
+               <p>Дедлайн оплаты от автора: ${formatDate(paymentDeadline)}</p>
+               <p>Проверьте, устраивает ли вас плановая дата оплаты. Для напоминаний и просрочки теперь используется дата, которую поставил BUH.</p>`
             : ""
         }
         <p>Ссылка: <a href="${link}">${link}</a></p>
@@ -1190,10 +1210,13 @@ export const sendPaymentDeadlineReminder = internalAction({
     }
     const { request, roles } = data;
     const dateKey = `${args.reminderKind}:${new Date().toISOString().slice(0, 10)}`;
+    const effectivePaymentAt = getPaymentTaskTimestamp(request);
     if (
+      request.isCanceled ||
       request.status === "paid" ||
       request.status === "closed" ||
-      (request.paymentDeadline ?? request.neededBy) !== args.paymentDeadline ||
+      !effectivePaymentAt ||
+      getDateKey(effectivePaymentAt) !== getDateKey(args.paymentDeadline) ||
       request.paymentDeadlineReminderLastDateKey === dateKey
     ) {
       return;
@@ -1207,16 +1230,23 @@ export const sendPaymentDeadlineReminder = internalAction({
     }
     const link = `${getBaseUrl()}/requests/${request._id}`;
     const isBefore = args.reminderKind === "before";
+    const isPlannedDate = isPaymentUsingPlannedDate(request, effectivePaymentAt);
+    const dateLabel = isPlannedDate ? "Плановая дата оплаты" : "Дедлайн оплаты от автора";
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: "payment_deadline_reminder",
       to: recipients,
       subject: isBefore
-        ? `Завтра дедлайн оплаты: ${request.requestCode ?? request.clientName}`
-        : `Просрочен дедлайн оплаты: ${request.requestCode ?? request.clientName}`,
+        ? `Завтра ${isPlannedDate ? "плановая дата оплаты" : "дедлайн оплаты"}: ${request.requestCode ?? request.clientName}`
+        : `Просрочена ${isPlannedDate ? "плановая дата оплаты" : "оплата"}: ${request.requestCode ?? request.clientName}`,
       html: `
-        <p>${isBefore ? "Завтра дедлайн оплаты по заявке." : "Оплата по заявке просрочена."}</p>
-        <p>Дедлайн оплаты: ${getPaymentDeadlineLabel(request)}</p>
+        <p>${isBefore ? `Завтра ${dateLabel.toLowerCase()} по заявке.` : "Оплата по заявке просрочена."}</p>
+        <p>${dateLabel}: ${formatDate(effectivePaymentAt)}</p>
+        ${
+          isPlannedDate
+            ? `<p>Дедлайн оплаты от автора: ${getPaymentDeadlineLabel(request)}</p>`
+            : ""
+        }
         <p>Сумма: ${getRequestAmountLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,

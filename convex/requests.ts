@@ -1013,7 +1013,7 @@ const requestFieldLabels: Record<string, string> = {
   specialists: "Специалисты",
   approvalDeadline: "Дедлайн согласования",
   neededBy: "Дата отгрузки",
-  paymentDeadline: "Дедлайн оплаты",
+  paymentDeadline: "Дедлайн оплаты от автора",
   paidBy: "Когда платят нам",
   requiredRoles: "Обязательные согласующие",
   status: "Статус заявки",
@@ -1602,30 +1602,34 @@ function getRequestPaymentDeadline(request: { paymentDeadline?: number; neededBy
   return request.paymentDeadline ?? request.neededBy;
 }
 
-async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymentDeadline?: number) {
-  if (!paymentDeadline) {
+async function schedulePaymentDueReminders(ctx: any, requestId: any, paymentDueAt?: number) {
+  if (!paymentDueAt) {
     return;
   }
   const now = Date.now();
   const dayMs = 24 * 60 * 60 * 1000;
   await ctx.scheduler.runAfter(
-    Math.max(0, startOfDate(paymentDeadline) - dayMs - now),
+    Math.max(0, startOfDate(paymentDueAt) - dayMs - now),
     internal.emails.sendPaymentDeadlineReminder,
     {
       requestId,
-      paymentDeadline,
+      paymentDeadline: paymentDueAt,
       reminderKind: "before",
     },
   );
   await ctx.scheduler.runAfter(
-    Math.max(0, startOfDate(paymentDeadline) + dayMs - now),
+    Math.max(0, startOfDate(paymentDueAt) + dayMs - now),
     internal.emails.sendPaymentDeadlineReminder,
     {
       requestId,
-      paymentDeadline,
+      paymentDeadline: paymentDueAt,
       reminderKind: "overdue",
     },
   );
+}
+
+async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymentDeadline?: number) {
+  await schedulePaymentDueReminders(ctx, requestId, paymentDeadline);
 }
 
 async function sendPaymentPlanningRequestedAndScheduleReminders(
@@ -2654,6 +2658,7 @@ export const editRequest = mutation({
     };
 
     const approvalDeadlineChanged = request.approvalDeadline !== args.approvalDeadline;
+    const previousPaymentTaskAt = getPaymentTaskTimestamp(request);
 
     if (submitDraft || shouldResubmit) {
       patch.submittedAt = now;
@@ -2690,6 +2695,10 @@ export const editRequest = mutation({
       ...request,
       ...patch,
     };
+    const nextPaymentTaskAt = getPaymentTaskTimestamp(nextForDiff);
+    if (previousPaymentTaskAt !== nextPaymentTaskAt) {
+      patch.paymentDeadlineReminderLastDateKey = undefined;
+    }
     const changes = diffRequestFields(previousForDiff, nextForDiff);
     const summaryLines = changes.map(
       (change) => `${change.field}: ${change.fromValue || "—"} → ${change.toValue || "—"}`,
@@ -2764,6 +2773,13 @@ export const editRequest = mutation({
         paymentDeadline: nextForDiff.paymentDeadline,
         neededBy: nextForDiff.neededBy,
       });
+    } else if (
+      request.status !== "draft" &&
+      previousPaymentTaskAt !== nextPaymentTaskAt &&
+      isOpenPaymentTask(nextForDiff) &&
+      nextPaymentTaskAt
+    ) {
+      await schedulePaymentDueReminders(ctx, args.id, nextPaymentTaskAt);
     }
     if (request.status !== "draft") {
       const removedRoleRecipients = await getRoleNotificationRecipients(
@@ -3384,7 +3400,7 @@ export const adminBackfillPaymentDeadlineReminders = mutation({
       if (!isOpenPaymentTask(request)) {
         continue;
       }
-      const paymentDeadline = getRequestPaymentDeadline(request);
+      const paymentDeadline = getPaymentTaskTimestamp(request);
       if (!paymentDeadline) {
         continue;
       }
@@ -3652,11 +3668,14 @@ export const updateOperationalFields = mutation({
       throw new Error("Not authorized");
     }
     if (
-      (args.paymentDeadline !== undefined || args.shipmentDate !== undefined || args.finplanEntered !== undefined || args.finplanEntryIds !== undefined) &&
+      (args.shipmentDate !== undefined || args.finplanEntered !== undefined || args.finplanEntryIds !== undefined) &&
       !canManageOutsource &&
       !canManageAll
     ) {
       throw new Error("Not authorized");
+    }
+    if (args.paymentDeadline !== undefined) {
+      throw new Error("Дедлайн оплаты меняет автор заявки через редактирование заявки");
     }
 
     validateOptionalMoney(args.amount, "Сумма без НДС");
@@ -3681,10 +3700,6 @@ export const updateOperationalFields = mutation({
       patch.amount = effectiveAmounts.amount;
       patch.amountWithVat = effectiveAmounts.amountWithVat;
       patch.vatRate = effectiveAmounts.vatRate;
-    }
-    if (args.paymentDeadline !== undefined) {
-      patch.paymentDeadline = args.paymentDeadline;
-      patch.paymentDeadlineReminderLastDateKey = undefined;
     }
     if (args.shipmentDate !== undefined) {
       patch.shipmentDate = args.shipmentDate;
@@ -3728,7 +3743,7 @@ export const updateOperationalFields = mutation({
     if (
       changes.length > 0 &&
       normalizeEmail(request.createdByEmail) !== normalizeEmail(email) &&
-      (effectiveAmounts || args.paymentDeadline !== undefined || args.shipmentDate !== undefined)
+      (effectiveAmounts || args.shipmentDate !== undefined)
     ) {
       await ctx.scheduler.runAfter(0, internal.emails.sendOperationalFieldsChanged, {
         requestId: request._id,
@@ -4089,7 +4104,7 @@ export const updatePaymentStatus = mutation({
       await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanned, {
         requestId: request._id,
       });
-      await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
+      await schedulePaymentDueReminders(ctx, request._id, args.paymentPlannedAt);
       await schedulePlannedPaymentReminder(ctx, request._id, args.paymentPlannedAt);
       if (hasPaymentAmountDifference(previousTargetAmounts, targetAmounts)) {
         await ctx.scheduler.runAfter(0, internal.emails.sendPaymentAmountChanged, {
@@ -4219,7 +4234,7 @@ export const updatePaymentStatus = mutation({
         actorName,
       });
       if (args.paymentPlannedAt) {
-        await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
+        await schedulePaymentDueReminders(ctx, request._id, args.paymentPlannedAt);
         await schedulePlannedPaymentReminder(ctx, request._id, args.paymentPlannedAt);
       }
       return { status: "partially_paid" };
@@ -4425,6 +4440,7 @@ export const cancelPaymentEntry = mutation({
         plannedPaymentAmount: undefined,
         plannedPaymentAmountWithVat: undefined,
         paymentReminderSentAt: undefined,
+        paymentDeadlineReminderLastDateKey: undefined,
         updatedAt: now,
       });
       await logTimelineEvent(ctx, {
@@ -4434,6 +4450,15 @@ export const cancelPaymentEntry = mutation({
         actorEmail: email,
         actorName,
       });
+      await schedulePaymentDueReminders(
+        ctx,
+        args.id,
+        getPaymentTaskTimestamp({
+          ...request,
+          status: nextStatus,
+          paymentPlannedAt: undefined,
+        }),
+      );
       return { canceled: true };
     }
 
@@ -4458,6 +4483,7 @@ export const cancelPaymentEntry = mutation({
         status: nextStatus,
         plannedPaymentSplits: nextPlannedSplits.length ? nextPlannedSplits : undefined,
         paymentReminderSentAt: undefined,
+        paymentDeadlineReminderLastDateKey: undefined,
         updatedAt: now,
       });
       await logTimelineEvent(ctx, {
@@ -4467,6 +4493,15 @@ export const cancelPaymentEntry = mutation({
         actorEmail: email,
         actorName,
       });
+      await schedulePaymentDueReminders(
+        ctx,
+        args.id,
+        getPaymentTaskTimestamp({
+          ...request,
+          status: nextStatus,
+          plannedPaymentSplits: nextPlannedSplits,
+        }),
+      );
       return { canceled: true };
     }
 

@@ -1835,7 +1835,7 @@ export default function NewRequestPage() {
                     </div>
                     <div className="space-y-2">
                       <FieldLabel htmlFor="paymentDeadline" required>
-                        Дедлайн оплаты
+                        Дедлайн оплаты от автора
                       </FieldLabel>
                       <Input
                         id="paymentDeadline"
