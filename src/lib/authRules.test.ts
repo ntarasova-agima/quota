@@ -23,10 +23,11 @@ describe("authRules", () => {
     expect(isAllowedSignInEmail("ad.test@quota.local", "development")).toBe(true);
   });
 
-  it("requires both full name and title for completed profile", () => {
-    expect(hasCompletedProfile({ fullName: "Иван Иванов", creatorTitle: "AD" })).toBe(true);
-    expect(hasCompletedProfile({ fullName: "Иван Иванов", creatorTitle: "" })).toBe(false);
-    expect(hasCompletedProfile({ fullName: "", creatorTitle: "AD" })).toBe(false);
+  it("requires full name, title, and department for completed profile", () => {
+    expect(hasCompletedProfile({ fullName: "Иван Иванов", creatorTitle: "AD", department: "Аккаунтинг" })).toBe(true);
+    expect(hasCompletedProfile({ fullName: "Иван Иванов", creatorTitle: "", department: "Аккаунтинг" })).toBe(false);
+    expect(hasCompletedProfile({ fullName: "", creatorTitle: "AD", department: "Аккаунтинг" })).toBe(false);
+    expect(hasCompletedProfile({ fullName: "Иван Иванов", creatorTitle: "AD", department: "" })).toBe(false);
     expect(hasCompletedProfile(null)).toBe(false);
   });
 });
