@@ -111,7 +111,7 @@ export default function ContestParticipantsEditor({
             className={
               showContractorTypes
                 ? "grid gap-3 sm:grid-cols-[minmax(0,1.05fr)_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,0.75fr)_minmax(0,0.7fr)_minmax(0,0.65fr)]"
-                : "grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.7fr)]"
+                : "grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,0.7fr)]"
             }
           >
             <div className="min-w-0 space-y-1">
@@ -180,21 +180,23 @@ export default function ContestParticipantsEditor({
                 }
               />
             </div>
-            <div className="min-w-0 space-y-1">
-              <Label className={fieldLabelClass}>Налоги</Label>
-              <Input
-                className="min-w-0"
-                placeholder="Сумма"
-                inputMode="decimal"
-                value={item.taxAmount}
-                onChange={(event) =>
-                  updateRow(item.id, (row) => ({
-                    ...row,
-                    taxAmount: sanitizeNumericInput(event.target.value),
-                  }))
-                }
-              />
-            </div>
+            {showContractorTypes ? (
+              <div className="min-w-0 space-y-1">
+                <Label className={fieldLabelClass}>Налоги</Label>
+                <Input
+                  className="min-w-0"
+                  placeholder="Сумма"
+                  inputMode="decimal"
+                  value={item.taxAmount}
+                  onChange={(event) =>
+                    updateRow(item.id, (row) => ({
+                      ...row,
+                      taxAmount: sanitizeNumericInput(event.target.value),
+                    }))
+                  }
+                />
+              </div>
+            ) : null}
             <div className="min-w-0 space-y-1">
               <Label className={fieldLabelClass}>Часы</Label>
               <Input
@@ -263,54 +265,55 @@ export default function ContestParticipantsEditor({
               </div>
             </div>
           ) : null}
-          <div className="space-y-2">
-            <div className="text-sm font-medium">Налоги</div>
-            <div className="flex flex-wrap gap-3">
-              {[
-                {
-                  key: "taxUnknown",
-                  label: "Я не знаю, какие налоги",
-                },
-                {
-                  key: "amountIncludesTaxes",
-                  label: "Сумма уже с налогами",
-                },
-                {
-                  key: "amountExcludesTaxes",
-                  label: "Сумма не включает налоги",
-                },
-              ].map((option) => {
-                const selectedCount = [
-                  item.taxUnknown,
-                  item.amountIncludesTaxes,
-                  item.amountExcludesTaxes,
-                ].filter(Boolean).length;
-                const checked = Boolean(item[option.key as keyof ContestParticipantDraft]);
-                const disabled = !checked && selectedCount >= 2;
-                return (
-                  <label key={option.key} className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={checked}
-                      disabled={disabled}
-                      onCheckedChange={(nextChecked) =>
-                        updateRow(item.id, (row) => {
-                          const nextRow = {
-                            ...row,
-                            [option.key]: nextChecked === true,
-                          };
-                          if (option.key === "amountIncludesTaxes" && nextChecked === true) {
-                            nextRow.amountExcludesTaxes = false;
-                          }
-                          if (option.key === "amountExcludesTaxes" && nextChecked === true) {
-                            nextRow.amountIncludesTaxes = false;
-                          }
-                          return nextRow;
-                        })
-                      }
-                    />
-                    {option.label}
-                  </label>
-                );
+          {showContractorTypes ? (
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Налоги</div>
+              <div className="flex flex-wrap gap-3">
+                {[
+                  {
+                    key: "taxUnknown",
+                    label: "Я не знаю, какие налоги",
+                  },
+                  {
+                    key: "amountIncludesTaxes",
+                    label: "Сумма уже с налогами",
+                  },
+                  {
+                    key: "amountExcludesTaxes",
+                    label: "Сумма не включает налоги",
+                  },
+                ].map((option) => {
+                  const selectedCount = [
+                    item.taxUnknown,
+                    item.amountIncludesTaxes,
+                    item.amountExcludesTaxes,
+                  ].filter(Boolean).length;
+                  const checked = Boolean(item[option.key as keyof ContestParticipantDraft]);
+                  const disabled = !checked && selectedCount >= 2;
+                  return (
+                    <label key={option.key} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={checked}
+                        disabled={disabled}
+                        onCheckedChange={(nextChecked) =>
+                          updateRow(item.id, (row) => {
+                            const nextRow = {
+                              ...row,
+                              [option.key]: nextChecked === true,
+                            };
+                            if (option.key === "amountIncludesTaxes" && nextChecked === true) {
+                              nextRow.amountExcludesTaxes = false;
+                            }
+                            if (option.key === "amountExcludesTaxes" && nextChecked === true) {
+                              nextRow.amountIncludesTaxes = false;
+                            }
+                            return nextRow;
+                          })
+                        }
+                      />
+                      {option.label}
+                    </label>
+                  );
                 })}
                 {[
                   item.taxUnknown,
@@ -335,6 +338,7 @@ export default function ContestParticipantsEditor({
                 ) : null}
               </div>
             </div>
+          ) : null}
           <label className="sm:col-span-4 flex items-center gap-2 text-sm">
             <Checkbox
               checked={item.validationSkipped}

@@ -79,6 +79,33 @@ async function schedulePaymentDeadlineReminders(ctx: any, request: { _id: any; p
   );
 }
 
+async function scheduleFotDeadlineReminders(ctx: any, request: { _id: any; paymentDeadline?: number; neededBy?: number }) {
+  const paymentDeadline = getPaymentDeadlineTimestamp(request);
+  if (!paymentDeadline) {
+    return;
+  }
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  await ctx.scheduler.runAfter(
+    Math.max(0, startOfDate(paymentDeadline) - dayMs - now),
+    internal.emails.sendFotDeadlineReminder,
+    {
+      requestId: request._id,
+      paymentDeadline,
+      reminderKind: "before",
+    },
+  );
+  await ctx.scheduler.runAfter(
+    Math.max(0, startOfDate(paymentDeadline) + dayMs - now),
+    internal.emails.sendFotDeadlineReminder,
+    {
+      requestId: request._id,
+      paymentDeadline,
+      reminderKind: "overdue",
+    },
+  );
+}
+
 async function sendPaymentPlanningRequestedAndScheduleReminders(
   ctx: any,
   request: { _id: any; paymentDeadline?: number; neededBy?: number },
@@ -87,6 +114,10 @@ async function sendPaymentPlanningRequestedAndScheduleReminders(
     requestId: request._id,
   });
   await schedulePaymentDeadlineReminders(ctx, request);
+  await ctx.scheduler.runAfter(0, internal.emails.sendFotRecordingRequested, {
+    requestId: request._id,
+  });
+  await scheduleFotDeadlineReminders(ctx, request);
 }
 
 export const listPendingForMe = query({

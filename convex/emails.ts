@@ -12,7 +12,7 @@ import {
 } from "../src/lib/requestFields";
 import { supportsRequestSpecialists, usesServiceRecipientLabel } from "../src/lib/requestRules";
 import { hasFinanceApproverRole } from "../src/lib/financeRole";
-import { formatAmountPair } from "../src/lib/vat";
+import { formatAmount, formatAmountPair, getAmountWithoutVat } from "../src/lib/vat";
 import {
   getPaymentDeadlineTimestamp,
   getPaymentTaskTimestamp,
@@ -139,6 +139,38 @@ function getPaymentPlanningRecipients(roles: PaymentPlanningRole[]) {
   );
 }
 
+function getBuhInsideRecipients(roles: PaymentPlanningRole[]) {
+  return Array.from(
+    new Set(
+      roles
+        .filter((role) => role.active && role.roles.includes("BUH Inside"))
+        .map((role) => role.email),
+    ),
+  );
+}
+
+function getPendingInternalFotSpecialists(request: any) {
+  return (request.specialists ?? []).filter(
+    (item: any) =>
+      normalizeContestSpecialistSource(item.sourceType) === "internal" &&
+      !item.fotRecorded,
+  );
+}
+
+function getFotSpecialistRows(request: any, specialists: any[]) {
+  return specialists
+    .map(
+      (item: any) => `
+        <li>
+          ${item.name || "Специалист не указан"}
+          ${item.department ? ` · ${item.department}` : ""}
+          ${item.directCost !== undefined ? ` · ${item.directCost} ${request.currency} без НДС` : ""}
+        </li>
+      `,
+    )
+    .join("");
+}
+
 function formatDate(timestamp?: number) {
   return timestamp ? new Date(timestamp).toLocaleDateString("ru-RU") : "не указана";
 }
@@ -159,6 +191,21 @@ function getRequestAmountLabel(request: {
     currency: request.currency,
     vatRate: request.vatRate,
   });
+}
+
+function getRequestAmountWithoutVatLabel(request: { amount?: number; currency: string }) {
+  return `${formatAmount(request.amount)} ${request.currency} без НДС`;
+}
+
+function getPaymentAmountWithoutVatLabel(params: {
+  amountWithoutVat?: number;
+  amountWithVat?: number;
+  currency: string;
+  vatRate?: number;
+}) {
+  return `${formatAmount(
+    getAmountWithoutVat(params.amountWithoutVat, params.amountWithVat, params.vatRate),
+  )} ${params.currency} без НДС`;
 }
 
 async function sendEmail(
@@ -578,9 +625,61 @@ export const sendPaymentPlanningRequested = internalAction({
         <p>${owner.label}: ${owner.value}</p>
         <p>Автор заявки: ${author}</p>
         <p>Дедлайн оплаты: ${paymentDeadline}</p>
-        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Сумма: ${getRequestAmountWithoutVatLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
+    });
+  },
+});
+
+export const sendFotRecordingRequested = internalAction({
+  args: {
+    requestId: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      throw new Error("Request not found");
+    }
+    const { request, roles } = data;
+    if (
+      request.isCanceled ||
+      request.fotRecordingRequestedAt ||
+      ["draft", "hod_pending", "pending", "rejected"].includes(request.status)
+    ) {
+      return;
+    }
+    const specialists = getPendingInternalFotSpecialists(request);
+    if (!specialists.length) {
+      return;
+    }
+    const recipients = getBuhInsideRecipients(roles);
+    if (!recipients.length) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const owner = getRequestOwnerLabel(request);
+    const requestTitle = request.title ?? `${request.clientName} :: ${request.category}`;
+    const paymentDeadline = getPaymentDeadlineLabel(request);
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "fot_recording_requested",
+      to: recipients,
+      subject: `Нужно вынести ФОТ: ${request.requestCode ?? request.category}`,
+      html: `
+        <p>Заявка согласована. Нужно вынести ФОТ по штатным специалистам.</p>
+        <p>Наименование заявки: <strong>${requestTitle}</strong></p>
+        <p>Номер заявки: ${request.requestCode ?? "не указан"}</p>
+        <p>${owner.label}: ${owner.value}</p>
+        <p>Дедлайн от автора: ${paymentDeadline}</p>
+        <ul>${getFotSpecialistRows(request, specialists)}</ul>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+    await ctx.runMutation(internal.requests.markFotRecordingRequested, {
+      requestId: args.requestId,
     });
   },
 });
@@ -620,7 +719,7 @@ export const sendPaymentRequested = internalAction({
         <p>${owner.label}: ${owner.value}</p>
         <p>Автор заявки: ${author}</p>
         <p>Дедлайн оплаты: ${paymentDeadline}</p>
-        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Сумма: ${getRequestAmountWithoutVatLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -652,7 +751,7 @@ export const sendPaymentRequestedToAuthor = internalAction({
         <p>Заявка переведена в оплату.</p>
         <p>Кто передал: ${actor}</p>
         <p>Дедлайн оплаты: ${getPaymentDeadlineLabel(request)}</p>
-        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Сумма: ${getRequestAmountWithoutVatLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -1166,7 +1265,7 @@ export const sendPlannedPaymentReminder = internalAction({
     const link = `${getBaseUrl()}/requests/${request._id}`;
     const amountLines = plannedPayments
       .map((payment: any) =>
-        `<li>${formatAmountPair({
+        `<li>${getPaymentAmountWithoutVatLabel({
           amountWithoutVat: payment.amountWithoutVat,
           amountWithVat: payment.amountWithVat,
           currency: request.currency,
@@ -1247,7 +1346,7 @@ export const sendPaymentDeadlineReminder = internalAction({
             ? `<p>Дедлайн оплаты от автора: ${getPaymentDeadlineLabel(request)}</p>`
             : ""
         }
-        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Сумма: ${getRequestAmountWithoutVatLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -1259,6 +1358,69 @@ export const sendPaymentDeadlineReminder = internalAction({
     });
     if (args.reminderKind === "overdue") {
       await ctx.scheduler.runAfter(24 * 60 * 60 * 1000, internal.emails.sendPaymentDeadlineReminder, {
+        requestId: args.requestId,
+        paymentDeadline: args.paymentDeadline,
+        reminderKind: "overdue",
+      });
+    }
+  },
+});
+
+export const sendFotDeadlineReminder = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    paymentDeadline: v.number(),
+    reminderKind: v.union(v.literal("before"), v.literal("overdue")),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request, roles } = data;
+    const dateKey = `fot:${args.reminderKind}:${new Date().toISOString().slice(0, 10)}`;
+    const authorDeadline = getPaymentDeadlineTimestamp(request);
+    if (
+      request.isCanceled ||
+      ["draft", "hod_pending", "pending", "rejected"].includes(request.status) ||
+      !authorDeadline ||
+      getDateKey(authorDeadline) !== getDateKey(args.paymentDeadline) ||
+      request.fotReminderLastDateKey === dateKey
+    ) {
+      return;
+    }
+    const specialists = getPendingInternalFotSpecialists(request);
+    if (!specialists.length) {
+      return;
+    }
+    const recipients = getBuhInsideRecipients(roles);
+    if (!recipients.length) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const isBefore = args.reminderKind === "before";
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "fot_deadline_reminder",
+      to: recipients,
+      subject: isBefore
+        ? `Завтра дедлайн ФОТ: ${request.requestCode ?? request.clientName}`
+        : `Просрочен ФОТ: ${request.requestCode ?? request.clientName}`,
+      html: `
+        <p>${isBefore ? "Завтра дедлайн от автора по ФОТ." : "ФОТ по штатным специалистам просрочен."}</p>
+        <p>Дедлайн от автора: ${formatDate(authorDeadline)}</p>
+        <ul>${getFotSpecialistRows(request, specialists)}</ul>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+    await ctx.runMutation(internal.requests.markFotReminderSent, {
+      requestId: args.requestId,
+      dateKey,
+    });
+    if (args.reminderKind === "overdue") {
+      await ctx.scheduler.runAfter(24 * 60 * 60 * 1000, internal.emails.sendFotDeadlineReminder, {
         requestId: args.requestId,
         paymentDeadline: args.paymentDeadline,
         reminderKind: "overdue",
@@ -1302,7 +1464,7 @@ export const sendManualPaymentReminder = internalAction({
       html: `
         <p>Напоминаем об оплате заявки.</p>
         <p>Напомнил: ${remindedBy}</p>
-        <p>Сумма: ${getRequestAmountLabel(request)}</p>
+        <p>Сумма: ${getRequestAmountWithoutVatLabel(request)}</p>
         <p>Ссылка: <a href="${link}">${link}</a></p>
       `,
     });
@@ -1366,13 +1528,13 @@ export const sendPaymentAmountChanged = internalAction({
         <p>BUH изменил сумму оплаты по заявке.</p>
         <p>Кто изменил: ${actor}</p>
         <p>Когда: ${new Date(args.changedAt).toLocaleString("ru-RU")}</p>
-        <p>Было: ${formatAmountPair({
+        <p>Было: ${getPaymentAmountWithoutVatLabel({
           amountWithoutVat: args.previousAmount,
           amountWithVat: args.previousAmountWithVat,
           currency: request.currency,
           vatRate: request.vatRate,
         })}</p>
-        <p>Стало: ${formatAmountPair({
+        <p>Стало: ${getPaymentAmountWithoutVatLabel({
           amountWithoutVat: args.nextAmount,
           amountWithVat: args.nextAmountWithVat,
           currency: request.currency,

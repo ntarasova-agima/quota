@@ -50,12 +50,11 @@ import {
 import { hasFinanceApproverRole } from "@/lib/financeRole";
 import {
   DEFAULT_VAT_RATE,
-  calculateAmountWithVat,
+  formatAmount,
   formatAmountPair,
   parseMoneyInput,
   resolveVatAmounts,
   sanitizeNumericInput,
-  syncVatInputPair,
 } from "@/lib/vat";
 import { CheckCircle2, Copy, Paperclip, Upload } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
@@ -75,6 +74,11 @@ type SpecialistView = {
   amountExcludesTaxes?: boolean;
   hodConfirmed?: boolean;
   buhConfirmed?: boolean;
+  fotRecorded?: boolean;
+  fotMonth?: string;
+  fotRecordedAt?: number;
+  fotRecordedByEmail?: string;
+  fotRecordedByName?: string;
   validationSkipped?: boolean;
 };
 
@@ -506,6 +510,10 @@ function getUnifiedFinplanCostIds(request: {
   ]);
 }
 
+function formatAmountWithoutVatLabel(amount?: number, currency?: string) {
+  return `${formatAmount(amount)} ${currency ?? ""} без НДС`;
+}
+
 function buildPaymentTimelineRows(request: {
   paymentSplits?: Array<any>;
   plannedPaymentSplits?: Array<any>;
@@ -599,6 +607,7 @@ export default function RequestDetailPage() {
   const updatePaymentStatus = useMutation(api.requests.updatePaymentStatus);
   const cancelPaymentEntry = useMutation(api.requests.cancelPaymentEntry);
   const updateContestSpecialist = useMutation(api.requests.updateContestSpecialist);
+  const updateSpecialistFot = useMutation(api.requests.updateSpecialistFot);
   const generateAttachmentUploadUrl = useMutation(api.attachments.generateUploadUrl);
   const saveAttachment = useMutation(api.attachments.saveAttachment);
   const deleteAttachment = useMutation(api.attachments.deleteAttachment);
@@ -637,16 +646,12 @@ export default function RequestDetailPage() {
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
   const [finplanEntered, setFinplanEntered] = useState(false);
   const [finplanEntryIdsRaw, setFinplanEntryIdsRaw] = useState("");
-  const [fotAllSpecialistsRecorded, setFotAllSpecialistsRecorded] = useState(false);
   const [savingOperationalFields, setSavingOperationalFields] = useState(false);
   const [operationalFieldsSavedAt, setOperationalFieldsSavedAt] = useState<number | null>(null);
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
   const [paymentTargetAmount, setPaymentTargetAmount] = useState("");
-  const [paymentTargetAmountWithVat, setPaymentTargetAmountWithVat] = useState("");
   const [paymentPlannedAmount, setPaymentPlannedAmount] = useState("");
-  const [paymentPlannedAmountWithVat, setPaymentPlannedAmountWithVat] = useState("");
   const [paymentExecutedAmount, setPaymentExecutedAmount] = useState("");
-  const [paymentExecutedAmountWithVat, setPaymentExecutedAmountWithVat] = useState("");
   const [paymentExecutedDate, setPaymentExecutedDate] = useState("");
   const [paymentCurrencyRate, setPaymentCurrencyRate] = useState("");
   const [confirmLatePaymentPlan, setConfirmLatePaymentPlan] = useState(false);
@@ -876,16 +881,12 @@ export default function RequestDetailPage() {
       const nextPlannedAmount = shouldUsePrepaymentAsNext
         ? data.request.prepaymentAmount
         : data.request.plannedPaymentAmount ?? remainingAmounts.amountWithoutVat;
-      const nextPlannedAmountWithVat = shouldUsePrepaymentAsNext
-        ? data.request.prepaymentAmountWithVat
-        : data.request.plannedPaymentAmountWithVat ?? remainingAmounts.amountWithVat;
       setSelectedTag(data.request.cfdTag ?? "");
       setSelectedFundingSource(normalizeFundingSource(data.request.fundingSource));
       setSelectedBusinessCategory(data.request.businessCategory ?? EMPTY_BUSINESS_CATEGORY);
       setCustomTagName("");
       setFinplanEntered(data.request.finplanEntered ?? false);
       setFinplanEntryIdsRaw(getUnifiedFinplanCostIds(data.request).join("\n"));
-      setFotAllSpecialistsRecorded(data.request.fotAllSpecialistsRecorded ?? false);
       setPaymentPlannedDate(
         data.request.paymentPlannedAt
           ? new Date(data.request.paymentPlannedAt).toISOString().slice(0, 10)
@@ -896,27 +897,14 @@ export default function RequestDetailPage() {
       setPaymentTargetAmount(
         targetAmounts.amountWithoutVat !== undefined ? String(targetAmounts.amountWithoutVat) : "",
       );
-      setPaymentTargetAmountWithVat(
-        targetAmounts.amountWithVat !== undefined ? String(targetAmounts.amountWithVat) : "",
-      );
       setPaymentPlannedAmount(
         nextPlannedAmount !== undefined ? String(nextPlannedAmount) : "",
-      );
-      setPaymentPlannedAmountWithVat(
-        nextPlannedAmountWithVat !== undefined ? String(nextPlannedAmountWithVat) : "",
       );
       setPaymentExecutedAmount(
         activePlannedRow?.amountWithoutVat !== undefined
           ? String(activePlannedRow.amountWithoutVat)
           : remainingAmounts.amountWithoutVat !== undefined
             ? String(remainingAmounts.amountWithoutVat)
-            : "",
-      );
-      setPaymentExecutedAmountWithVat(
-        activePlannedRow?.amountWithVat !== undefined
-          ? String(activePlannedRow.amountWithVat)
-          : remainingAmounts.amountWithVat !== undefined
-            ? String(remainingAmounts.amountWithVat)
             : "",
       );
       setPaymentExecutedDate(
@@ -943,7 +931,6 @@ export default function RequestDetailPage() {
     data?.request?.paymentDeadline,
     data?.request?.neededBy,
     data?.request?.shipmentDate,
-    data?.request?.fotAllSpecialistsRecorded,
     data?.request?.actualPaidAmount,
     data?.request?.actualPaidAmountWithVat,
     data?.request?.paymentResidualAmount,
@@ -1074,16 +1061,8 @@ export default function RequestDetailPage() {
   const canSendPaymentReminder =
     canSendPaymentReminderForStatus(request.status) &&
     (isCreator || isAdmin || canManagePayments);
-  const canManageFot =
-    hasInsideSpecialists &&
-    (
-      isAdmin ||
-      isFinanceApprover ||
-      myRoles.includes("BUH") ||
-      myRoles.includes("BUH Inside")
-    );
-  const canUpdateFotMark =
-    canManageFot &&
+  const canManageSpecialistFot =
+    (isAdmin || myRoles.includes("BUH Inside")) &&
     !["draft", "hod_pending", "pending", "rejected"].includes(request.status);
   const viewerAccessEntries = (request.viewerAccess ?? []) as Array<{
     email: string;
@@ -1201,26 +1180,27 @@ export default function RequestDetailPage() {
     draft: SpecialistView,
     overrides: Partial<SpecialistView> = {},
   ) {
+    const sourceType = normalizeContestSpecialistSource(overrides.sourceType ?? draft.sourceType);
     await updateContestSpecialist({
       requestId: request._id,
       specialistId,
       name: (overrides.name ?? draft.name ?? "").trim(),
-      sourceType: normalizeContestSpecialistSource(overrides.sourceType ?? draft.sourceType),
+      sourceType,
       contractorLegalEntity:
-        normalizeContestSpecialistSource(overrides.sourceType ?? draft.sourceType) === "contractor"
+        sourceType === "contractor"
           ? (overrides.contractorLegalEntity ?? draft.contractorLegalEntity)?.trim() || undefined
           : undefined,
       department: overrides.department ?? draft.department,
       contractorTypes:
-        normalizeContestSpecialistSource(overrides.sourceType ?? draft.sourceType) === "contractor"
+        sourceType === "contractor"
           ? overrides.contractorTypes ?? draft.contractorTypes
           : [],
       hours: overrides.hours ?? draft.hours,
       directCost: overrides.directCost ?? draft.directCost,
-      taxAmount: overrides.taxAmount ?? draft.taxAmount,
-      taxUnknown: overrides.taxUnknown ?? draft.taxUnknown,
-      amountIncludesTaxes: overrides.amountIncludesTaxes ?? draft.amountIncludesTaxes,
-      amountExcludesTaxes: overrides.amountExcludesTaxes ?? draft.amountExcludesTaxes,
+      taxAmount: sourceType === "contractor" ? overrides.taxAmount ?? draft.taxAmount : undefined,
+      taxUnknown: sourceType === "contractor" ? overrides.taxUnknown ?? draft.taxUnknown : false,
+      amountIncludesTaxes: sourceType === "contractor" ? overrides.amountIncludesTaxes ?? draft.amountIncludesTaxes : false,
+      amountExcludesTaxes: sourceType === "contractor" ? overrides.amountExcludesTaxes ?? draft.amountExcludesTaxes : false,
       hodConfirmed: overrides.hodConfirmed ?? draft.hodConfirmed,
       buhConfirmed: overrides.buhConfirmed ?? draft.buhConfirmed,
     });
@@ -1302,7 +1282,6 @@ export default function RequestDetailPage() {
         : remainingPaymentAmounts.amountWithoutVat;
     const plannedAmounts = resolvePaymentPair({
       amountWithoutVat: parseMoneyInput(paymentPlannedAmount),
-      amountWithVat: parseMoneyInput(paymentPlannedAmountWithVat),
       vatRate: paymentVatRate,
     });
     if (planningMode === "partial") {
@@ -1339,11 +1318,8 @@ export default function RequestDetailPage() {
         paymentPlannedAt: new Date(`${paymentPlannedDate}T00:00:00`).getTime(),
         finplanEntryIdsRaw,
         actualPaidAmount: parseMoneyInput(paymentTargetAmount),
-        actualPaidAmountWithVat: parseMoneyInput(paymentTargetAmountWithVat),
         plannedPaymentAmount:
           planningMode === "partial" ? plannedAmounts.amountWithoutVat : undefined,
-        plannedPaymentAmountWithVat:
-          planningMode === "partial" ? plannedAmounts.amountWithVat : undefined,
         planningMode,
         paymentCurrencyRate: parsedPaymentCurrencyRate,
         allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
@@ -1371,7 +1347,6 @@ export default function RequestDetailPage() {
     }
     const executedAmounts = resolvePaymentPair({
       amountWithoutVat: parseMoneyInput(paymentExecutedAmount),
-      amountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
       vatRate: paymentVatRate,
     });
     if (
@@ -1414,7 +1389,6 @@ export default function RequestDetailPage() {
         status: "partially_paid",
         finplanEntryIdsRaw,
         actualPaidAmount: executedAmounts.amountWithoutVat,
-        actualPaidAmountWithVat: executedAmounts.amountWithVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
         paymentCurrencyRate: parsedPaymentCurrencyRate,
       });
@@ -1436,7 +1410,6 @@ export default function RequestDetailPage() {
     }
     const executedAmounts = resolvePaymentPair({
       amountWithoutVat: parseMoneyInput(paymentExecutedAmount),
-      amountWithVat: parseMoneyInput(paymentExecutedAmountWithVat),
       vatRate: paymentVatRate,
     });
     if (
@@ -1469,7 +1442,6 @@ export default function RequestDetailPage() {
         status: closesWholeRequest ? "paid" : "partially_paid",
         finplanEntryIdsRaw,
         actualPaidAmount: executedAmounts.amountWithoutVat,
-        actualPaidAmountWithVat: executedAmounts.amountWithVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
         paymentCurrencyRate: parsedPaymentCurrencyRate,
       });
@@ -1895,15 +1867,7 @@ export default function RequestDetailPage() {
                 <div>
                   <div className="text-muted-foreground">Сумма оплаты без НДС</div>
                   <p className="mt-1">
-                    {request.actualPaidAmount} {request.currency}
-                  </p>
-                </div>
-              ) : null}
-              {request.actualPaidAmountWithVat !== undefined ? (
-                <div>
-                  <div className="text-muted-foreground">Сумма оплаты с НДС</div>
-                  <p className="mt-1">
-                    {request.actualPaidAmountWithVat} {request.currency}
+                    {formatAmountWithoutVatLabel(request.actualPaidAmount, request.currency)}
                   </p>
                 </div>
               ) : null}
@@ -1911,11 +1875,7 @@ export default function RequestDetailPage() {
                 <div>
                   <div className="text-muted-foreground">Остаток к оплате</div>
                   <p className="mt-1">
-                    {formatAmountPair({
-                      amountWithoutVat: request.paymentResidualAmount,
-                      currency: request.currency,
-                      vatRate: request.vatRate,
-                    })}
+                    {formatAmountWithoutVatLabel(request.paymentResidualAmount, request.currency)}
                   </p>
                 </div>
               ) : null}
@@ -1950,12 +1910,7 @@ export default function RequestDetailPage() {
                         <div className="text-muted-foreground">
                           {row.status === "paid" ? "Оплачен" : "Запланирован"}{" "}
                           {new Date(row.date).toLocaleDateString("ru-RU")} ·{" "}
-                          {formatAmountPair({
-                            amountWithoutVat: row.amountWithoutVat,
-                            amountWithVat: row.amountWithVat,
-                            currency: request.currency,
-                            vatRate: row.vatRate ?? request.vatRate,
-                          })}
+                          {formatAmountWithoutVatLabel(row.amountWithoutVat, request.currency)}
                         </div>
                       </div>
                     ))}
@@ -2065,65 +2020,39 @@ export default function RequestDetailPage() {
                   </div>
                 </div>
               )}
-              {(canManageOperationalFields || canManageFot) && (
+              {canManageOperationalFields && (
                 <div className="space-y-3 rounded-xl border border-border p-4">
                   <div>
-                    <div className="text-lg font-semibold">
-                      {canManageOperationalFields ? "Затраты в финплане" : "ФОТ специалистов"}
-                    </div>
+                    <div className="text-lg font-semibold">Затраты в финплане</div>
                     <p className="text-sm text-muted-foreground">
-                      {canManageOperationalFields
-                        ? "BUH отмечает, что затраты занесены, и указывает ID затрат."
-                        : "BUH Inside отмечает, что ФОТ специалистов вынесен."}
+                      BUH отмечает, что затраты занесены, и указывает ID затрат.
                     </p>
                   </div>
                   <div className="grid gap-4">
-                    {canManageOperationalFields ? (
-                      <div className="space-y-4">
-                        <label className="flex items-center gap-2 text-sm font-medium">
-                          <Checkbox
-                            checked={finplanEntered}
-                            onCheckedChange={(checked) => {
-                              markOperationalFieldsDirty();
-                              setFinplanEntered(checked === true);
-                            }}
-                          />
-                          Затраты занесены в финплан
-                        </label>
-                        <div className="space-y-2">
-                          <Label>ID затрат в Финплане</Label>
-                          <Textarea
-                            value={finplanEntryIdsRaw}
-                            onChange={(event) => {
-                              markOperationalFieldsDirty();
-                              setFinplanEntryIdsRaw(event.target.value);
-                            }}
-                            placeholder="ID затрат или ссылки на строки, по одной в строке"
-                            rows={2}
-                          />
-                        </div>
+                    <div className="space-y-4">
+                      <label className="flex items-center gap-2 text-sm font-medium">
+                        <Checkbox
+                          checked={finplanEntered}
+                          onCheckedChange={(checked) => {
+                            markOperationalFieldsDirty();
+                            setFinplanEntered(checked === true);
+                          }}
+                        />
+                        Затраты занесены в финплан
+                      </label>
+                      <div className="space-y-2">
+                        <Label>ID затрат в Финплане</Label>
+                        <Textarea
+                          value={finplanEntryIdsRaw}
+                          onChange={(event) => {
+                            markOperationalFieldsDirty();
+                            setFinplanEntryIdsRaw(event.target.value);
+                          }}
+                          placeholder="ID затрат или ссылки на строки, по одной в строке"
+                          rows={2}
+                        />
                       </div>
-                    ) : null}
-                    {canManageFot ? (
-                      <div className="space-y-1 border-t border-border/70 pt-4 first:border-t-0 first:pt-0">
-                        <label className="flex items-center gap-2 text-sm font-medium">
-                          <Checkbox
-                            checked={fotAllSpecialistsRecorded}
-                            disabled={!canUpdateFotMark}
-                            onCheckedChange={(checked) => {
-                              markOperationalFieldsDirty();
-                              setFotAllSpecialistsRecorded(checked === true);
-                            }}
-                          />
-                          ФОТ всех специалистов вынесен
-                        </label>
-                        {!canUpdateFotMark ? (
-                          <p className="text-xs text-muted-foreground">
-                            ФОТ можно отметить после согласования заявки.
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
+                    </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
                     <Button
@@ -2146,9 +2075,6 @@ export default function RequestDetailPage() {
                               ? finplanEntered || Boolean(finplanEntryIds?.length)
                               : undefined,
                             finplanEntryIds,
-                            fotAllSpecialistsRecorded: canUpdateFotMark
-                              ? fotAllSpecialistsRecorded
-                              : undefined,
                           });
                           if (finplanEntryIds?.length) {
                             setFinplanEntered(true);
@@ -2307,9 +2233,9 @@ export default function RequestDetailPage() {
 
                       <div className="space-y-2 rounded-lg border border-border/70 p-3">
                         <div className="text-sm font-medium">Сумма оплаты</div>
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)]">
                           <div className="space-y-2">
-                            <Label htmlFor="paymentTargetAmount">Без НДС</Label>
+                            <Label htmlFor="paymentTargetAmount">Сумма без НДС</Label>
                             <Input
                               id="paymentTargetAmount"
                               inputMode="decimal"
@@ -2317,42 +2243,13 @@ export default function RequestDetailPage() {
                               onChange={(event) => {
                                 const nextAmount = sanitizeNumericInput(event.target.value);
                                 setPaymentTargetAmount(nextAmount);
-                                const synced = syncVatInputPair({
-                                  amountWithoutVatInput: nextAmount,
-                                  amountWithVatInput: paymentTargetAmountWithVat,
-                                  vatRateInput: String(paymentVatRate),
-                                  source: "without",
-                                });
-                                setPaymentTargetAmountWithVat(synced.amountWithVatInput);
                               }}
                               placeholder={`Например, ${request.amount}`}
                             />
                           </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="paymentTargetAmountWithVat">С НДС</Label>
-                            <Input
-                              id="paymentTargetAmountWithVat"
-                              inputMode="decimal"
-                              value={paymentTargetAmountWithVat}
-                              onChange={(event) => {
-                                const nextAmountWithVat = sanitizeNumericInput(event.target.value);
-                                setPaymentTargetAmountWithVat(nextAmountWithVat);
-                                const synced = syncVatInputPair({
-                                  amountWithoutVatInput: paymentTargetAmount,
-                                  amountWithVatInput: nextAmountWithVat,
-                                  vatRateInput: String(paymentVatRate),
-                                  source: "with",
-                                });
-                                setPaymentTargetAmount(synced.amountWithoutVatInput);
-                              }}
-                              placeholder={`Например, ${
-                                request.amountWithVat ?? calculateAmountWithVat(request.amount, paymentVatRate)
-                              }`}
-                            />
-                          </div>
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          По умолчанию здесь сумма из заявки. Если BUH меняет ее, автор получит письмо.
+                          Все суммы в платежах указываются без НДС. По умолчанию здесь сумма из заявки. Если BUH меняет ее, автор получит письмо.
                         </p>
                       </div>
 
@@ -2362,12 +2259,17 @@ export default function RequestDetailPage() {
                             <div className="space-y-1">
                               <div className="text-sm font-medium">Платежи</div>
                               <p className="text-xs text-muted-foreground">
-                                Нераспределенная сумма к оплате: {formatAmountPair({
-                                  amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
-                                  amountWithVat: unallocatedPaymentAmounts.amountWithVat,
-                                  currency: request.currency,
-                                  vatRate: request.vatRate,
-                                })}
+                                Дедлайн оплаты от автора:{" "}
+                                {(request.paymentDeadline ?? request.neededBy)
+                                  ? new Date(request.paymentDeadline ?? request.neededBy!).toLocaleDateString("ru-RU")
+                                  : "не указан"}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Нераспределенная сумма к оплате:{" "}
+                                {formatAmountWithoutVatLabel(
+                                  unallocatedPaymentAmounts.amountWithoutVat,
+                                  request.currency,
+                                )}
                               </p>
                             </div>
                             {canSendPaymentReminder ? (
@@ -2424,12 +2326,7 @@ export default function RequestDetailPage() {
                                         <div className="text-sm text-muted-foreground">
                                           {row.status === "paid" ? "Оплачен" : "Запланирован"}{" "}
                                           {new Date(row.date).toLocaleDateString("ru-RU")} ·{" "}
-                                          {formatAmountPair({
-                                            amountWithoutVat: row.amountWithoutVat,
-                                            amountWithVat: row.amountWithVat,
-                                            currency: request.currency,
-                                            vatRate: row.vatRate ?? request.vatRate,
-                                          })}
+                                          {formatAmountWithoutVatLabel(row.amountWithoutVat, request.currency)}
                                         </div>
                                       </div>
                                       <div className="flex flex-wrap gap-2">
@@ -2465,7 +2362,7 @@ export default function RequestDetailPage() {
                                     {isActivePlannedRow && canSetPaid ? (
                                       <div className="space-y-3 rounded-lg border border-border/70 bg-background/80 p-3">
                                         <div className="text-sm font-medium">Зафиксировать этот платеж</div>
-                                        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] xl:items-end">
+                                        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] xl:items-end">
                                           <div className="space-y-2">
                                             <Label htmlFor="paymentExecutedAmount">Сумма без НДС</Label>
                                             <Input
@@ -2476,41 +2373,8 @@ export default function RequestDetailPage() {
                                                 const nextAmount = sanitizeNumericInput(event.target.value);
                                                 setPaymentExecutedAmount(nextAmount);
                                                 setPaymentActionError(null);
-                                                const synced = syncVatInputPair({
-                                                  amountWithoutVatInput: nextAmount,
-                                                  amountWithVatInput: paymentExecutedAmountWithVat,
-                                                  vatRateInput: String(paymentVatRate),
-                                                  source: "without",
-                                                });
-                                                setPaymentExecutedAmountWithVat(synced.amountWithVatInput);
                                               }}
                                               placeholder={`Например, ${row.amountWithoutVat ?? remainingPaymentAmounts.amountWithoutVat ?? request.amount}`}
-                                            />
-                                          </div>
-                                          <div className="space-y-2">
-                                            <Label htmlFor="paymentExecutedAmountWithVat">Сумма с НДС</Label>
-                                            <Input
-                                              id="paymentExecutedAmountWithVat"
-                                              inputMode="decimal"
-                                              value={paymentExecutedAmountWithVat}
-                                              onChange={(event) => {
-                                                const nextAmountWithVat = sanitizeNumericInput(event.target.value);
-                                                setPaymentExecutedAmountWithVat(nextAmountWithVat);
-                                                setPaymentActionError(null);
-                                                const synced = syncVatInputPair({
-                                                  amountWithoutVatInput: paymentExecutedAmount,
-                                                  amountWithVatInput: nextAmountWithVat,
-                                                  vatRateInput: String(paymentVatRate),
-                                                  source: "with",
-                                                });
-                                                setPaymentExecutedAmount(synced.amountWithoutVatInput);
-                                              }}
-                                              placeholder={`Например, ${
-                                                row.amountWithVat ??
-                                                remainingPaymentAmounts.amountWithVat ??
-                                                request.amountWithVat ??
-                                                calculateAmountWithVat(request.amount, paymentVatRate)
-                                              }`}
                                             />
                                           </div>
                                           <div className="space-y-2">
@@ -2564,7 +2428,7 @@ export default function RequestDetailPage() {
                               <div className="text-sm font-medium">
                                 {paymentTimelineRows.length ? "Следующий платеж" : "Первый платеж"}
                               </div>
-                              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
+                              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)]">
                                 <div className="space-y-2">
                                   <Label htmlFor="paymentPlannedAmount">Сумма без НДС</Label>
                                   <Input
@@ -2575,45 +2439,11 @@ export default function RequestDetailPage() {
                                       const nextAmount = sanitizeNumericInput(event.target.value);
                                       setPaymentPlannedAmount(nextAmount);
                                       setPaymentActionError(null);
-                                      const synced = syncVatInputPair({
-                                        amountWithoutVatInput: nextAmount,
-                                        amountWithVatInput: paymentPlannedAmountWithVat,
-                                        vatRateInput: String(paymentVatRate),
-                                        source: "without",
-                                      });
-                                      setPaymentPlannedAmountWithVat(synced.amountWithVatInput);
                                     }}
                                     placeholder={`Например, ${
                                       unallocatedPaymentAmounts.amountWithoutVat > MONEY_EPSILON
                                         ? unallocatedPaymentAmounts.amountWithoutVat
                                         : remainingPaymentAmounts.amountWithoutVat ?? request.amount
-                                    }`}
-                                  />
-                                </div>
-                                <div className="space-y-2">
-                                  <Label htmlFor="paymentPlannedAmountWithVat">Сумма с НДС</Label>
-                                  <Input
-                                    id="paymentPlannedAmountWithVat"
-                                    inputMode="decimal"
-                                    value={paymentPlannedAmountWithVat}
-                                    onChange={(event) => {
-                                      const nextAmountWithVat = sanitizeNumericInput(event.target.value);
-                                      setPaymentPlannedAmountWithVat(nextAmountWithVat);
-                                      setPaymentActionError(null);
-                                      const synced = syncVatInputPair({
-                                        amountWithoutVatInput: paymentPlannedAmount,
-                                        amountWithVatInput: nextAmountWithVat,
-                                        vatRateInput: String(paymentVatRate),
-                                        source: "with",
-                                      });
-                                      setPaymentPlannedAmount(synced.amountWithoutVatInput);
-                                    }}
-                                    placeholder={`Например, ${
-                                      unallocatedPaymentAmounts.amountWithVat > MONEY_EPSILON
-                                        ? unallocatedPaymentAmounts.amountWithVat
-                                        : remainingPaymentAmounts.amountWithVat ??
-                                          request.amountWithVat ??
-                                          calculateAmountWithVat(request.amount, paymentVatRate)
                                     }`}
                                   />
                                 </div>
@@ -2661,7 +2491,7 @@ export default function RequestDetailPage() {
                               {!activePlannedPaymentRow && canSetPaid ? (
                                 <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
                                   <div className="text-sm font-medium">Если уже оплачено</div>
-                                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] xl:items-end">
+                                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] xl:items-end">
                                     <div className="space-y-2">
                                       <Label htmlFor="paymentExecutedAmountDirect">Сумма без НДС</Label>
                                       <Input
@@ -2672,40 +2502,8 @@ export default function RequestDetailPage() {
                                           const nextAmount = sanitizeNumericInput(event.target.value);
                                           setPaymentExecutedAmount(nextAmount);
                                           setPaymentActionError(null);
-                                          const synced = syncVatInputPair({
-                                            amountWithoutVatInput: nextAmount,
-                                            amountWithVatInput: paymentExecutedAmountWithVat,
-                                            vatRateInput: String(paymentVatRate),
-                                            source: "without",
-                                          });
-                                          setPaymentExecutedAmountWithVat(synced.amountWithVatInput);
                                         }}
                                         placeholder={`Например, ${remainingPaymentAmounts.amountWithoutVat ?? request.amount}`}
-                                      />
-                                    </div>
-                                    <div className="space-y-2">
-                                      <Label htmlFor="paymentExecutedAmountWithVatDirect">Сумма с НДС</Label>
-                                      <Input
-                                        id="paymentExecutedAmountWithVatDirect"
-                                        inputMode="decimal"
-                                        value={paymentExecutedAmountWithVat}
-                                        onChange={(event) => {
-                                          const nextAmountWithVat = sanitizeNumericInput(event.target.value);
-                                          setPaymentExecutedAmountWithVat(nextAmountWithVat);
-                                          setPaymentActionError(null);
-                                          const synced = syncVatInputPair({
-                                            amountWithoutVatInput: paymentExecutedAmount,
-                                            amountWithVatInput: nextAmountWithVat,
-                                            vatRateInput: String(paymentVatRate),
-                                            source: "with",
-                                          });
-                                          setPaymentExecutedAmount(synced.amountWithoutVatInput);
-                                        }}
-                                        placeholder={`Например, ${
-                                          remainingPaymentAmounts.amountWithVat ??
-                                          request.amountWithVat ??
-                                          calculateAmountWithVat(request.amount, paymentVatRate)
-                                        }`}
                                       />
                                     </div>
                                     <div className="space-y-2">
@@ -2749,12 +2547,11 @@ export default function RequestDetailPage() {
                           ) : null}
 
                           <p className="text-xs text-muted-foreground">
-                            Остаток к оплате: {formatAmountPair({
-                              amountWithoutVat: remainingPaymentAmounts.amountWithoutVat,
-                              amountWithVat: remainingPaymentAmounts.amountWithVat,
-                              currency: request.currency,
-                              vatRate: request.vatRate,
-                            })}
+                            Остаток к оплате:{" "}
+                            {formatAmountWithoutVatLabel(
+                              remainingPaymentAmounts.amountWithoutVat,
+                              request.currency,
+                            )}
                           </p>
                         </div>
                       ) : null}
@@ -2799,111 +2596,6 @@ export default function RequestDetailPage() {
                   </p>
                 ) : null}
               </div>
-              {viewerAccessEntries.length || canManageViewerAccess ? (
-                <div className="space-y-3">
-                  <div>
-                    <div className="text-muted-foreground">Доступ к заявке</div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Эти люди могут открыть заявку по ссылке и комментировать ее, но не могут редактировать или согласовывать.
-                    </p>
-                  </div>
-                  {viewerAccessEntries.length ? (
-                    <div className="space-y-2">
-                      {viewerAccessEntries
-                        .slice()
-                        .sort((left, right) => right.grantedAt - left.grantedAt)
-                        .map((item) => (
-                          <div
-                            key={`${item.email}-${item.source}`}
-                            className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm"
-                          >
-                            <div>
-                              <div className="font-medium">
-                                {item.fullName ? `${item.fullName} · ` : ""}
-                                {item.email}
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                {item.source === "mention" ? "Доступ через @" : "Доступ выдан вручную"}
-                                {item.grantedByName || item.grantedByEmail
-                                  ? ` · ${item.grantedByName ? `${item.grantedByName} · ` : ""}${item.grantedByEmail}`
-                                  : ""}
-                              </div>
-                            </div>
-                            {canManageViewerAccess ? (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="border-rose-300 text-rose-700 hover:bg-rose-50"
-                                disabled={grantingViewerAccess}
-                                onClick={() => handleRevokeViewerAccess(item.email)}
-                              >
-                                Убрать доступ
-                              </Button>
-                            ) : null}
-                          </div>
-                        ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Пока никому дополнительно не выдали доступ.</p>
-                  )}
-                  {canManageViewerAccess ? (
-                    <div className="space-y-2 rounded-lg border border-border p-3">
-                      <Label htmlFor="viewer-access">Кому дать доступ</Label>
-                      <Input
-                        id="viewer-access"
-                        value={viewerAccessQuery}
-                        onChange={(event) => {
-                          setViewerAccessQuery(event.target.value);
-                          setSelectedViewerAccess(null);
-                          setViewerAccessError(null);
-                        }}
-                        placeholder="Начните вводить имя или почту"
-                      />
-                      {viewerAccessSuggestions.length ? (
-                        <div className="rounded-lg border border-border bg-background">
-                          {viewerAccessSuggestions.map((item) => (
-                            <button
-                              key={item.email}
-                              type="button"
-                              className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
-                              onClick={() => {
-                                setSelectedViewerAccess({
-                                  email: item.email,
-                                  name: getPersonDisplayName(item),
-                                });
-                                setViewerAccessQuery(getPersonDisplayName(item));
-                                setViewerAccessError(null);
-                              }}
-                            >
-                              <span className="font-medium">{getPersonDisplayName(item)}</span>
-                              <span className="text-xs text-muted-foreground">{item.email}</span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                      {!viewerAccessSuggestions.length && manualViewerAccessEmail ? (
-                        <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-sm">
-                          Почта не найдена в сервисе. Можно выдать доступ вручную на{" "}
-                          <span className="font-medium">{manualViewerAccessEmail}</span>.
-                        </div>
-                      ) : null}
-                      <div className="flex justify-end">
-                        <Button
-                          type="button"
-                          onClick={handleGrantViewerAccess}
-                          disabled={grantingViewerAccess || (!selectedViewerAccess && !manualViewerAccessEmail)}
-                        >
-                          Дать доступ
-                        </Button>
-                      </div>
-                      {viewerAccessError ? (
-                        <p className="text-sm text-destructive">{viewerAccessError}</p>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
               <div className="space-y-3">
                 <div>
                   <div className="text-muted-foreground">Прикрепить файлы</div>
@@ -3189,18 +2881,12 @@ export default function RequestDetailPage() {
                   </>
                 ) : null}
               </div>
-              {(request.finplanEntered || unifiedFinplanCostIds.length || request.fotAllSpecialistsRecorded) ? (
+              {(request.finplanEntered || unifiedFinplanCostIds.length) ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <div className="text-muted-foreground">Занесено в финплан</div>
                     <p className="mt-1">{request.finplanEntered ? "Да" : "Нет"}</p>
                   </div>
-                  {request.fotAllSpecialistsRecorded ? (
-                    <div>
-                      <div className="text-muted-foreground">ФОТ всех специалистов вынесен</div>
-                      <p className="mt-1">Да</p>
-                    </div>
-                  ) : null}
                   {unifiedFinplanCostIds.length ? (
                     <div className="sm:col-span-2">
                       <div className="text-muted-foreground">ID затрат в Финплане</div>
@@ -3348,7 +3034,7 @@ export default function RequestDetailPage() {
                                 className={
                                   isDraftContractor
                                     ? "grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]"
-                                    : "grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]"
+                                    : "grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.7fr)_minmax(0,0.9fr)]"
                                 }
                               >
                                 <Select
@@ -3377,7 +3063,7 @@ export default function RequestDetailPage() {
                                     <SelectValue placeholder="Тип" />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="internal">Штатник</SelectItem>
+                                    <SelectItem value="internal">Штат</SelectItem>
                                     <SelectItem value="contractor">Подрядчик</SelectItem>
                                   </SelectContent>
                                 </Select>
@@ -3471,22 +3157,24 @@ export default function RequestDetailPage() {
                                   disabled={!canEditThis}
                                   placeholder="Прямые затраты"
                                 />
-                                <Input
-                                  className="min-w-0"
-                                  inputMode="decimal"
-                                  value={draft.taxAmount === undefined ? "" : String(draft.taxAmount)}
-                                  onChange={(event) =>
-                                    setSpecialistDrafts((current) => ({
-                                      ...current,
-                                      [item.id]: {
-                                        ...draft,
-                                        taxAmount: parseMoneyInput(sanitizeNumericInput(event.target.value)),
-                                      },
-                                    }))
-                                  }
-                                  disabled={!canEditThis}
-                                  placeholder="Налоги"
-                                />
+                                {isDraftContractor ? (
+                                  <Input
+                                    className="min-w-0"
+                                    inputMode="decimal"
+                                    value={draft.taxAmount === undefined ? "" : String(draft.taxAmount)}
+                                    onChange={(event) =>
+                                      setSpecialistDrafts((current) => ({
+                                        ...current,
+                                        [item.id]: {
+                                          ...draft,
+                                          taxAmount: parseMoneyInput(sanitizeNumericInput(event.target.value)),
+                                        },
+                                      }))
+                                    }
+                                    disabled={!canEditThis}
+                                    placeholder="Налоги"
+                                  />
+                                ) : null}
                               </div>
                               {isDraftContractor ? (
                                 <div className="space-y-2">
@@ -3519,6 +3207,7 @@ export default function RequestDetailPage() {
                                   </div>
                                 </div>
                               ) : null}
+                              {isDraftContractor ? (
                               <div className="space-y-2">
                                 <div className="text-sm font-medium">Налоги</div>
                                 <div className="flex flex-wrap gap-3">
@@ -3559,6 +3248,7 @@ export default function RequestDetailPage() {
                                   })}
                                 </div>
                               </div>
+                              ) : null}
                               <div className="text-sm text-muted-foreground">
                                 Итого в квоту:{" "}
                                 {getSpecialistEffectiveCost(draft).toLocaleString("ru-RU")}{" "}
@@ -3636,8 +3326,9 @@ export default function RequestDetailPage() {
                                   Подтверждено BUH
                                 </label>
                               ) : null}
-                              {canEditThis ? (
-                                <div className="sm:col-span-6">
+                              {(canEditThis || !isDraftContractor) ? (
+                                <div className="flex flex-wrap items-end gap-3">
+                                  {canEditThis ? (
                                   <Button
                                     type="button"
                                     variant="outline"
@@ -3662,6 +3353,91 @@ export default function RequestDetailPage() {
                                   >
                                     Сохранить изменения
                                   </Button>
+                                  ) : null}
+                                  {!isDraftContractor ? (
+                                    <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border/70 px-3 py-2">
+                                      <label className="flex items-center gap-2 pb-2 text-sm font-medium">
+                                        <Checkbox
+                                          checked={Boolean(draft.fotRecorded)}
+                                          disabled={!canManageSpecialistFot || savingSpecialistId === item.id}
+                                          onCheckedChange={(checked) =>
+                                            setSpecialistDrafts((current) => ({
+                                              ...current,
+                                              [item.id]: {
+                                                ...draft,
+                                                fotRecorded: checked === true,
+                                              },
+                                            }))
+                                          }
+                                        />
+                                        ФОТ вынесен
+                                      </label>
+                                      <div className="space-y-1">
+                                        <Label className="text-xs text-muted-foreground">Месяц ФОТ</Label>
+                                        <Input
+                                          type="month"
+                                          value={draft.fotMonth ?? ""}
+                                          disabled={!canManageSpecialistFot || savingSpecialistId === item.id}
+                                          onChange={(event) =>
+                                            setSpecialistDrafts((current) => ({
+                                              ...current,
+                                              [item.id]: {
+                                                ...draft,
+                                                fotMonth: event.target.value,
+                                              },
+                                            }))
+                                          }
+                                          className="h-9 w-40"
+                                        />
+                                      </div>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={!canManageSpecialistFot || savingSpecialistId === item.id}
+                                        onClick={async () => {
+                                          setSavingSpecialistId(item.id);
+                                          setError(null);
+                                          try {
+                                            const nextFotRecorded = Boolean(draft.fotRecorded || !item.fotRecorded);
+                                            await updateSpecialistFot({
+                                              requestId: request._id,
+                                              specialistId: item.id,
+                                              fotRecorded: nextFotRecorded,
+                                              fotMonth: draft.fotMonth || undefined,
+                                            });
+                                            setSpecialistDrafts((current) => ({
+                                              ...current,
+                                              [item.id]: {
+                                                ...draft,
+                                                fotRecorded: nextFotRecorded,
+                                              },
+                                            }));
+                                            router.refresh();
+                                          } catch (err) {
+                                            setError(
+                                              err instanceof Error
+                                                ? err.message
+                                                : "Не удалось сохранить ФОТ специалиста",
+                                            );
+                                          } finally {
+                                            setSavingSpecialistId(null);
+                                          }
+                                        }}
+                                      >
+                                        {item.fotRecorded && !draft.fotRecorded ? "Снять ФОТ" : "ФОТ вынесен"}
+                                      </Button>
+                                      {draft.fotRecorded && draft.fotRecordedByEmail ? (
+                                        <div className="w-full text-xs text-muted-foreground">
+                                          Отметил: {draft.fotRecordedByName ? `${draft.fotRecordedByName} · ` : ""}
+                                          {draft.fotRecordedByEmail}
+                                          {draft.fotRecordedAt
+                                            ? ` · ${new Date(draft.fotRecordedAt).toLocaleDateString("ru-RU")}`
+                                            : ""}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
                                 </div>
                               ) : null}
                               <div className="sm:col-span-6 text-xs text-muted-foreground">
@@ -3764,6 +3540,114 @@ export default function RequestDetailPage() {
                     })}
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {viewerAccessEntries.length || canManageViewerAccess ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Доступ к заявке</CardTitle>
+                <CardDescription>
+                  Эти люди могут открыть заявку по ссылке и комментировать ее, но не могут редактировать или согласовывать.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {viewerAccessEntries.length ? (
+                  <div className="space-y-2">
+                    {viewerAccessEntries
+                      .slice()
+                      .sort((left, right) => right.grantedAt - left.grantedAt)
+                      .map((item) => (
+                        <div
+                          key={`${item.email}-${item.source}`}
+                          className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm"
+                        >
+                          <div>
+                            <div className="font-medium">
+                              {item.fullName ? `${item.fullName} · ` : ""}
+                              {item.email}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {item.source === "mention" ? "Доступ через @" : "Доступ выдан вручную"}
+                              {item.grantedByName || item.grantedByEmail
+                                ? ` · ${item.grantedByName ? `${item.grantedByName} · ` : ""}${item.grantedByEmail}`
+                                : ""}
+                            </div>
+                          </div>
+                          {canManageViewerAccess ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="border-rose-300 text-rose-700 hover:bg-rose-50"
+                              disabled={grantingViewerAccess}
+                              onClick={() => handleRevokeViewerAccess(item.email)}
+                            >
+                              Убрать доступ
+                            </Button>
+                          ) : null}
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Пока никому дополнительно не выдали доступ.</p>
+                )}
+                {canManageViewerAccess ? (
+                  <div className="space-y-2 rounded-lg border border-border p-3">
+                    <Label htmlFor="viewer-access">Кому дать доступ</Label>
+                    <Input
+                      id="viewer-access"
+                      value={viewerAccessQuery}
+                      onChange={(event) => {
+                        setViewerAccessQuery(event.target.value);
+                        setSelectedViewerAccess(null);
+                        setViewerAccessError(null);
+                      }}
+                      placeholder="Начните вводить имя или почту"
+                    />
+                    {viewerAccessSuggestions.length ? (
+                      <div className="rounded-lg border border-border bg-background">
+                        {viewerAccessSuggestions.map((item) => (
+                          <button
+                            key={item.email}
+                            type="button"
+                            className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
+                            onClick={() => {
+                              setSelectedViewerAccess({
+                                email: item.email,
+                                name: getPersonDisplayName(item),
+                              });
+                              setViewerAccessQuery(getPersonDisplayName(item));
+                              setViewerAccessError(null);
+                            }}
+                          >
+                            <span className="font-medium">{getPersonDisplayName(item)}</span>
+                            <span className="text-xs text-muted-foreground">{item.email}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {!viewerAccessSuggestions.length && manualViewerAccessEmail ? (
+                      <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-sm">
+                        Почта не найдена в сервисе. Можно выдать доступ вручную на{" "}
+                        <span className="font-medium">{manualViewerAccessEmail}</span>.
+                      </div>
+                    ) : null}
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        onClick={handleGrantViewerAccess}
+                        disabled={grantingViewerAccess || (!selectedViewerAccess && !manualViewerAccessEmail)}
+                      >
+                        Дать доступ
+                      </Button>
+                    </div>
+                    {viewerAccessError ? (
+                      <p className="text-sm text-destructive">{viewerAccessError}</p>
+                    ) : null}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           ) : null}

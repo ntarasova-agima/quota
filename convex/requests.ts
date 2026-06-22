@@ -228,43 +228,62 @@ function normalizeSpecialists(
     amountExcludesTaxes?: boolean;
     hodConfirmed?: boolean;
     buhConfirmed?: boolean;
+    fotRecorded?: boolean;
+    fotMonth?: string;
+    fotRecordedAt?: number;
+    fotRecordedByEmail?: string;
+    fotRecordedByName?: string;
     validationSkipped?: boolean;
   }>,
 ) {
   const normalized = specialists
-    .map((item) => ({
-      id: item.id,
-      name: item.name?.trim() ?? "",
-      contractorLegalEntity: item.contractorLegalEntity?.trim() || undefined,
-      sourceType: normalizeContestSpecialistSource(item.sourceType),
-      contractorTypes: Array.from(
-        new Set(
-          (item.contractorTypes ?? [])
-            .map((value) => value?.trim())
-            .map((value) => (value === "другое" ? "другое/не знаю" : value))
-            .filter(Boolean) as string[],
-        ),
-      ),
-      department: normalizeHodDepartment(item.department),
-      hours:
-        typeof item.hours === "number" && Number.isFinite(item.hours)
-          ? item.hours
-          : undefined,
-      directCost:
-        typeof item.directCost === "number" && Number.isFinite(item.directCost)
-          ? item.directCost
-          : undefined,
-      taxAmount:
-        typeof item.taxAmount === "number" && Number.isFinite(item.taxAmount)
-          ? item.taxAmount
-          : undefined,
-      taxUnknown: item.taxUnknown ?? false,
-      amountIncludesTaxes: item.amountIncludesTaxes ?? false,
-      amountExcludesTaxes: item.amountExcludesTaxes ?? false,
-      hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
-      buhConfirmed: item.validationSkipped ? true : item.buhConfirmed ?? false,
-      validationSkipped: item.validationSkipped ?? false,
-    }))
+    .map((item) => {
+      const sourceType = normalizeContestSpecialistSource(item.sourceType);
+      const isContractor = sourceType === "contractor";
+      return {
+        id: item.id,
+        name: item.name?.trim() ?? "",
+        contractorLegalEntity: isContractor ? item.contractorLegalEntity?.trim() || undefined : undefined,
+        sourceType,
+        contractorTypes: isContractor
+          ? Array.from(
+              new Set(
+                (item.contractorTypes ?? [])
+                  .map((value) => value?.trim())
+                  .map((value) => (value === "другое" ? "другое/не знаю" : value))
+                  .filter(Boolean) as string[],
+              ),
+            )
+          : [],
+        department: normalizeHodDepartment(item.department),
+        hours:
+          typeof item.hours === "number" && Number.isFinite(item.hours)
+            ? item.hours
+            : undefined,
+        directCost:
+          typeof item.directCost === "number" && Number.isFinite(item.directCost)
+            ? item.directCost
+            : undefined,
+        taxAmount:
+          isContractor && typeof item.taxAmount === "number" && Number.isFinite(item.taxAmount)
+            ? item.taxAmount
+            : undefined,
+        taxUnknown: isContractor ? item.taxUnknown ?? false : false,
+        amountIncludesTaxes: isContractor ? item.amountIncludesTaxes ?? false : false,
+        amountExcludesTaxes: isContractor ? item.amountExcludesTaxes ?? false : false,
+        hodConfirmed: item.validationSkipped ? true : item.hodConfirmed ?? false,
+        buhConfirmed: item.validationSkipped ? true : item.buhConfirmed ?? false,
+        fotRecorded: !isContractor ? item.fotRecorded ?? false : undefined,
+        fotMonth: !isContractor && item.fotMonth?.trim() ? item.fotMonth.trim() : undefined,
+        fotRecordedAt:
+          !isContractor && typeof item.fotRecordedAt === "number" && Number.isFinite(item.fotRecordedAt)
+            ? item.fotRecordedAt
+            : undefined,
+        fotRecordedByEmail: !isContractor ? item.fotRecordedByEmail?.trim() || undefined : undefined,
+        fotRecordedByName: !isContractor ? item.fotRecordedByName?.trim() || undefined : undefined,
+        validationSkipped: item.validationSkipped ?? false,
+      };
+    })
     .filter(
       (item) =>
         item.name ||
@@ -277,12 +296,45 @@ function normalizeSpecialists(
         item.taxUnknown ||
         item.amountIncludesTaxes ||
         item.amountExcludesTaxes ||
+        item.fotRecorded ||
+        item.fotMonth ||
         item.validationSkipped,
     );
   if (normalized.some((item) => item.amountIncludesTaxes && item.amountExcludesTaxes)) {
     throw new Error("Выберите только один вариант: сумма уже с налогами или сумма не включает налоги");
   }
   return normalized;
+}
+
+function preserveSpecialistFotFields(
+  nextSpecialists: ReturnType<typeof normalizeSpecialists>,
+  previousSpecialists: Array<any> = [],
+) {
+  const previousById = new Map(previousSpecialists.map((item) => [item.id, item]));
+  return nextSpecialists.map((item) => {
+    if (normalizeContestSpecialistSource(item.sourceType) !== "internal") {
+      return {
+        ...item,
+        fotRecorded: undefined,
+        fotMonth: undefined,
+        fotRecordedAt: undefined,
+        fotRecordedByEmail: undefined,
+        fotRecordedByName: undefined,
+      };
+    }
+    const previous = previousById.get(item.id);
+    if (!previous || normalizeContestSpecialistSource(previous.sourceType) !== "internal") {
+      return item;
+    }
+    return {
+      ...item,
+      fotRecorded: previous.fotRecorded ?? false,
+      fotMonth: previous.fotMonth,
+      fotRecordedAt: previous.fotRecordedAt,
+      fotRecordedByEmail: previous.fotRecordedByEmail,
+      fotRecordedByName: previous.fotRecordedByName,
+    };
+  });
 }
 
 function hasContestSpecialists(
@@ -926,6 +978,11 @@ const specialistValidator = v.object({
   amountExcludesTaxes: v.optional(v.boolean()),
   hodConfirmed: v.optional(v.boolean()),
   buhConfirmed: v.optional(v.boolean()),
+  fotRecorded: v.optional(v.boolean()),
+  fotMonth: v.optional(v.string()),
+  fotRecordedAt: v.optional(v.number()),
+  fotRecordedByEmail: v.optional(v.string()),
+  fotRecordedByName: v.optional(v.string()),
   validationSkipped: v.optional(v.boolean()),
 });
 
@@ -1072,6 +1129,9 @@ function formatValueForHistory(field: string, value: unknown) {
             specialist.validationSkipped ? "валидация не требуется" : undefined,
             specialist.hodConfirmed ? "подтверждено HoD" : undefined,
             specialist.buhConfirmed ? "подтверждено BUH" : undefined,
+            specialist.fotRecorded ? "ФОТ вынесен" : undefined,
+            specialist.fotMonth ? `месяц ФОТ ${formatMonthKeyLabel(specialist.fotMonth)}` : undefined,
+            specialist.fotRecordedByEmail ? `ФОТ отметил ${specialist.fotRecordedByName ?? specialist.fotRecordedByEmail}` : undefined,
           ].filter(Boolean);
           return parts.join(" / ");
         }
@@ -1602,6 +1662,14 @@ function getRequestPaymentDeadline(request: { paymentDeadline?: number; neededBy
   return request.paymentDeadline ?? request.neededBy;
 }
 
+function hasPendingInternalFot(request: { specialists?: Array<any> }) {
+  return (request.specialists ?? []).some(
+    (item: any) =>
+      normalizeContestSpecialistSource(item.sourceType) === "internal" &&
+      !item.fotRecorded,
+  );
+}
+
 async function schedulePaymentDueReminders(ctx: any, requestId: any, paymentDueAt?: number) {
   if (!paymentDueAt) {
     return;
@@ -1632,14 +1700,54 @@ async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymen
   await schedulePaymentDueReminders(ctx, requestId, paymentDeadline);
 }
 
+async function scheduleFotDeadlineReminders(ctx: any, requestId: any, paymentDeadline?: number) {
+  if (!paymentDeadline) {
+    return;
+  }
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  await ctx.scheduler.runAfter(
+    Math.max(0, startOfDate(paymentDeadline) - dayMs - now),
+    internal.emails.sendFotDeadlineReminder,
+    {
+      requestId,
+      paymentDeadline,
+      reminderKind: "before",
+    },
+  );
+  await ctx.scheduler.runAfter(
+    Math.max(0, startOfDate(paymentDeadline) + dayMs - now),
+    internal.emails.sendFotDeadlineReminder,
+    {
+      requestId,
+      paymentDeadline,
+      reminderKind: "overdue",
+    },
+  );
+}
+
+async function sendFotRecordingRequestedAndScheduleReminders(
+  ctx: any,
+  request: { _id: any; paymentDeadline?: number; neededBy?: number; specialists?: Array<any> },
+) {
+  if (!hasPendingInternalFot(request)) {
+    return;
+  }
+  await ctx.scheduler.runAfter(0, internal.emails.sendFotRecordingRequested, {
+    requestId: request._id,
+  });
+  await scheduleFotDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
+}
+
 async function sendPaymentPlanningRequestedAndScheduleReminders(
   ctx: any,
-  request: { _id: any; paymentDeadline?: number; neededBy?: number },
+  request: { _id: any; paymentDeadline?: number; neededBy?: number; specialists?: Array<any> },
 ) {
   await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
     requestId: request._id,
   });
   await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
+  await sendFotRecordingRequestedAndScheduleReminders(ctx, request);
 }
 
 async function schedulePlannedPaymentReminder(ctx: any, requestId: any, paymentPlannedAt?: number) {
@@ -2343,7 +2451,10 @@ export const previewEditImpact = query({
       throw new Error("Not authorized");
     }
 
-    const normalizedSpecialists = normalizeSpecialists(args.specialists ?? request.specialists ?? []);
+    const normalizedSpecialists = preserveSpecialistFotFields(
+      normalizeSpecialists(args.specialists ?? request.specialists ?? []),
+      request.specialists ?? [],
+    );
     const normalizedCategory = normalizeRequestCategory(args.category);
     const normalizedDepartment = normalizeHodDepartment(args.department);
     const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
@@ -2480,7 +2591,10 @@ export const editRequest = mutation({
     const identity = await ctx.auth.getUserIdentity();
     const actorName = roleRecord?.fullName ?? identity?.name ?? undefined;
     const creatorRoles = roleRecord?.roles ?? [];
-    const normalizedSpecialists = normalizeSpecialists(specialistInput);
+    const normalizedSpecialists = preserveSpecialistFotFields(
+      normalizeSpecialists(specialistInput),
+      request.specialists ?? [],
+    );
     const normalizedDepartment = normalizeHodDepartment(args.department);
     const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
@@ -2656,6 +2770,12 @@ export const editRequest = mutation({
       status: nextStatus,
       updatedAt: now,
     };
+    if (args.specialists !== undefined && hasPendingInternalFot({ specialists: normalizedSpecialists })) {
+      patch.fotReminderLastDateKey = undefined;
+      if (request.status === "approved") {
+        patch.fotRecordingRequestedAt = undefined;
+      }
+    }
 
     const approvalDeadlineChanged = request.approvalDeadline !== args.approvalDeadline;
     const previousPaymentTaskAt = getPaymentTaskTimestamp(request);
@@ -2772,6 +2892,7 @@ export const editRequest = mutation({
         _id: args.id,
         paymentDeadline: nextForDiff.paymentDeadline,
         neededBy: nextForDiff.neededBy,
+        specialists: normalizedSpecialists,
       });
     } else if (
       request.status !== "draft" &&
@@ -2881,6 +3002,14 @@ export const editRequest = mutation({
             : undefined,
         actorEmail: request.status !== "draft" && specialistsChanged ? email : undefined,
         actorName: request.status !== "draft" && specialistsChanged ? actorName : undefined,
+      });
+    }
+    if (request.status === "approved" && specialistsChanged) {
+      await sendFotRecordingRequestedAndScheduleReminders(ctx, {
+        _id: args.id,
+        paymentDeadline: nextForDiff.paymentDeadline,
+        neededBy: nextForDiff.neededBy,
+        specialists: normalizedSpecialists,
       });
     }
     if (nextStatus === "pending" && args.approvalDeadline && (submitDraft || shouldResubmit || approvalDeadlineChanged)) {
@@ -3090,6 +3219,7 @@ export const createRequest = mutation({
         _id: requestId,
         paymentDeadline: payloadArgs.paymentDeadline,
         neededBy: payloadArgs.neededBy,
+        specialists: normalizedSpecialists,
       });
     }
     await ctx.scheduler.runAfter(0, internal.emails.sendRequestCreatedToBuh, {
@@ -3230,16 +3360,27 @@ export const updateContestSpecialist = mutation({
         typeof args.directCost === "number" && Number.isFinite(args.directCost)
           ? args.directCost
           : undefined,
-      taxAmount:
-        typeof args.taxAmount === "number" && Number.isFinite(args.taxAmount)
-          ? args.taxAmount
-          : undefined,
-      taxUnknown: args.taxUnknown ?? current.taxUnknown ?? false,
-      amountIncludesTaxes: args.amountIncludesTaxes ?? current.amountIncludesTaxes ?? false,
-      amountExcludesTaxes: args.amountExcludesTaxes ?? current.amountExcludesTaxes ?? false,
+      taxAmount: undefined as number | undefined,
+      taxUnknown: false,
+      amountIncludesTaxes: false,
+      amountExcludesTaxes: false,
       hodConfirmed: args.hodConfirmed ?? current.hodConfirmed ?? false,
       buhConfirmed: args.buhConfirmed ?? current.buhConfirmed ?? false,
     };
+    if (nextSpecialist.sourceType === "contractor") {
+      nextSpecialist.taxAmount =
+        typeof args.taxAmount === "number" && Number.isFinite(args.taxAmount)
+          ? args.taxAmount
+          : undefined;
+      nextSpecialist.taxUnknown = args.taxUnknown ?? current.taxUnknown ?? false;
+      nextSpecialist.amountIncludesTaxes = args.amountIncludesTaxes ?? current.amountIncludesTaxes ?? false;
+      nextSpecialist.amountExcludesTaxes = args.amountExcludesTaxes ?? current.amountExcludesTaxes ?? false;
+      nextSpecialist.fotRecorded = undefined;
+      nextSpecialist.fotMonth = undefined;
+      nextSpecialist.fotRecordedAt = undefined;
+      nextSpecialist.fotRecordedByEmail = undefined;
+      nextSpecialist.fotRecordedByName = undefined;
+    }
     nextSpecialist.contractorLegalEntity =
       nextSpecialist.sourceType === "contractor"
         ? args.contractorLegalEntity?.trim() || undefined
@@ -3281,14 +3422,19 @@ export const updateContestSpecialist = mutation({
     ].includes(request.status);
     const nextStatus = preservesPaymentStatus ? request.status : approvalStatus;
     const releasedFromHodPending = request.status === "hod_pending" && nextStatus !== "hod_pending";
-    await ctx.db.patch(request._id, {
+    const requestPatch: Record<string, any> = {
       specialists,
       amount: nextAmount,
       amountWithVat: nextAmountWithVat,
       status: nextStatus,
       submittedAt: releasedFromHodPending ? Date.now() : request.submittedAt,
       updatedAt: Date.now(),
-    });
+    };
+    if (request.status === "approved" && hasPendingInternalFot({ specialists })) {
+      requestPatch.fotRecordingRequestedAt = undefined;
+      requestPatch.fotReminderLastDateKey = undefined;
+    }
+    await ctx.db.patch(request._id, requestPatch);
     const specialistChanges = diffRequestFields(
       { specialists: request.specialists ?? [] },
       { specialists },
@@ -3331,13 +3477,100 @@ export const updateContestSpecialist = mutation({
         : undefined,
     });
     if (request.status !== "approved" && nextStatus === "approved") {
-      await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
+      await sendPaymentPlanningRequestedAndScheduleReminders(ctx, { ...request, specialists });
+    }
+    if (request.status === "approved" && specialistChanges.length) {
+      await sendFotRecordingRequestedAndScheduleReminders(ctx, { ...request, specialists });
     }
     if (request.status !== "hod_pending" && nextStatus === "hod_pending") {
       await ctx.scheduler.runAfter(0, internal.emails.sendHodValidationRequest, {
         requestId: request._id,
       });
     }
+    return { updated: true };
+  },
+});
+
+export const updateSpecialistFot = mutation({
+  args: {
+    requestId: v.id("requests"),
+    specialistId: v.string(),
+    fotRecorded: v.boolean(),
+    fotMonth: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    const isAdmin = Boolean(roleRecord?.roles?.includes("ADMIN"));
+    const canManageFot = Boolean(roleRecord?.roles?.includes("BUH Inside") || isAdmin);
+    if (!roleRecord?.active || !canManageFot) {
+      throw new Error("ФОТ может отметить только BUH Inside");
+    }
+    const request = await ctx.db.get(args.requestId);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    if (request.isCanceled) {
+      throw new Error("Сначала возобновите заявку");
+    }
+    if (["draft", "hod_pending", "pending", "rejected"].includes(request.status)) {
+      throw new Error("ФОТ можно вынести после согласования заявки");
+    }
+    const specialists = [...(request.specialists ?? [])];
+    const index = specialists.findIndex((item) => item.id === args.specialistId);
+    if (index === -1) {
+      throw new Error("Специалист не найден");
+    }
+    const current = specialists[index];
+    if (normalizeContestSpecialistSource(current.sourceType) !== "internal") {
+      throw new Error("ФОТ отмечается только для специалистов в штате");
+    }
+    const fotMonth = args.fotMonth?.trim();
+    if (args.fotRecorded && !/^\d{4}-\d{2}$/.test(fotMonth ?? "")) {
+      throw new Error("Укажите месяц и год ФОТ");
+    }
+    const now = Date.now();
+    const nextSpecialist = {
+      ...current,
+      fotRecorded: args.fotRecorded,
+      fotMonth: args.fotRecorded ? fotMonth : undefined,
+      fotRecordedAt: args.fotRecorded ? now : undefined,
+      fotRecordedByEmail: args.fotRecorded ? email : undefined,
+      fotRecordedByName: args.fotRecorded ? roleRecord.fullName ?? undefined : undefined,
+    };
+    specialists[index] = nextSpecialist;
+    const changes = diffRequestFields(
+      { specialists: request.specialists ?? [] },
+      { specialists },
+    );
+    await ctx.db.patch(request._id, {
+      specialists,
+      fotReminderLastDateKey: undefined,
+      updatedAt: now,
+    });
+    if (changes.length) {
+      await recordRequestChanges(
+        ctx,
+        request._id,
+        email,
+        roleRecord.fullName ?? undefined,
+        changes,
+      );
+    }
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "specialist_fot_updated",
+      title: args.fotRecorded ? "ФОТ специалиста вынесен" : "Отметка ФОТ специалиста снята",
+      description: [
+        current.name,
+        args.fotRecorded && fotMonth ? formatMonthKeyLabel(fotMonth) : undefined,
+      ].filter(Boolean).join(" · ") || undefined,
+      actorEmail: email,
+      actorName: roleRecord.fullName ?? undefined,
+    });
     return { updated: true };
   },
 });
@@ -3680,6 +3913,9 @@ export const updateOperationalFields = mutation({
     if (args.shipmentDate !== undefined) {
       throw new Error("Дата отгрузки меняется автором через редактирование заявки");
     }
+    if (args.fotAllSpecialistsRecorded !== undefined) {
+      throw new Error("ФОТ отмечается отдельно по каждому штатному специалисту");
+    }
 
     validateOptionalMoney(args.amount, "Сумма без НДС");
     validateOptionalMoney(args.amountWithVat, "Сумма с НДС");
@@ -3715,10 +3951,6 @@ export const updateOperationalFields = mutation({
         patch.finplanEntered = true;
       }
     }
-    if (args.fotAllSpecialistsRecorded !== undefined) {
-      patch.fotAllSpecialistsRecorded = args.fotAllSpecialistsRecorded;
-    }
-
     const previousForDiff = { ...request };
     const nextForDiff = { ...request, ...patch };
     const changes = diffRequestFields(previousForDiff, nextForDiff);
@@ -4634,5 +4866,36 @@ export const markReminderSent = internalMutation({
     if (args.kind === "close" && request.paidAt === args.expectedAt) {
       await ctx.db.patch(args.requestId, { closeReminderSentAt: Date.now() });
     }
+  },
+});
+
+export const markFotRecordingRequested = internalMutation({
+  args: {
+    requestId: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.requestId);
+    if (!request || request.fotRecordingRequestedAt) {
+      return;
+    }
+    await ctx.db.patch(args.requestId, {
+      fotRecordingRequestedAt: Date.now(),
+    });
+  },
+});
+
+export const markFotReminderSent = internalMutation({
+  args: {
+    requestId: v.id("requests"),
+    dateKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.requestId);
+    if (!request) {
+      return;
+    }
+    await ctx.db.patch(args.requestId, {
+      fotReminderLastDateKey: args.dateKey,
+    });
   },
 });
