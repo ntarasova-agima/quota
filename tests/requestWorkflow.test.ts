@@ -46,7 +46,7 @@ describe("requestWorkflow", () => {
         requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT],
         category: CLIENT_SERVICES_TRANSIT_CATEGORY,
       }),
-    ).toEqual(["HOD", "BUH Transit"]);
+    ).toEqual(["BUH Transit"]);
 
     expect(
       getEffectiveRequiredRoles({
@@ -61,10 +61,7 @@ describe("requestWorkflow", () => {
         requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT],
         category: CLIENT_SERVICES_TRANSIT_CATEGORY,
       }),
-    ).toEqual([
-      { role: "HOD", department: FINANCE_LEGAL_DEPARTMENT },
-      { role: "BUH Transit" },
-    ]);
+    ).toEqual([{ role: "BUH Transit" }]);
   });
 
   it("does not add management HOD to transit requests unless HOD is selected", () => {
@@ -84,24 +81,21 @@ describe("requestWorkflow", () => {
     ).toEqual(["BUH Transit"]);
   });
 
-  it("keeps manual HOD approval available for transit requests", () => {
+  it("does not keep manual HOD approval for transit requests", () => {
     const departments = getEffectiveRequiredHodDepartments({
       category: CLIENT_SERVICES_TRANSIT_CATEGORY,
       requiredRoles: ["HOD"],
       requiredHodDepartments: ["Производственный менеджмент"],
     });
 
-    expect(departments).toEqual(["Производственный менеджмент"]);
+    expect(departments).toEqual([]);
     expect(
       buildApprovalTargets({
         requiredRoles: ["HOD"],
         requiredHodDepartments: departments,
         category: CLIENT_SERVICES_TRANSIT_CATEGORY,
       }),
-    ).toEqual([
-      { role: "HOD", department: "Производственный менеджмент" },
-      { role: "BUH Transit" },
-    ]);
+    ).toEqual([{ role: "BUH Transit" }]);
   });
 
   it("marks only BUH Transit as mandatory for transit requests without auto HOD", () => {
@@ -181,7 +175,7 @@ describe("requestWorkflow", () => {
   it("requires Accounting HOD when contractor specialists are present", () => {
     expect(
       getEffectiveRequiredHodDepartments({
-        category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+        category: "Конкурсное задание",
         requiredHodDepartments: [],
         specialists: [
           {
@@ -194,7 +188,7 @@ describe("requestWorkflow", () => {
 
     expect(
       getEffectiveRequiredHodDepartments({
-        category: CLIENT_SERVICES_TRANSIT_CATEGORY,
+        category: "Конкурсное задание",
         requiredHodDepartments: [],
         specialists: [
           {

@@ -85,8 +85,8 @@ export function getEffectiveRequiredRoles(params: {
   enforceFinanceRole?: boolean;
 }) {
   const roles = new Set(params.requiredRoles);
+  const normalizedCategory = normalizeRequestCategory(params.category ?? "");
   if (params.enforceFinanceRole !== false) {
-    const normalizedCategory = normalizeRequestCategory(params.category ?? "");
     if (normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY) {
       roles.delete("BUH");
     }
@@ -94,7 +94,9 @@ export function getEffectiveRequiredRoles(params: {
       roles.add(role),
     );
   }
-  if ((params.requiredHodDepartments?.length ?? 0) > 0) {
+  if (!isHodSelectableCategory(normalizedCategory)) {
+    roles.delete("HOD");
+  } else if ((params.requiredHodDepartments?.length ?? 0) > 0) {
     roles.add("HOD");
   }
   return Array.from(roles);

@@ -162,7 +162,6 @@ export function isHodSelectableCategory(category: string) {
   return [
     ...ACCOUNTING_REQUEST_CATEGORIES,
     ...ADMINISTRATION_REQUEST_CATEGORIES,
-    ...TRANSIT_REQUEST_CATEGORIES,
   ].includes(normalizedCategory as any);
 }
 
