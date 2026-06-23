@@ -24,9 +24,10 @@ import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import {
-  getBuhPaymentStatusSummary,
+  getFotActionHint,
+  getPaymentActionHint,
   getRequestStatusSummary,
-  isOpenPaymentTask,
+  type PaymentTaskFilter,
 } from "@/lib/requestStatus";
 import { EMPTY_BUSINESS_CATEGORY, EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
 import { hasFinanceApproverRole } from "@/lib/financeRole";
@@ -41,16 +42,11 @@ function getRequestDisplayTitle(request: {
   return request.title?.trim() || `${request.clientName} :: ${normalizeRequestCategory(request.category)}`;
 }
 
-function getPendingStatusPresentation(isActionableForViewer: boolean) {
-  return isActionableForViewer
-    ? {
-        label: "Ожидает согласования",
-        className: "border-amber-200 bg-amber-100 text-amber-800",
-      }
-    : {
-        label: "Ожидает согласования",
-        className: "border-amber-200 bg-amber-50 text-amber-700",
-      };
+function getPendingStatusPresentation() {
+  return {
+    label: "Ожидает согласования",
+    className: "border-amber-200 bg-amber-50 text-amber-700",
+  };
 }
 
 function getFinplanCostIds(request: { finplanEntryIds?: string[]; finplanCostIds?: string[] }) {
@@ -89,15 +85,29 @@ const statusOptions = [
   { value: "hod_pending", label: "Ждет валидации цеха" },
   { value: "pending", label: "Ожидает согласования" },
   { value: "approved", label: "Согласовано" },
-  { value: "rejected", label: "Отклонено" },
-  { value: "awaiting_payment", label: "Требуется оплата" },
+  { value: "rejected", label: "Не согласовано" },
   { value: "payment_planned", label: "Запланирована оплата" },
   { value: "partially_paid", label: "Частично оплачено" },
   { value: "paid", label: "Оплачено" },
   { value: "closed", label: "Заявка закрыта" },
+  { value: "canceled", label: "Отменена" },
 ] as const;
 
 type RequestStatusValue = Exclude<(typeof statusOptions)[number]["value"], "all">;
+
+const paymentTaskOptions = [
+  { value: "all", label: "Все платежи" },
+  { value: "open", label: "Все платежные задачи" },
+  { value: "needs_action", label: "Нужно запланировать или оплатить" },
+  { value: "payment_planned", label: "Запланирована оплата" },
+  { value: "partially_paid", label: "Частично оплачено" },
+  { value: "unallocated", label: "Есть нераспределенный платеж" },
+  { value: "fot", label: "Нужно вынести ФОТ" },
+  { value: "today", label: "Оплата сегодня" },
+  { value: "overdue", label: "Оплата просрочена" },
+] as const;
+
+type PaymentTaskFilterValue = (typeof paymentTaskOptions)[number]["value"];
 
 function toStartOfDay(value: string) {
   if (!value) {
@@ -141,7 +151,7 @@ function getStatusFilterLabel(statusFilters: string[]) {
 export default function RequestsPage() {
   const searchParams = useSearchParams();
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
-  const [paymentDueFilter, setPaymentDueFilter] = useState<"all" | "today" | "overdue">("all");
+  const [paymentTaskFilter, setPaymentTaskFilter] = useState<PaymentTaskFilterValue>("all");
   const [myStatusFilter, setMyStatusFilter] = useState("all");
   const [authorFilter, setAuthorFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState("all");
@@ -234,7 +244,10 @@ export default function RequestsPage() {
           businessCategory: businessCategoryFilter === "all" ? undefined : businessCategoryFilter,
           fundingSource: fundingFilter === "all" ? undefined : fundingFilter,
           hasSpecialists: specialistFilter === "with_specialists" ? true : undefined,
-          paymentDueFilter: paymentDueFilter === "all" ? undefined : paymentDueFilter,
+          paymentTaskFilter:
+            paymentTaskFilter === "all" || paymentTaskFilter === "fot"
+              ? undefined
+              : (paymentTaskFilter as PaymentTaskFilter),
           createdFrom: toStartOfDay(createdFrom),
           createdTo: toEndOfDay(createdTo),
           requestCodeQuery: allRequestCodeQuery.trim() || undefined,
@@ -254,7 +267,10 @@ export default function RequestsPage() {
       .finally(() => setArchiveSweepDone(true));
   }, [archiveOldRequests, archiveSweepDone, isAuthenticated]);
   const myRequestItems = myRequests?.items ?? [];
-  const allRequestItems = allRequests?.items ?? [];
+  const allRequestItems =
+    paymentTaskFilter === "fot"
+      ? (allRequests?.items ?? []).filter(({ request }) => Boolean(getFotActionHint(request)))
+      : (allRequests?.items ?? []);
   const businessCategoryOptions = businessCategories ?? [
     { _id: "empty", name: EMPTY_BUSINESS_CATEGORY },
   ];
@@ -322,7 +338,7 @@ export default function RequestsPage() {
     businessCategoryFilter,
     fundingFilter,
     specialistFilter,
-    paymentDueFilter,
+    paymentTaskFilter,
     createdFrom,
     createdTo,
     allSort,
@@ -450,10 +466,7 @@ export default function RequestsPage() {
               <div className="space-y-3">
                 {myRequestItems.length ? (
                   myRequestItems.map(({ request, approvals }) => {
-                    const baseStatusSummary =
-                      isFinanceRole && isOpenPaymentTask(request)
-                        ? getBuhPaymentStatusSummary(request)
-                        : getRequestStatusSummary(request, approvals);
+                    const baseStatusSummary = getRequestStatusSummary(request, approvals);
                     const isActionableForViewer =
                       request.status === "pending" &&
                       approvals.some(
@@ -464,10 +477,18 @@ export default function RequestsPage() {
                       request.status === "pending" &&
                       !request.isCanceled &&
                       !baseStatusSummary.label.startsWith("Частично согласовано")
-                        ? getPendingStatusPresentation(isActionableForViewer)
+                        ? getPendingStatusPresentation()
                         : baseStatusSummary;
-                    const canSendToPayment = !request.isCanceled && request.status === "approved";
-                    const canCloseFromList = !request.isCanceled && ["approved", "paid"].includes(request.status);
+                    const paymentActionHint = isFinanceRole ? getPaymentActionHint(request) : null;
+                    const fotActionHint = isFinanceRole ? getFotActionHint(request) : null;
+                    const actionHint =
+                      isActionableForViewer
+                        ? {
+                            label: "Ждет вашего решения",
+                            className: "border-amber-200 bg-amber-50 text-amber-800",
+                          }
+                        : paymentActionHint;
+                    const canCloseFromList = !request.isCanceled && request.status === "paid";
                     const canReopenFromList = !request.isCanceled && request.status === "closed";
                     return (
                       <div
@@ -514,57 +535,14 @@ export default function RequestsPage() {
                               </HoverHint>
                             </div>
                           </Link>
-                          {request.status === "awaiting_payment" && request.awaitingPaymentByEmail ? (
-                            <div className="text-muted-foreground">
-                              В оплату передал: {request.awaitingPaymentByName ? `${request.awaitingPaymentByName} · ` : ""}
-                              {request.awaitingPaymentByEmail}
-                            </div>
-                          ) : null}
-                          {(canSendToPayment || canCloseFromList || canReopenFromList) ? (
+                          {(canCloseFromList || canReopenFromList) ? (
                             <div className="mt-3 flex flex-wrap gap-2">
-                              {canSendToPayment ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-9"
-                                  disabled={updatingRequestId === request._id}
-                                  onClick={async () => {
-                                    setActionError(null);
-                                    setUpdatingRequestId(request._id);
-                                    try {
-                                      await updatePaymentStatus({
-                                        id: request._id,
-                                        status: "awaiting_payment",
-                                      });
-                                    } catch (err) {
-                                      setActionError(
-                                        err instanceof Error ? err.message : "Не удалось передать в оплату",
-                                      );
-                                    } finally {
-                                      setUpdatingRequestId(null);
-                                    }
-                                  }}
-                                >
-                                  Передать в оплату
-                                </Button>
-                              ) : null}
                               {canCloseFromList ? (
-                                <HoverHint
-                                  label={
-                                    request.status === "approved"
-                                      ? "Если оплата по счету не требуется"
-                                      : "Подтвердить, что заявка завершена"
-                                  }
-                                >
+                                <HoverHint label="Подтвердить, что заявка завершена">
                                   <Button
                                     type="button"
                                     size="sm"
-                                    className={
-                                      request.status === "approved"
-                                        ? "h-9 border-slate-300 bg-gradient-to-r from-slate-100 via-zinc-50 to-slate-100 text-slate-800 shadow-[0_0_10px_rgba(148,163,184,0.10)] hover:from-slate-200 hover:via-zinc-100 hover:to-slate-200"
-                                        : "h-9 border-amber-300 bg-gradient-to-r from-amber-100 via-yellow-50 to-amber-100 text-amber-900 shadow-[0_0_10px_rgba(245,158,11,0.10)] hover:from-amber-200 hover:via-yellow-100 hover:to-amber-200"
-                                    }
+                                    className="h-9 border-amber-300 bg-gradient-to-r from-amber-100 via-yellow-50 to-amber-100 text-amber-900 shadow-[0_0_10px_rgba(245,158,11,0.10)] hover:from-amber-200 hover:via-yellow-100 hover:to-amber-200"
                                     disabled={updatingRequestId === request._id}
                                     onClick={async () => {
                                       setActionError(null);
@@ -583,9 +561,7 @@ export default function RequestsPage() {
                                       }
                                     }}
                                   >
-                                    {request.status === "approved"
-                                      ? "Принять без оплаты"
-                                      : "Закрыть заявку"}
+                                    Закрыть заявку
                                   </Button>
                                 </HoverHint>
                               ) : null}
@@ -639,6 +615,20 @@ export default function RequestsPage() {
                           >
                             {statusSummary.label}
                           </span>
+                          {actionHint ? (
+                            <span
+                              className={`h-fit rounded-full border px-3 py-1 text-xs ${actionHint.className}`}
+                            >
+                              {actionHint.label}
+                            </span>
+                          ) : null}
+                          {fotActionHint ? (
+                            <span
+                              className={`h-fit rounded-full border px-3 py-1 text-xs ${fotActionHint.className}`}
+                            >
+                              {fotActionHint.label}
+                            </span>
+                          ) : null}
                           {hasFinplanEntryMark(request) ? (
                             <FinplanEnteredBadge finplanCostIds={getFinplanCostIds(request)} />
                           ) : null}
@@ -694,33 +684,18 @@ export default function RequestsPage() {
                 </div>
                 {isFinanceRole ? (
                   <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant={paymentDueFilter === "all" ? "default" : "outline"}
-                      onClick={() => setPaymentDueFilter("all")}
-                    >
-                      Все даты
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={paymentDueFilter === "today" ? "default" : "outline"}
-                      onClick={() => {
-                        setStatusFilters([]);
-                        setPaymentDueFilter("today");
-                      }}
-                    >
-                      Сегодня
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={paymentDueFilter === "overdue" ? "default" : "outline"}
-                      onClick={() => {
-                        setStatusFilters([]);
-                        setPaymentDueFilter("overdue");
-                      }}
-                    >
-                      Просрочено
-                    </Button>
+                    <Select value={paymentTaskFilter} onValueChange={(value) => setPaymentTaskFilter(value as PaymentTaskFilterValue)}>
+                      <SelectTrigger className="w-[280px]">
+                        <SelectValue placeholder="Платежи" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {paymentTaskOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 ) : null}
                 <div className="flex flex-wrap gap-3">
@@ -856,18 +831,15 @@ export default function RequestsPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {isFinanceRole && paymentDueFilter !== "all" ? (
+                {isFinanceRole && paymentTaskFilter !== "all" ? (
                   <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    Показываем согласованные заявки с платежными сроками, включая запланированные и частично оплаченные.
+                    Платежные даты считаются по ближайшей запланированной оплате, а если ее нет — по дедлайну оплаты.
                   </div>
                 ) : null}
                 <div className="space-y-3">
                   {allRequestItems.length ? (
                     allRequestItems.map(({ request, approvals }) => {
-                      const baseStatusSummary =
-                        isFinanceRole && isOpenPaymentTask(request)
-                          ? getBuhPaymentStatusSummary(request)
-                          : getRequestStatusSummary(request, approvals);
+                      const baseStatusSummary = getRequestStatusSummary(request, approvals);
                       const isActionableForViewer =
                         request.status === "pending" &&
                         approvals.some(
@@ -878,8 +850,17 @@ export default function RequestsPage() {
                         request.status === "pending" &&
                         !request.isCanceled &&
                         !baseStatusSummary.label.startsWith("Частично согласовано")
-                          ? getPendingStatusPresentation(isActionableForViewer)
+                          ? getPendingStatusPresentation()
                           : baseStatusSummary;
+                      const paymentActionHint = isFinanceRole ? getPaymentActionHint(request) : null;
+                      const fotActionHint = isFinanceRole ? getFotActionHint(request) : null;
+                      const actionHint =
+                        isActionableForViewer
+                          ? {
+                              label: "Ждет вашего решения",
+                              className: "border-amber-200 bg-amber-50 text-amber-800",
+                            }
+                          : paymentActionHint;
                       return (
                         <Link
                           key={request._id}
@@ -932,12 +913,6 @@ export default function RequestsPage() {
                                 <span>Создано: {new Date(request.createdAt).toLocaleDateString("ru-RU")}</span>
                               </HoverHint>
                             </div>
-                            {request.status === "awaiting_payment" && request.awaitingPaymentByEmail ? (
-                              <div className="text-muted-foreground">
-                                В оплату передал: {request.awaitingPaymentByName ? `${request.awaitingPaymentByName} · ` : ""}
-                                {request.awaitingPaymentByEmail}
-                              </div>
-                            ) : null}
                             <div className="text-muted-foreground">
                               {request.createdByName ? `${request.createdByName} · ` : ""}
                               {request.createdByEmail}
@@ -961,6 +936,20 @@ export default function RequestsPage() {
                             >
                               {statusSummary.label}
                             </span>
+                            {actionHint ? (
+                              <span
+                                className={`h-fit rounded-full border px-3 py-1 text-xs ${actionHint.className}`}
+                              >
+                                {actionHint.label}
+                              </span>
+                            ) : null}
+                            {fotActionHint ? (
+                              <span
+                                className={`h-fit rounded-full border px-3 py-1 text-xs ${fotActionHint.className}`}
+                              >
+                                {fotActionHint.label}
+                              </span>
+                            ) : null}
                             {hasFinplanEntryMark(request) ? (
                               <FinplanEnteredBadge finplanCostIds={getFinplanCostIds(request)} />
                             ) : null}

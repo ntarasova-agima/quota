@@ -59,6 +59,7 @@ import {
 import {
   calculateIncomingRatio,
   formatMonthKeyLabel,
+  getContractorSpecialistPaymentAmounts,
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
   isPaidByDateAllowed,
@@ -73,6 +74,7 @@ import {
   OPEN_PAYMENT_TASK_STATUSES,
   getPaymentTaskTimestamp,
   isOpenPaymentTask,
+  matchesPaymentTaskFilter,
 } from "../src/lib/requestStatus";
 import {
   getAmountWithVat,
@@ -107,6 +109,7 @@ const requestStatus = v.union(
   v.literal("paid"),
   v.literal("closed"),
 );
+const requestListStatusFilter = v.union(requestStatus, v.literal("canceled"));
 
 const SPECIALIST_BUH_ROLES = ["BUH Inside", "BUH Outsource"] as const;
 type SpecialistBuhRole = (typeof SPECIALIST_BUH_ROLES)[number];
@@ -822,8 +825,28 @@ function resolveStoredPaymentAmountInput(request: {
   plannedPaymentAmountWithVat?: number;
   paymentResidualAmount?: number;
   paymentResidualAmountWithVat?: number;
+  specialists?: Array<{
+    sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
+  }>;
   vatRate?: number;
 }) {
+  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(request.specialists);
+  if (
+    contractorPaymentAmounts.hasSpecialists &&
+    request.paymentResidualAmount === undefined &&
+    request.paymentResidualAmountWithVat === undefined &&
+    request.actualPaidAmount === undefined &&
+    request.actualPaidAmountWithVat === undefined
+  ) {
+    return {
+      amountWithoutVat: contractorPaymentAmounts.amountWithoutVat,
+      amountWithVat: contractorPaymentAmounts.amountWithVat,
+      vatRate: request.vatRate,
+    };
+  }
   return resolvePaymentAmountInput({
     amountWithoutVat:
       request.paymentResidualAmount ??
@@ -837,7 +860,7 @@ function resolveStoredPaymentAmountInput(request: {
   });
 }
 
-function getRequestPaymentTargetAmounts(request: {
+export function getRequestPaymentTargetAmounts(request: {
   amount: number;
   amountWithVat?: number;
   actualPaidAmount?: number;
@@ -847,6 +870,12 @@ function getRequestPaymentTargetAmounts(request: {
   paymentResidualAmount?: number;
   paymentResidualAmountWithVat?: number;
   paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
+  specialists?: Array<{
+    sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
+  }>;
   vatRate?: number;
 }) {
   const existingSplits = request.paymentSplits ?? [];
@@ -866,7 +895,7 @@ function getRequestPaymentTargetAmounts(request: {
   return resolveStoredPaymentAmountInput(request);
 }
 
-function getRequestPaymentRemainingAmounts(request: {
+export function getRequestPaymentRemainingAmounts(request: {
   amount: number;
   amountWithVat?: number;
   actualPaidAmount?: number;
@@ -876,6 +905,12 @@ function getRequestPaymentRemainingAmounts(request: {
   paymentResidualAmount?: number;
   paymentResidualAmountWithVat?: number;
   paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
+  specialists?: Array<{
+    sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
+  }>;
   vatRate?: number;
 }) {
   const residual = resolvePaymentAmountInput({
@@ -899,7 +934,7 @@ function hasPaymentAmountDifference(
   );
 }
 
-function getPaymentProgressStatus(params: {
+export function getPaymentProgressStatus(params: {
   paidSplitsCount: number;
   hasPlannedPayments: boolean;
 }) {
@@ -986,7 +1021,16 @@ const specialistValidator = v.object({
   validationSkipped: v.optional(v.boolean()),
 });
 
-const paymentDueFilterEnum = v.union(v.literal("today"), v.literal("overdue"));
+const paymentTaskFilterEnum = v.union(
+  v.literal("open"),
+  v.literal("needs_action"),
+  v.literal("payment_planned"),
+  v.literal("partially_paid"),
+  v.literal("unallocated"),
+  v.literal("fot"),
+  v.literal("today"),
+  v.literal("overdue"),
+);
 
 const requestPayloadValidator = {
   requestArea: v.optional(v.string()),
@@ -1345,7 +1389,7 @@ function summarizeEditEffects(lines: string[]) {
   return lines.length ? lines.join(" ") : "Изменения сохранены.";
 }
 
-function buildEditImpact(previous: any, next: any, approvals: any[]) {
+export function buildEditImpact(previous: any, next: any, approvals: any[]) {
   const approvedReviewerEmails = getApprovedReviewerEmails(approvals);
   const removedRoles = previous.requiredRoles.filter((role: string) => !next.requiredRoles.includes(role));
   const addedRoles = next.requiredRoles.filter((role: string) => !previous.requiredRoles.includes(role));
@@ -1703,7 +1747,7 @@ async function loadRequestsForAllList(
     status?: string;
     statuses?: string[];
     createdByEmail?: string;
-    paymentDueFilter?: "today" | "overdue";
+    paymentTaskFilter?: string;
   },
 ) {
   const statusSet = args.statuses?.length
@@ -1711,6 +1755,8 @@ async function loadRequestsForAllList(
     : args.status
       ? [args.status]
       : [];
+  const hasCanceledStatusFilter = statusSet.includes("canceled");
+  const indexedStatusSet = statusSet.filter((status) => status !== "canceled");
 
   if (args.createdByEmail) {
     return await ctx.db
@@ -1719,10 +1765,14 @@ async function loadRequestsForAllList(
       .collect();
   }
 
-  if (statusSet.length > 0) {
+  if (hasCanceledStatusFilter) {
+    return await ctx.db.query("requests").collect();
+  }
+
+  if (indexedStatusSet.length > 0) {
     return (
       await Promise.all(
-        statusSet.map((status) =>
+        indexedStatusSet.map((status) =>
           ctx.db
             .query("requests")
             .withIndex("by_status", (q: any) => q.eq("status", status))
@@ -1732,10 +1782,14 @@ async function loadRequestsForAllList(
     ).flat();
   }
 
-  if (args.paymentDueFilter) {
+  if (args.paymentTaskFilter) {
+    const taskStatuses =
+      args.paymentTaskFilter === "fot"
+        ? [...OPEN_PAYMENT_TASK_STATUSES, "paid"]
+        : OPEN_PAYMENT_TASK_STATUSES;
     return (
       await Promise.all(
-        OPEN_PAYMENT_TASK_STATUSES.map((status) =>
+        taskStatuses.map((status) =>
           ctx.db
             .query("requests")
             .withIndex("by_status", (q: any) => q.eq("status", status as any))
@@ -1833,9 +1887,9 @@ async function scheduleFotDeadlineReminders(ctx: any, requestId: any, paymentDea
 
 async function sendFotRecordingRequestedAndScheduleReminders(
   ctx: any,
-  request: { _id: any; paymentDeadline?: number; neededBy?: number; specialists?: Array<any> },
+  request: { _id: any; category?: string; paymentDeadline?: number; neededBy?: number; specialists?: Array<any> },
 ) {
-  if (!hasPendingInternalFot(request)) {
+  if (request.category === "Welcome-бонус" || !hasPendingInternalFot(request)) {
     return;
   }
   await ctx.scheduler.runAfter(0, internal.emails.sendFotRecordingRequested, {
@@ -1846,12 +1900,14 @@ async function sendFotRecordingRequestedAndScheduleReminders(
 
 async function sendPaymentPlanningRequestedAndScheduleReminders(
   ctx: any,
-  request: { _id: any; paymentDeadline?: number; neededBy?: number; specialists?: Array<any> },
+  request: { _id: any; category?: string; paymentDeadline?: number; neededBy?: number; specialists?: Array<any> },
 ) {
-  await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-    requestId: request._id,
-  });
-  await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
+  if (request.category !== "Welcome-бонус") {
+    await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+      requestId: request._id,
+    });
+    await schedulePaymentDeadlineReminders(ctx, request._id, getRequestPaymentDeadline(request));
+  }
   await sendFotRecordingRequestedAndScheduleReminders(ctx, request);
 }
 
@@ -1869,7 +1925,7 @@ async function schedulePlannedPaymentReminder(ctx: any, requestId: any, paymentP
   );
 }
 
-function validateQuotaResolutionBeforePayment(request: {
+export function validateQuotaResolutionBeforePayment(request: {
   fundingSource: string;
   cfdTag?: string;
 }) {
@@ -1882,7 +1938,7 @@ function validateQuotaResolutionBeforePayment(request: {
     !shouldSkipQuotaByTag(request.cfdTag) &&
     !request.cfdTag?.trim()
   ) {
-    throw new Error("Укажите тег квоты");
+    throw new Error("Укажите тег заявки");
   }
 }
 
@@ -1925,7 +1981,7 @@ async function createApprovalsForRequest(
 
 export const listMyRequests = query({
   args: {
-    status: v.optional(requestStatus),
+    status: v.optional(requestListStatusFilter),
     category: v.optional(v.string()),
     businessCategory: v.optional(v.string()),
     fundingSource: v.optional(v.string()),
@@ -1949,18 +2005,19 @@ export const listMyRequests = query({
     const baseQuery = ctx.db
       .query("requests")
       .withIndex("by_createdBy", (q) => q.eq("createdBy", userId));
-    const byUserId = args.status
+    const indexedStatus = args.status && args.status !== "canceled" ? args.status : undefined;
+    const byUserId = indexedStatus
       ? await baseQuery
-          .filter((q) => q.eq(q.field("status"), args.status))
+          .filter((q) => q.eq(q.field("status"), indexedStatus))
           .order("desc")
           .collect()
       : await baseQuery.order("desc").collect();
     const emailQuery = ctx.db
       .query("requests")
       .withIndex("by_createdByEmail", (q) => q.eq("createdByEmail", email));
-    const byEmail = args.status
+    const byEmail = indexedStatus
       ? await emailQuery
-          .filter((q) => q.eq(q.field("status"), args.status))
+          .filter((q) => q.eq(q.field("status"), indexedStatus))
           .order("desc")
           .collect()
       : await emailQuery.order("desc").collect();
@@ -1971,6 +2028,12 @@ export const listMyRequests = query({
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const hasExplicitDateRange = args.createdFrom !== undefined || args.createdTo !== undefined;
     const filteredRequests = Array.from(merged.values()).filter((request) => {
+      if (args.status === "canceled" && !request.isCanceled) {
+        return false;
+      }
+      if (args.status && args.status !== "canceled" && request.isCanceled) {
+        return false;
+      }
       if (
         args.category &&
         normalizeRequestCategory(request.category) !== normalizeRequestCategory(args.category)
@@ -2042,14 +2105,14 @@ export const listMyRequests = query({
 
 export const listAllRequests = query({
   args: {
-    status: v.optional(requestStatus),
-    statuses: v.optional(v.array(requestStatus)),
+    status: v.optional(requestListStatusFilter),
+    statuses: v.optional(v.array(requestListStatusFilter)),
     createdByEmail: v.optional(v.string()),
     cfdTag: v.optional(v.string()),
     category: v.optional(v.string()),
     businessCategory: v.optional(v.string()),
     fundingSource: v.optional(v.string()),
-    paymentDueFilter: v.optional(paymentDueFilterEnum),
+    paymentTaskFilter: v.optional(paymentTaskFilterEnum),
     createdFrom: v.optional(v.number()),
     createdTo: v.optional(v.number()),
     requestCodeQuery: v.optional(v.string()),
@@ -2096,14 +2159,21 @@ export const listAllRequests = query({
       : args.status
         ? new Set([args.status])
         : undefined;
+    const indexedStatusSet = statusSet
+      ? new Set(Array.from(statusSet).filter((status) => status !== "canceled"))
+      : undefined;
     const candidateRequests = await loadRequestsForAllList(ctx, {
       status: args.status,
       statuses: args.statuses,
       createdByEmail: args.createdByEmail,
-      paymentDueFilter: args.paymentDueFilter,
+      paymentTaskFilter: args.paymentTaskFilter,
     });
     const requests = statusSet
-      ? candidateRequests.filter((req: any) => statusSet.has(req.status))
+      ? candidateRequests.filter((req: any) =>
+          statusSet.has("canceled") && req.isCanceled
+            ? true
+            : indexedStatusSet?.has(req.status) && !req.isCanceled,
+        )
       : candidateRequests;
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const hasExplicitDateRange = args.createdFrom !== undefined || args.createdTo !== undefined;
@@ -2139,19 +2209,8 @@ export const listAllRequests = query({
       if (args.hasSpecialists === true && !requestHasSpecialists(req)) {
         return false;
       }
-      if (args.paymentDueFilter === "today") {
-        const paymentTaskAt = getPaymentTaskTimestamp(req);
-        if (
-          !isOpenPaymentTask(req) ||
-          paymentTaskAt! < todayBounds.start ||
-          paymentTaskAt! > todayBounds.end
-        ) {
-          return false;
-        }
-      }
-      if (args.paymentDueFilter === "overdue") {
-        const paymentTaskAt = getPaymentTaskTimestamp(req);
-        if (!isOpenPaymentTask(req) || paymentTaskAt! >= todayBounds.start) {
+      if (args.paymentTaskFilter) {
+        if (!matchesPaymentTaskFilter(req, args.paymentTaskFilter, todayBounds.start, todayBounds.end)) {
           return false;
         }
       }
@@ -4123,6 +4182,7 @@ export const updatePaymentStatus = mutation({
     planningMode: v.optional(v.union(v.literal("full"), v.literal("partial"))),
     paymentResidualAmount: v.optional(v.number()),
     paymentCurrencyRate: v.optional(v.number()),
+    cfdTag: v.optional(v.string()),
     allowLatePaymentPlan: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -4208,8 +4268,9 @@ export const updatePaymentStatus = mutation({
     if (args.status === "reopen" && request.status !== "closed") {
       throw new Error("Открыть заново можно только закрытую заявку");
     }
+    const nextCfdTag = args.cfdTag?.trim() || request.cfdTag;
     if (["payment_planned", "partially_paid", "paid"].includes(args.status)) {
-      validateQuotaResolutionBeforePayment(request);
+      validateQuotaResolutionBeforePayment({ ...request, cfdTag: nextCfdTag });
     }
 
     const rawFinplanIds = args.finplanEntryIdsRaw ?? args.finplanCostIdsRaw;
@@ -4222,6 +4283,7 @@ export const updatePaymentStatus = mutation({
       finplanCostIds: undefined,
       ...(finplanCostIds.length ? { finplanEntered: true } : {}),
     };
+    const requestPaymentTagPatch = nextCfdTag !== request.cfdTag ? { cfdTag: nextCfdTag } : {};
 
     validateOptionalMoney(args.actualPaidAmount, "Сумма оплаты без НДС");
     validateOptionalMoney(args.actualPaidAmountWithVat, "Сумма оплаты с НДС");
@@ -4431,6 +4493,7 @@ export const updatePaymentStatus = mutation({
         paymentResidualAmount: remainingAmount,
         paymentResidualAmountWithVat: remainingAmountWithVat,
         paymentCurrencyRate: effectiveCurrencyRate,
+        ...requestPaymentTagPatch,
         ...requestFinplanCostPatch,
         plannedPaymentSplits: nextPlannedPaymentSplits.length ? nextPlannedPaymentSplits : undefined,
         paymentReminderSentAt: undefined,
@@ -4561,6 +4624,7 @@ export const updatePaymentStatus = mutation({
         plannedPaymentAmount: updatedPlannedQueue.plannedPaymentAmount,
         plannedPaymentAmountWithVat: updatedPlannedQueue.plannedPaymentAmountWithVat,
         paymentCurrencyRate: effectiveCurrencyRate,
+        ...requestPaymentTagPatch,
         ...requestFinplanCostPatch,
         actualPaidAmount: cumulativePaid,
         actualPaidAmountWithVat: cumulativePaidWithVat > 0 ? cumulativePaidWithVat : undefined,
@@ -4630,6 +4694,7 @@ export const updatePaymentStatus = mutation({
         paidAt,
         paidByEmail: email,
         paidByName: actorName,
+        ...requestPaymentTagPatch,
         ...requestFinplanCostPatch,
         actualPaidAmount: finalPaidAmount,
         actualPaidAmountWithVat: finalPaidAmountWithVat,

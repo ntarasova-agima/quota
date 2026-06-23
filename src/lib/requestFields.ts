@@ -120,6 +120,34 @@ export function getSpecialistEffectiveCost(item: {
   return directCost + taxAmount;
 }
 
+export function getContractorSpecialistPaymentAmounts(
+  specialists: Array<{
+    sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
+  }> = [],
+) {
+  const contractorSpecialists = specialists.filter(
+    (item) => normalizeContestSpecialistSource(item.sourceType) === "contractor",
+  );
+  return {
+    hasSpecialists: specialists.length > 0,
+    hasContractors: contractorSpecialists.length > 0,
+    amountWithoutVat: contractorSpecialists.reduce((sum, item) => {
+      const directCost =
+        typeof item.directCost === "number" && Number.isFinite(item.directCost)
+          ? item.directCost
+          : 0;
+      return sum + directCost;
+    }, 0),
+    amountWithVat: contractorSpecialists.reduce(
+      (sum, item) => sum + getSpecialistEffectiveCost(item),
+      0,
+    ),
+  };
+}
+
 export function calculateIncomingRatio(params: {
   incomingAmount?: number;
   incomingAmountWithVat?: number;

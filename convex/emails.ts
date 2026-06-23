@@ -646,6 +646,7 @@ export const sendFotRecordingRequested = internalAction({
     const { request, roles } = data;
     if (
       request.isCanceled ||
+      request.category === "Welcome-бонус" ||
       request.fotRecordingRequestedAt ||
       ["draft", "hod_pending", "pending", "rejected"].includes(request.status)
     ) {

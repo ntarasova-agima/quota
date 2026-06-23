@@ -17,8 +17,8 @@ import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import {
+  getFotActionHint,
   getApprovalStatusClass,
-  getBuhPaymentStatusSummary,
   getRequestStatusSummary,
   getUnallocatedPaymentAmounts,
   isOpenPaymentTask,
@@ -28,6 +28,7 @@ import { getRoleLabel } from "@/lib/roleLabels";
 import {
   formatIncomingRatio,
   formatMonthKeyLabel,
+  getContractorSpecialistPaymentAmounts,
   getSpecialistEffectiveCost,
   normalizeContestSpecialistSource,
   requiresContestSpecialistValidation,
@@ -56,7 +57,7 @@ import {
   resolveVatAmounts,
   sanitizeNumericInput,
 } from "@/lib/vat";
-import { CheckCircle2, Copy, Paperclip, Upload } from "lucide-react";
+import { CheckCircle2, Copy } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
 
 type SpecialistView = {
@@ -318,9 +319,9 @@ function getDisplayErrorMessage(error: unknown, fallback: string) {
     /Error:\s*([\s\S]*?)(?:\s+at\s+[^(]+\s+\(\.\.\/convex\/|\s+Called by client|$)/,
   );
   if (matched?.[1]?.trim()) {
-    return matched[1].trim();
+    return matched[1].trim().replace("Укажите тег квоты", "Укажите тег заявки");
   }
-  return error.message.trim() || fallback;
+  return error.message.trim().replace("Укажите тег квоты", "Укажите тег заявки") || fallback;
 }
 
 function formatMonthLabel(monthKey: string) {
@@ -413,6 +414,12 @@ function getPaymentTargetAmounts(request: {
   paymentResidualAmount?: number;
   paymentResidualAmountWithVat?: number;
   paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
+  specialists?: Array<{
+    sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
+  }>;
   vatRate?: number;
 }) {
   const splits = request.paymentSplits ?? [];
@@ -427,6 +434,13 @@ function getPaymentTargetAmounts(request: {
     return {
       amountWithoutVat: splitTotal + (residual.amountWithoutVat ?? 0),
       amountWithVat: splitTotalWithVat + (residual.amountWithVat ?? 0),
+    };
+  }
+  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(request.specialists);
+  if (contractorPaymentAmounts.hasSpecialists) {
+    return {
+      amountWithoutVat: contractorPaymentAmounts.amountWithoutVat,
+      amountWithVat: contractorPaymentAmounts.amountWithVat,
     };
   }
   return resolvePaymentPair({
@@ -450,6 +464,12 @@ function getPaymentRemainingAmounts(request: {
   paymentResidualAmount?: number;
   paymentResidualAmountWithVat?: number;
   paymentSplits?: Array<{ amountWithoutVat?: number; amountWithVat?: number; vatRate?: number }>;
+  specialists?: Array<{
+    sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
+  }>;
   vatRate?: number;
   status: string;
 }) {
@@ -470,16 +490,11 @@ function getPaymentRemainingAmounts(request: {
   return getPaymentTargetAmounts(request);
 }
 
-function getPendingStatusPresentation(isActionableForViewer: boolean) {
-  return isActionableForViewer
-    ? {
-        label: "Ждет вашего решения",
-        className: "border-amber-200 bg-amber-100 text-amber-800",
-      }
-    : {
-        label: "Ожидает согласования",
-        className: "border-amber-200 bg-amber-50 text-amber-700",
-      };
+function getPendingStatusPresentation() {
+  return {
+    label: "Ожидает согласования",
+    className: "border-amber-200 bg-amber-50 text-amber-700",
+  };
 }
 
 function getCurrentPlannedAmounts(request: {
@@ -614,6 +629,7 @@ export default function RequestDetailPage() {
   const createTag = useMutation(api.cfdTags.create);
   const addComment = useMutation(api.comments.addComment);
   const editComment = useMutation(api.comments.editComment);
+  const deleteComment = useMutation(api.comments.deleteComment);
   const grantViewerAccess = useMutation(api.requests.grantViewerAccess);
   const revokeViewerAccess = useMutation(api.requests.revokeViewerAccess);
   const remindPayment = useMutation(api.requests.remindPayment);
@@ -654,19 +670,25 @@ export default function RequestDetailPage() {
   const [paymentExecutedAmount, setPaymentExecutedAmount] = useState("");
   const [paymentExecutedDate, setPaymentExecutedDate] = useState("");
   const [paymentCurrencyRate, setPaymentCurrencyRate] = useState("");
+  const [isPaymentTargetAmountEditing, setIsPaymentTargetAmountEditing] = useState(false);
+  const [paymentTargetAmountBeforeEdit, setPaymentTargetAmountBeforeEdit] = useState("");
+  const [paymentTargetAmountNeedsDecision, setPaymentTargetAmountNeedsDecision] = useState(false);
   const [confirmLatePaymentPlan, setConfirmLatePaymentPlan] = useState(false);
   const [latePaymentPlanNeedsConfirmation, setLatePaymentPlanNeedsConfirmation] = useState(false);
   const [specialistDrafts, setSpecialistDrafts] = useState<Record<string, SpecialistView>>({});
   const [savingSpecialistId, setSavingSpecialistId] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadingFile, setUploadingFile] = useState(false);
-  const [isDragOver, setIsDragOver] = useState(false);
   const [previewAttachmentId, setPreviewAttachmentId] = useState<Id<"requestAttachments"> | null>(null);
   const [approvalReminderSent, setApprovalReminderSent] = useState(false);
   const [paymentReminderSent, setPaymentReminderSent] = useState(false);
   const [deletingRequest, setDeletingRequest] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const newCommentRef = useRef<HTMLTextAreaElement | null>(null);
+  const paymentBlockRef = useRef<HTMLDivElement | null>(null);
+  const paymentTargetAmountEditorRef = useRef<HTMLDivElement | null>(null);
+  const specialistsBlockRef = useRef<HTMLDivElement | null>(null);
+  const approvalsBlockRef = useRef<HTMLDivElement | null>(null);
   const todayDate = useMemo(() => formatDateInputFromTimestamp(Date.now()), []);
 
   const financeApproverRecord = useMemo(
@@ -735,10 +757,6 @@ export default function RequestDetailPage() {
   const markOperationalFieldsDirty = () => {
     setOperationalFieldsSavedAt(null);
   };
-  const canSetAwaitingPayment = useMemo(
-    () => data?.isCreator || myRoles.includes("ADMIN") || myRoles.includes("BUH Payment"),
-    [data?.isCreator, myRoles],
-  );
   const canManagePayments = useMemo(
     () => myRoles.includes("BUH") || isFinanceApprover || myRoles.includes("BUH Payment"),
     [isFinanceApprover, myRoles],
@@ -824,6 +842,16 @@ export default function RequestDetailPage() {
     }
     return map;
   }, [comments]);
+  const commentsById = useMemo(() => {
+    const map = new Map<string, { authorEmail: string; authorName?: string }>();
+    for (const item of comments ?? []) {
+      map.set(String(item._id), {
+        authorEmail: item.authorEmail,
+        authorName: item.authorName,
+      });
+    }
+    return map;
+  }, [comments]);
   const groupedChangeHistory = useMemo(() => {
     if (!changeHistory?.length) {
       return [];
@@ -863,10 +891,12 @@ export default function RequestDetailPage() {
       comment.authorEmail.trim().toLowerCase() === myProfile?.email?.trim().toLowerCase()
     );
   };
+  const canDeleteComment = canEditComment;
   const previewAttachment = useMemo(
     () => attachments?.find((item) => item._id === previewAttachmentId) ?? null,
     [attachments, previewAttachmentId],
   );
+  const paymentTargetAmountChanged = paymentTargetAmount !== paymentTargetAmountBeforeEdit;
 
   useEffect(() => {
     if (data?.request) {
@@ -915,6 +945,9 @@ export default function RequestDetailPage() {
           ? String(data.request.paymentCurrencyRate)
           : "",
       );
+      setIsPaymentTargetAmountEditing(false);
+      setPaymentTargetAmountBeforeEdit("");
+      setPaymentTargetAmountNeedsDecision(false);
     }
   }, [
     data?.request?._id,
@@ -965,6 +998,29 @@ export default function RequestDetailPage() {
       current.filter((item) => editingBody.includes(`@${item.token}`)),
     );
   }, [editingBody]);
+
+  useEffect(() => {
+    if (!isPaymentTargetAmountEditing) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        paymentTargetAmountEditorRef.current?.contains(target)
+      ) {
+        return;
+      }
+      if (paymentTargetAmountChanged) {
+        setPaymentTargetAmountNeedsDecision(true);
+        return;
+      }
+      setIsPaymentTargetAmountEditing(false);
+      setPaymentTargetAmountNeedsDecision(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [isPaymentTargetAmountEditing, paymentTargetAmountChanged]);
 
   if (data === null) {
     return (
@@ -1064,6 +1120,7 @@ export default function RequestDetailPage() {
   const canManageSpecialistFot =
     (isAdmin || myRoles.includes("BUH Inside")) &&
     !["draft", "hod_pending", "pending", "rejected"].includes(request.status);
+  const fotActionHint = canManageSpecialistFot ? getFotActionHint(request) : null;
   const viewerAccessEntries = (request.viewerAccess ?? []) as Array<{
     email: string;
     fullName?: string;
@@ -1146,10 +1203,7 @@ export default function RequestDetailPage() {
   const manualViewerAccessEmail = isAgimaEmail(viewerAccessQuery.trim())
     ? normalizeEmail(viewerAccessQuery.trim())
     : null;
-  const baseStatusSummary =
-    canSetPaymentPlanned && isOpenPaymentTask(request)
-      ? getBuhPaymentStatusSummary(request)
-      : getRequestStatusSummary(request, approvals);
+  const baseStatusSummary = getRequestStatusSummary(request, approvals);
   const isActionableForViewer =
     request.status === "pending" &&
     approvals.some((approval) => approval.status === "pending" && canCurrentUserDecideApproval(approval));
@@ -1157,12 +1211,14 @@ export default function RequestDetailPage() {
     request.status === "pending" &&
     !request.isCanceled &&
     !baseStatusSummary.label.startsWith("Частично согласовано")
-      ? getPendingStatusPresentation(isActionableForViewer)
+      ? getPendingStatusPresentation()
       : baseStatusSummary;
   const contextualHint = hasPendingHodValidation
     ? "Провалидируйте часы и прямые затраты по специалистам вашего цеха"
     : isActionableForViewer
       ? "Ждет вашего решения"
+      : fotActionHint
+        ? fotActionHint.label
       : canSetPaymentPlanned &&
           ["payment_planned", "partially_paid"].includes(request.status) &&
           hasUnallocatedPayment
@@ -1174,6 +1230,58 @@ export default function RequestDetailPage() {
           : groupedChangeHistory.some((group) => group.triggeredRepeatApproval)
             ? "Заявка изменена и отправлена на повторное согласование"
             : null;
+  const requestTitle = request.title || `${request.clientName} :: ${normalizedRequestCategory ?? request.category}`;
+  const pendingApprovalsCount = approvals.filter((approval) => approval.status === "pending").length;
+  const approvedApprovalsCount = approvals.filter((approval) => approval.status === "approved").length;
+  const rejectedApprovalsCount = approvals.filter((approval) => approval.status === "rejected").length;
+  const canJumpToPaymentBlock =
+    (canSetPaymentPlanned || canSetPaid) &&
+    canUpdatePaymentForStatus(request.status) &&
+    isOpenPaymentTask(request);
+  const canJumpToApprovalBlock = isActionableForViewer;
+  const canManageFileControls = canManageFiles && canEditRequest;
+  const nextOperationalAction = contextualHint ?? (
+    request.isCanceled
+      ? "Заявка отменена"
+      : pendingApprovalsCount
+        ? `Ожидает согласования: ${pendingApprovalsCount}`
+        : isOpenPaymentTask(request)
+          ? "Ожидает платежного действия"
+          : "Активных действий нет"
+  );
+  const scrollToPaymentBlock = () => {
+    setActiveTab("details");
+    window.requestAnimationFrame(() => {
+      paymentBlockRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+  const scrollToApprovalsBlock = () => {
+    setActiveTab("details");
+    window.requestAnimationFrame(() => {
+      approvalsBlockRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+  const scrollToSpecialistsBlock = () => {
+    setActiveTab("details");
+    window.requestAnimationFrame(() => {
+      specialistsBlockRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+  const startPaymentTargetAmountEditing = () => {
+    setPaymentTargetAmountBeforeEdit(paymentTargetAmount);
+    setPaymentTargetAmountNeedsDecision(false);
+    setIsPaymentTargetAmountEditing(true);
+  };
+  const savePaymentTargetAmountEditing = () => {
+    setPaymentTargetAmountBeforeEdit(paymentTargetAmount);
+    setPaymentTargetAmountNeedsDecision(false);
+    setIsPaymentTargetAmountEditing(false);
+  };
+  const cancelPaymentTargetAmountEditing = () => {
+    setPaymentTargetAmount(paymentTargetAmountBeforeEdit);
+    setPaymentTargetAmountNeedsDecision(false);
+    setIsPaymentTargetAmountEditing(false);
+  };
 
   async function persistSpecialistDraft(
     specialistId: string,
@@ -1328,6 +1436,15 @@ export default function RequestDetailPage() {
         );
         return;
       }
+    } else if (
+      plannedAmounts.amountWithoutVat !== undefined &&
+      remainingAmount !== undefined &&
+      plannedAmounts.amountWithoutVat > 0 &&
+      plannedAmounts.amountWithoutVat < remainingAmount &&
+      !isSameMoneyValue(plannedAmounts.amountWithoutVat, remainingAmount)
+    ) {
+      setPaymentActionError("Сумма неполная. Измените сумму или запланируйте частичную оплату");
+      return;
     }
 
     setUpdatingStatus(true);
@@ -1342,6 +1459,7 @@ export default function RequestDetailPage() {
           planningMode === "partial" ? plannedAmounts.amountWithoutVat : undefined,
         planningMode,
         paymentCurrencyRate: parsedPaymentCurrencyRate,
+        cfdTag: selectedTag || undefined,
         allowLatePaymentPlan: isLatePaymentPlan ? true : undefined,
       });
       router.refresh();
@@ -1411,6 +1529,7 @@ export default function RequestDetailPage() {
         actualPaidAmount: executedAmounts.amountWithoutVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
         paymentCurrencyRate: parsedPaymentCurrencyRate,
+        cfdTag: selectedTag || undefined,
       });
       router.refresh();
     } catch (err) {
@@ -1464,6 +1583,7 @@ export default function RequestDetailPage() {
         actualPaidAmount: executedAmounts.amountWithoutVat,
         actualPaidAt: new Date(`${paymentExecutedDate}T00:00:00`).getTime(),
         paymentCurrencyRate: parsedPaymentCurrencyRate,
+        cfdTag: selectedTag || undefined,
       });
       router.refresh();
     } catch (err) {
@@ -1637,6 +1757,23 @@ export default function RequestDetailPage() {
     }
   }
 
+  async function handleDeleteComment(commentId: Id<"comments">) {
+    setError(null);
+    const confirmed = window.confirm("Удалить комментарий?");
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await deleteComment({ id: commentId });
+      if (replyTo === commentId) {
+        setReplyTo(null);
+      }
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось удалить комментарий");
+    }
+  }
+
   function handleMentionSelect(person: MentionCandidate, mode: "new" | "edit") {
     const draft = mode === "new" ? newCommentMentionDraft : editingMentionDraft;
     if (!draft) {
@@ -1705,77 +1842,162 @@ export default function RequestDetailPage() {
     }
   }
 
+  const filesSection = attachments?.length ? (
+    <div className="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-lg font-semibold text-zinc-950">Файлы</div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Счета, акты, договоры и другие документы по заявке
+          </p>
+        </div>
+      </div>
+      {selectedFiles.length ? (
+        <div className="space-y-1 text-sm text-muted-foreground">
+          {selectedFiles.map((file) => (
+            <div key={`${file.name}-${file.size}`}>
+              {file.name} · {formatFileSize(file.size)}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {fileActionError ? <p className="text-sm text-destructive">{fileActionError}</p> : null}
+      {attachments?.length ? (
+        <div className="space-y-2">
+          {attachments.map((item) => (
+            <div
+              key={item._id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm"
+            >
+              <div>
+                <div className="font-medium">{item.fileName}</div>
+                <div className="text-muted-foreground">
+                  {item.uploadedByName ? `${item.uploadedByName} · ` : ""}
+                  {item.uploadedByEmail}
+                  {item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}
+                  {" · "}
+                  {new Date(item.createdAt).toLocaleString("ru-RU")}
+                </div>
+              </div>
+              {item.url ? (
+                <div className="flex gap-2">
+                  {canInlinePreviewAttachment(item.contentType, item.fileName) ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setPreviewAttachmentId((current) =>
+                          current === item._id ? null : item._id,
+                        )
+                      }
+                    >
+                      Предпросмотр
+                    </Button>
+                  ) : null}
+                  <Button asChild variant="outline" size="sm">
+                    <a href={item.url} target="_blank" rel="noreferrer">
+                      Открыть
+                    </a>
+                  </Button>
+                  {item.canDelete && canManageFileControls ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        setFileActionError(null);
+                        if (!window.confirm(`Удалить файл ${item.fileName}?`)) {
+                          return;
+                        }
+                        try {
+                          await deleteAttachment({ attachmentId: item._id });
+                          router.refresh();
+                        } catch (err) {
+                          setFileActionError(
+                            err instanceof Error ? err.message : "Не удалось удалить файл",
+                          );
+                        }
+                      }}
+                    >
+                      Удалить
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <span className="text-xs text-muted-foreground">Ссылка скоро появится</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {previewAttachment?.url && canInlinePreviewAttachment(previewAttachment.contentType, previewAttachment.fileName) ? (
+        <div className="space-y-2 rounded-lg border border-border bg-white p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="font-medium">Предпросмотр файла</div>
+              <div className="text-sm text-muted-foreground">{previewAttachment.fileName}</div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPreviewAttachmentId(null)}
+            >
+              Скрыть
+            </Button>
+          </div>
+          {previewAttachment.contentType?.startsWith("image/") ||
+          /\.(png|jpe?g|gif|webp)$/i.test(previewAttachment.fileName) ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={previewAttachment.url}
+              alt={previewAttachment.fileName}
+              className="max-h-[32rem] w-auto rounded-lg border border-border object-contain"
+            />
+          ) : (
+            <iframe
+              src={previewAttachment.url}
+              title={previewAttachment.fileName}
+              className="h-[36rem] w-full rounded-lg border border-border bg-white"
+            />
+          )}
+        </div>
+      ) : null}
+    </div>
+  ) : null;
+
   return (
     <RequireAuth>
-      <div className="min-h-screen bg-background text-foreground">
-        <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-6 px-6 py-12">
+      <div className="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_18rem)] text-foreground">
+        <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
           <AppHeader title="Заявка" showAdmin={isAdmin} />
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap gap-2 rounded-full border border-zinc-200 bg-zinc-50/80 p-1">
-              <Button
-                type="button"
-                size="sm"
-                variant={activeTab === "details" ? "default" : "ghost"}
-                onClick={() => setActiveTab("details")}
-              >
-                Заявка
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={activeTab === "changes" ? "default" : "ghost"}
-                onClick={() => setActiveTab("changes")}
-              >
-                Изменения
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={activeTab === "timeline" ? "default" : "ghost"}
-                onClick={() => setActiveTab("timeline")}
-              >
-                Таймлайн
-              </Button>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button asChild variant="outline">
-                <Link href={`/requests/new?copyFrom=${request._id}`}>
-                  <Copy className="h-4 w-4" />
-                  Копировать заявку
-                </Link>
-              </Button>
-              {canEditRequest ? (
-                <Button asChild variant="outline">
-                  <Link href={`/requests/${requestId}/edit`}>Редактировать заявку</Link>
-                </Button>
-              ) : null}
-              {isAdmin && request.status === "pending" ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={approvalReminderSent}
-                  onClick={async () => {
-                    setError(null);
-                    try {
-                      await remindApproval({ requestId: request._id });
-                      setApprovalReminderSent(true);
-                    } catch (err) {
-                      setError(err instanceof Error ? err.message : "Не удалось отправить напоминание");
-                    }
-                  }}
-                >
-                  {approvalReminderSent ? "✓ Напоминание отправлено!" : "Напомнить о согласовании"}
-                </Button>
-              ) : null}
-            </div>
-          </div>
-
-          <div className={activeTab === "details" ? "space-y-6" : "hidden"}>
-          <Card>
-            <CardHeader>
-              <CardTitle>{request.title || `${request.clientName} :: ${normalizedRequestCategory ?? request.category}`}</CardTitle>
-              <CardDescription>
+          <section className="grid gap-4 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm lg:grid-cols-[minmax(0,1fr)_22rem] lg:p-5">
+            <div className="min-w-0 space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <span className={`rounded-full border px-3 py-1 text-xs font-medium ${statusSummary.className}`}>
+                  {statusSummary.label}
+                </span>
+                <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700">
+                  {request.requestCode}
+                </span>
+                <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700">
+                  Финансирование: {normalizeFundingSource(request.fundingSource)}
+                </span>
+                <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700">
+                  Категория: {request.businessCategory ?? EMPTY_BUSINESS_CATEGORY}
+                </span>
+                {request.cfdTag ? (
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
+                    {request.cfdTag}
+                  </span>
+                ) : null}
+              </div>
+              <div className="space-y-2">
+                <h1 className="break-words text-2xl font-semibold tracking-normal text-zinc-950 sm:text-3xl">
+                  {requestTitle}
+                </h1>
                 <RequestMetaSummary
                   requestCode={request.requestCode}
                   clientName={request.clientName}
@@ -1785,31 +2007,182 @@ export default function RequestDetailPage() {
                   currency={request.currency}
                   vatRate={request.vatRate}
                 />
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm">
-              {(canCancel || canDeleteRequest) && (
-                <div className="flex flex-wrap gap-2">
+              </div>
+              <div className="grid gap-3 text-sm sm:grid-cols-3">
+                <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">Автор</div>
+                  <div className="mt-1 truncate font-medium">
+                    {request.createdByName || request.createdByEmail}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">Согласования</div>
+                  <div className="mt-1 font-medium">
+                    {approvedApprovalsCount}/{approvals.length}
+                    {rejectedApprovalsCount ? ` · отказов: ${rejectedApprovalsCount}` : ""}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">Остаток к оплате</div>
+                  <div className="mt-1 font-medium">
+                    {formatAmountWithoutVatLabel(
+                      remainingPaymentAmounts.amountWithoutVat,
+                      request.currency,
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <aside className="flex flex-col justify-between gap-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+              <div className="space-y-2">
+                <div className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  Активные действия
+                </div>
+                <div className="text-lg font-semibold text-zinc-950">{nextOperationalAction}</div>
+                {contextualHint && !canJumpToPaymentBlock ? (
+                  <p className="text-sm text-muted-foreground">
+                    Откройте нужный блок ниже: согласования, платежи или валидацию затрат.
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-2">
+                {canJumpToApprovalBlock ? (
                   <Button
                     type="button"
-                    variant={request.isCanceled ? "outline" : "destructive"}
-                    disabled={deletingRequest}
+                    className="justify-start"
+                    onClick={scrollToApprovalsBlock}
+                  >
+                    Перейти к согласованию
+                  </Button>
+                ) : null}
+                {canJumpToPaymentBlock ? (
+                  <Button
+                    type="button"
+                    className="justify-start"
+                    onClick={scrollToPaymentBlock}
+                  >
+                    Запланировать или оплатить
+                  </Button>
+                ) : null}
+                {fotActionHint ? (
+                  <Button
+                    type="button"
+                    className="justify-start"
+                    onClick={scrollToSpecialistsBlock}
+                  >
+                    Перейти к выносу ФОТ
+                  </Button>
+                ) : null}
+                <Button asChild variant="outline" className="justify-start bg-white">
+                  <Link href={`/requests/new?copyFrom=${request._id}`}>
+                    <Copy className="h-4 w-4" />
+                    Копировать заявку
+                  </Link>
+                </Button>
+                {canEditRequest ? (
+                  <Button asChild variant="outline" className="justify-start bg-white">
+                    <Link href={`/requests/${requestId}/edit`}>Редактировать заявку</Link>
+                  </Button>
+                ) : null}
+                {isAdmin && request.status === "pending" ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="justify-start bg-white"
+                    disabled={approvalReminderSent}
                     onClick={async () => {
                       setError(null);
                       try {
-                        if (request.isCanceled) {
-                          await resumeRequest({ id: request._id });
-                        } else {
-                          await cancelRequest({ id: request._id });
-                        }
-                        router.refresh();
+                        await remindApproval({ requestId: request._id });
+                        setApprovalReminderSent(true);
                       } catch (err) {
-                        setError(err instanceof Error ? err.message : "Не удалось обновить заявку");
+                        setError(err instanceof Error ? err.message : "Не удалось отправить напоминание");
                       }
                     }}
                   >
-                    {request.isCanceled ? "Возобновить заявку" : "Отменить заявку"}
+                    {approvalReminderSent ? "✓ Напоминание отправлено!" : "Напомнить о согласовании"}
                   </Button>
+                ) : null}
+              </div>
+            </aside>
+          </section>
+
+          <div className={activeTab === "details" ? "flex flex-col gap-6" : "hidden"}>
+          <Card>
+            <CardContent className="space-y-4 text-sm">
+              {(canClose || canCancel || canDeleteRequest) && (
+                <div className="flex flex-wrap gap-2">
+                  {canClose && request.status === "closed" ? (
+                    <HoverHint label="Вернуть заявку в предыдущий статус">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9"
+                        disabled={updatingStatus}
+                        onClick={async () => {
+                          setError(null);
+                          setUpdatingStatus(true);
+                          try {
+                            await updatePaymentStatus({ id: request._id, status: "reopen" as any });
+                            router.refresh();
+                          } catch (err) {
+                            setError(
+                              err instanceof Error ? err.message : "Не удалось открыть заявку заново",
+                            );
+                          } finally {
+                            setUpdatingStatus(false);
+                          }
+                        }}
+                      >
+                        Открыть заново
+                      </Button>
+                    </HoverHint>
+                  ) : canClose && request.status === "paid" ? (
+                    <HoverHint label="Подтвердить, что заявка завершена">
+                      <Button
+                        type="button"
+                        className="h-9 border-amber-300 bg-gradient-to-r from-amber-100 via-yellow-50 to-amber-100 text-amber-900 shadow-[0_0_10px_rgba(245,158,11,0.10)] hover:from-amber-200 hover:via-yellow-100 hover:to-amber-200"
+                        disabled={updatingStatus}
+                        onClick={async () => {
+                          setError(null);
+                          setUpdatingStatus(true);
+                          try {
+                            await updatePaymentStatus({ id: request._id, status: "closed" });
+                            router.refresh();
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : "Не удалось закрыть заявку");
+                          } finally {
+                            setUpdatingStatus(false);
+                          }
+                        }}
+                      >
+                        Закрыть заявку
+                      </Button>
+                    </HoverHint>
+                  ) : null}
+                  {canCancel ? (
+                    <Button
+                      type="button"
+                      variant={request.isCanceled ? "outline" : "destructive"}
+                      disabled={deletingRequest}
+                      onClick={async () => {
+                        setError(null);
+                        try {
+                          if (request.isCanceled) {
+                            await resumeRequest({ id: request._id });
+                          } else {
+                            await cancelRequest({ id: request._id });
+                          }
+                          router.refresh();
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "Не удалось обновить заявку");
+                        }
+                      }}
+                    >
+                      {request.isCanceled ? "Возобновить заявку" : "Отменить заявку"}
+                    </Button>
+                  ) : null}
                   {canDeleteRequest ? (
                     <Button
                       type="button"
@@ -1838,41 +2211,6 @@ export default function RequestDetailPage() {
                   ) : null}
                 </div>
               )}
-              <div className="flex flex-wrap gap-3">
-                <span className={`rounded-full border px-3 py-1 text-xs ${statusSummary.className}`}>
-                  {statusSummary.label}
-                </span>
-                <span className="rounded-full border border-border px-3 py-1 text-xs">
-                  Источник: {normalizeFundingSource(request.fundingSource)}
-                </span>
-                {request.cfdTag ? (
-                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
-                    Тег: {request.cfdTag}
-                  </span>
-                ) : null}
-                {request.archivedAt ? (
-                  <span className="rounded-full border border-zinc-300 bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
-                    В архиве
-                  </span>
-                ) : null}
-              </div>
-              {contextualHint ? (
-                <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-                  {contextualHint}
-                </div>
-              ) : null}
-              {request.awaitingPaymentByEmail ? (
-                <div>
-                  <div className="text-muted-foreground">В оплату передал</div>
-                  <p className="mt-1">
-                    {request.awaitingPaymentByName ? `${request.awaitingPaymentByName} · ` : ""}
-                    {request.awaitingPaymentByEmail}
-                    {request.awaitingPaymentAt
-                      ? ` · ${new Date(request.awaitingPaymentAt).toLocaleString("ru-RU")}`
-                      : ""}
-                  </p>
-                </div>
-              ) : null}
               {request.paidByEmail ? (
                 <div>
                   <div className="text-muted-foreground">Оплатил</div>
@@ -1942,8 +2280,8 @@ export default function RequestDetailPage() {
                   <div
                     className={
                       canManageClassification
-                        ? "grid max-w-6xl gap-2 md:grid-cols-[1fr_1fr_1fr_1fr_auto] md:items-end"
-                        : "grid max-w-4xl gap-2 md:grid-cols-[1fr_1fr_auto] md:items-end"
+                        ? "grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto] xl:items-end"
+                        : "grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] md:items-end"
                     }
                   >
                     {canManageClassification ? (
@@ -2118,33 +2456,11 @@ export default function RequestDetailPage() {
                   </div>
                 </div>
               )}
-              {(canSetAwaitingPayment || canSetPaymentPlanned || canSetPaid || canClose) && (
+              {((canSetPaymentPlanned || canSetPaid) && isOpenPaymentTask(request)) ||
+              (canSetPaid && request.status === "paid") ? (
                 <div className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    {canSetAwaitingPayment && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-9"
-                        disabled={updatingStatus || request.status !== "approved"}
-                        onClick={async () => {
-                          setError(null);
-                          setPaymentActionError(null);
-                          setUpdatingStatus(true);
-                          try {
-                            await updatePaymentStatus({ id: request._id, status: "awaiting_payment" });
-                            router.refresh();
-                          } catch (err) {
-                            setError(err instanceof Error ? err.message : "Не удалось обновить статус");
-                          } finally {
-                            setUpdatingStatus(false);
-                          }
-                        }}
-                      >
-                        Передать в оплату
-                      </Button>
-                    )}
-                    {canSetPaid && request.status === "paid" ? (
+                  {canSetPaid && request.status === "paid" ? (
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
                         variant="destructive"
@@ -2172,68 +2488,10 @@ export default function RequestDetailPage() {
                       >
                         Пока не оплачено
                       </Button>
-                    ) : null}
-                    {canClose && request.status === "closed" ? (
-                      <HoverHint label="Вернуть заявку в предыдущий статус">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="h-9"
-                          disabled={updatingStatus}
-                          onClick={async () => {
-                            setError(null);
-                            setUpdatingStatus(true);
-                            try {
-                              await updatePaymentStatus({ id: request._id, status: "reopen" as any });
-                              router.refresh();
-                            } catch (err) {
-                              setError(
-                                err instanceof Error ? err.message : "Не удалось открыть заявку заново",
-                              );
-                            } finally {
-                              setUpdatingStatus(false);
-                            }
-                          }}
-                        >
-                          Открыть заново
-                        </Button>
-                      </HoverHint>
-                    ) : canClose ? (
-                      <HoverHint
-                        label={
-                          request.status === "approved"
-                            ? "Если оплата по счету не требуется"
-                            : "Подтвердить, что заявка завершена"
-                        }
-                      >
-                        <Button
-                          type="button"
-                          className={
-                            request.status === "approved"
-                              ? "h-9 border-slate-300 bg-gradient-to-r from-slate-100 via-zinc-50 to-slate-100 text-slate-800 shadow-[0_0_10px_rgba(148,163,184,0.10)] hover:from-slate-200 hover:via-zinc-100 hover:to-slate-200"
-                              : "h-9 border-amber-300 bg-gradient-to-r from-amber-100 via-yellow-50 to-amber-100 text-amber-900 shadow-[0_0_10px_rgba(245,158,11,0.10)] hover:from-amber-200 hover:via-yellow-100 hover:to-amber-200"
-                          }
-                          disabled={updatingStatus || !["approved", "paid"].includes(request.status)}
-                          onClick={async () => {
-                            setError(null);
-                            setUpdatingStatus(true);
-                            try {
-                              await updatePaymentStatus({ id: request._id, status: "closed" });
-                              router.refresh();
-                            } catch (err) {
-                              setError(err instanceof Error ? err.message : "Не удалось закрыть заявку");
-                            } finally {
-                              setUpdatingStatus(false);
-                            }
-                          }}
-                        >
-                          {request.status === "approved" ? "Принять без оплаты" : "Закрыть заявку"}
-                        </Button>
-                      </HoverHint>
-                    ) : null}
-                  </div>
-                  {(canSetPaymentPlanned || canSetPaid) && (
-                    <div className="space-y-3 rounded-lg border border-border p-3">
+                    </div>
+                  ) : null}
+                  {(canSetPaymentPlanned || canSetPaid) && isOpenPaymentTask(request) && (
+                    <div ref={paymentBlockRef} className="space-y-3 rounded-lg border border-border p-3 scroll-mt-6">
                       {!isRubRequest ? (
                         <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)]">
                           <div className="space-y-2">
@@ -2251,23 +2509,78 @@ export default function RequestDetailPage() {
                         </div>
                       ) : null}
 
-                      <div className="space-y-2 rounded-lg border border-border/70 p-3">
-                        <div className="text-sm font-medium">Сумма оплаты</div>
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)]">
-                          <div className="space-y-2">
-                            <Label htmlFor="paymentTargetAmount">Сумма без НДС</Label>
-                            <Input
-                              id="paymentTargetAmount"
-                              inputMode="decimal"
-                              value={paymentTargetAmount}
-                              onChange={(event) => {
-                                const nextAmount = sanitizeNumericInput(event.target.value);
-                                setPaymentTargetAmount(nextAmount);
-                              }}
-                              placeholder={`Например, ${request.amount}`}
-                            />
+                      <div
+                        ref={paymentTargetAmountEditorRef}
+                        className={`space-y-2 rounded-lg border p-3 ${
+                          paymentTargetAmountNeedsDecision
+                            ? "border-destructive bg-destructive/5"
+                            : "border-border/70"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium">Сумма оплаты</div>
+                            {!isPaymentTargetAmountEditing ? (
+                              <div className="mt-1 text-lg font-semibold">
+                                {formatAmountWithoutVatLabel(
+                                  parseMoneyInput(paymentTargetAmount) ?? request.amount,
+                                  request.currency,
+                                )}
+                              </div>
+                            ) : null}
                           </div>
+                          {!isPaymentTargetAmountEditing ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={startPaymentTargetAmountEditing}
+                            >
+                              Редактировать сумму
+                            </Button>
+                          ) : null}
                         </div>
+                        {isPaymentTargetAmountEditing ? (
+                          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)]">
+                            <div className="space-y-2">
+                              <Label htmlFor="paymentTargetAmount">Сумма без НДС</Label>
+                              <Input
+                                id="paymentTargetAmount"
+                                inputMode="decimal"
+                                value={paymentTargetAmount}
+                                onChange={(event) => {
+                                  const nextAmount = sanitizeNumericInput(event.target.value);
+                                  setPaymentTargetAmount(nextAmount);
+                                  setPaymentTargetAmountNeedsDecision(false);
+                                }}
+                                placeholder={`Например, ${request.amount}`}
+                              />
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={!paymentTargetAmountChanged}
+                                onClick={savePaymentTargetAmountEditing}
+                              >
+                                Сохранить сумму
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={cancelPaymentTargetAmountEditing}
+                              >
+                                Отменить редактирование
+                              </Button>
+                            </div>
+                          </div>
+                        ) : null}
+                        {paymentTargetAmountNeedsDecision ? (
+                          <p className="text-xs text-destructive">
+                            Сохраните сумму или отмените редактирование.
+                          </p>
+                        ) : null}
                         <p className="text-xs text-muted-foreground">
                           Все суммы в платежах указываются без НДС. По умолчанию здесь сумма из заявки. Если BUH меняет ее, автор получит письмо.
                         </p>
@@ -2361,9 +2674,7 @@ export default function RequestDetailPage() {
                                         >
                                           {row.status === "paid"
                                             ? "Оплачен"
-                                            : isActivePlannedRow
-                                              ? "Готов к оплате"
-                                              : "Запланирован"}
+                                            : "Запланирован"}
                                         </span>
                                         {(canSetPaymentPlanned || canSetPaid) ? (
                                           <Button
@@ -2602,206 +2913,13 @@ export default function RequestDetailPage() {
                     </div>
                   )}
                 </div>
-              )}
-              <div>
-                <div className="text-muted-foreground">Автор</div>
-                <p className="mt-1">
-                  {request.createdByName ? `${request.createdByName} · ` : ""}
-                  {request.createdByEmail}
-                </p>
-                {request.originalCreatedByEmail ? (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Исходный автор — {request.originalCreatedByName ? `${request.originalCreatedByName} · ` : ""}
-                    {request.originalCreatedByEmail}. Сотрудник архивирован, заявка передана админу.
-                  </p>
-                ) : null}
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <div className="text-muted-foreground">Прикрепить файлы</div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Например, счет в PDF, акт и другие важные документы
-                  </p>
+              ) : null}
+              {request.originalCreatedByEmail ? (
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-muted-foreground">
+                  Исходный автор — {request.originalCreatedByName ? `${request.originalCreatedByName} · ` : ""}
+                  {request.originalCreatedByEmail}. Сотрудник архивирован, заявка передана админу.
                 </div>
-                {canManageFiles ? (
-                  <div className="flex flex-wrap items-end gap-3">
-                    <div className="flex min-w-[320px] flex-1 flex-col gap-2">
-                      <input
-                        id="attachment"
-                        ref={fileInputRef}
-                        type="file"
-                        className="hidden"
-                        multiple
-                        accept={ACCEPTED_ATTACHMENT_EXTENSIONS.join(",")}
-                        onChange={async (event) => {
-                          await uploadFiles(Array.from(event.target.files ?? []));
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          setIsDragOver(true);
-                        }}
-                        onDragLeave={(event) => {
-                          event.preventDefault();
-                          setIsDragOver(false);
-                        }}
-                        onDrop={async (event) => {
-                          event.preventDefault();
-                          setIsDragOver(false);
-                          await uploadFiles(Array.from(event.dataTransfer.files ?? []));
-                        }}
-                        className={`flex min-h-20 w-full cursor-pointer items-center justify-between rounded-xl border px-4 py-3 text-left transition-all ${
-                          isDragOver
-                            ? "border-emerald-500 bg-emerald-50 shadow-[0_0_0_4px_rgba(16,185,129,0.08)]"
-                            : "border-border bg-background hover:border-emerald-400 hover:bg-emerald-50/50"
-                        }`}
-                      >
-                        <span className="flex items-center gap-3">
-                          <span className="rounded-lg bg-emerald-100 p-2 text-emerald-700">
-                            <Paperclip className="h-4 w-4" />
-                          </span>
-                          <span>
-                            <span className="block font-medium">
-                              {isDragOver
-                                ? "Отпустите файлы, чтобы загрузить"
-                                : uploadingFile
-                                ? selectedFiles.length === 1
-                                  ? `Загружаем: ${selectedFiles[0].name}`
-                                  : `Загружаем файлов: ${selectedFiles.length}`
-                                : "Нажмите или перетащите файлы сюда"}
-                            </span>
-                            <span className="block text-sm text-muted-foreground">
-                              PDF, Office, изображения, архивы · до 40 МБ на файл · до 20 файлов
-                            </span>
-                          </span>
-                        </span>
-                        <Upload className="h-4 w-4 text-muted-foreground" />
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Вам доступен просмотр файлов. Добавлять новые файлы могут только автор, согласующие и администратор.
-                  </p>
-                )}
-                {selectedFiles.length ? (
-                  <div className="space-y-1 text-sm text-muted-foreground">
-                    {selectedFiles.map((file) => (
-                      <div key={`${file.name}-${file.size}`}>
-                        {file.name} · {formatFileSize(file.size)}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                {fileActionError ? <p className="text-sm text-destructive">{fileActionError}</p> : null}
-                {attachments?.length ? (
-                  <div className="space-y-2">
-                    {attachments.map((item) => (
-                      <div
-                        key={item._id}
-                        className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm"
-                      >
-                        <div>
-                          <div className="font-medium">{item.fileName}</div>
-                          <div className="text-muted-foreground">
-                            {item.uploadedByName ? `${item.uploadedByName} · ` : ""}
-                            {item.uploadedByEmail}
-                            {item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}
-                            {" · "}
-                            {new Date(item.createdAt).toLocaleString("ru-RU")}
-                          </div>
-                        </div>
-                        {item.url ? (
-                          <div className="flex gap-2">
-                            {canInlinePreviewAttachment(item.contentType, item.fileName) ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() =>
-                                  setPreviewAttachmentId((current) =>
-                                    current === item._id ? null : item._id,
-                                  )
-                                }
-                              >
-                                Предпросмотр
-                              </Button>
-                            ) : null}
-                            <Button asChild variant="outline" size="sm">
-                              <a href={item.url} target="_blank" rel="noreferrer">
-                                Открыть
-                              </a>
-                            </Button>
-                            {item.canDelete ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={async () => {
-                                  setFileActionError(null);
-                                  if (!window.confirm(`Удалить файл ${item.fileName}?`)) {
-                                    return;
-                                  }
-                                  try {
-                                    await deleteAttachment({ attachmentId: item._id });
-                                    router.refresh();
-                                  } catch (err) {
-                                    setFileActionError(
-                                      err instanceof Error ? err.message : "Не удалось удалить файл",
-                                    );
-                                  }
-                                }}
-                              >
-                                Удалить
-                              </Button>
-                            ) : null}
-                          </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">Ссылка скоро появится</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">Файлы пока не прикреплены.</p>
-                )}
-                {previewAttachment?.url && canInlinePreviewAttachment(previewAttachment.contentType, previewAttachment.fileName) ? (
-                  <div className="space-y-2 rounded-lg border border-border p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium">Предпросмотр файла</div>
-                        <div className="text-sm text-muted-foreground">{previewAttachment.fileName}</div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setPreviewAttachmentId(null)}
-                      >
-                        Скрыть
-                      </Button>
-                    </div>
-                    {previewAttachment.contentType?.startsWith("image/") ||
-                    /\.(png|jpe?g|gif|webp)$/i.test(previewAttachment.fileName) ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={previewAttachment.url}
-                        alt={previewAttachment.fileName}
-                        className="max-h-[32rem] w-auto rounded-lg border border-border object-contain"
-                      />
-                    ) : (
-                      <iframe
-                        src={previewAttachment.url}
-                        title={previewAttachment.fileName}
-                        className="h-[36rem] w-full rounded-lg border border-border bg-white"
-                      />
-                    )}
-                  </div>
-                ) : null}
-              </div>
+              ) : null}
               {request.category !== "Конкурсное задание" &&
               request.category !== "Welcome-бонус" &&
               !isServiceCategory ? (
@@ -2814,10 +2932,6 @@ export default function RequestDetailPage() {
                 <div>
                   <div className="text-muted-foreground">Цех</div>
                   <p className="mt-1">{request.department ?? request.requestArea ?? "Не указан"}</p>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">Категория</div>
-                  <p className="mt-1">{request.businessCategory ?? EMPTY_BUSINESS_CATEGORY}</p>
                 </div>
               </div>
               {(request.contractLink || request.contractAttachmentCount) ? (
@@ -2859,7 +2973,7 @@ export default function RequestDetailPage() {
                   </p>
                 </div>
               ) : null}
-              <div className={`grid gap-3 ${request.category === "Welcome-бонус" ? "" : "sm:grid-cols-2"}`}>
+              <div className={`grid gap-x-8 gap-y-4 ${request.category === "Welcome-бонус" ? "" : "md:grid-cols-3"}`}>
                 <div>
                   <div className="text-muted-foreground">Дедлайн согласования</div>
                   <p className="mt-1">
@@ -3009,16 +3123,15 @@ export default function RequestDetailPage() {
               {request.fundingSource === "Отгрузки проекта" && !request.financePlanLinks?.length ? (
                 <p className="text-sm text-muted-foreground">ID отгрузки в Финплане не указан.</p>
               ) : null}
-              {requestSupportsSpecialists ? (
-                <div className="space-y-4">
+              {requestSupportsSpecialists && allContestParticipants.length ? (
+                <div ref={specialistsBlockRef} className="space-y-4 scroll-mt-6">
                   {[
                     { key: "internal", label: "Штатные специалисты", items: contestParticipants.internal },
                     { key: "contractor", label: "Специалисты подрядчика", items: contestParticipants.contractor },
-                  ].map((section) => (
+                  ].filter((section) => section.items.length).map((section) => (
                     <div key={section.key} className="space-y-3">
                       <div className="text-muted-foreground">{section.label}</div>
-                      {section.items.length ? (
-                        section.items.map((item) => {
+                      {section.items.map((item) => {
                           const draft = specialistDrafts[item.id] ?? item;
                           const draftSourceType = normalizeContestSpecialistSource(draft.sourceType);
                           const isDraftContractor = draftSourceType === "contractor";
@@ -3432,14 +3545,12 @@ export default function RequestDetailPage() {
                               </div>
                             </div>
                           );
-                        })
-                      ) : (
-                        <p className="text-sm text-muted-foreground">Пока не добавлены.</p>
-                      )}
+                        })}
                     </div>
                   ))}
                 </div>
               ) : null}
+              {filesSection}
             </CardContent>
           </Card>
 
@@ -3635,10 +3746,35 @@ export default function RequestDetailPage() {
             </Card>
           ) : null}
 
-          <Card>
+          <Card ref={approvalsBlockRef} className="scroll-mt-6">
             <CardHeader>
-              <CardTitle>Согласования</CardTitle>
-              <CardDescription>Статус по ролям.</CardDescription>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <CardTitle>Согласование</CardTitle>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium">
+                    {approvedApprovalsCount}/{approvals.length}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className="h-8 w-8 rounded-full border border-zinc-200"
+                    style={{
+                      background: approvals.length
+                        ? `conic-gradient(#059669 0deg ${
+                            (approvedApprovalsCount / approvals.length) * 360
+                          }deg, #dc2626 ${
+                            (approvedApprovalsCount / approvals.length) * 360
+                          }deg ${
+                            ((approvedApprovalsCount + rejectedApprovalsCount) / approvals.length) * 360
+                          }deg, #f59e0b ${
+                            ((approvedApprovalsCount + rejectedApprovalsCount) / approvals.length) * 360
+                          }deg 360deg)`
+                        : "#e5e7eb",
+                    }}
+                  />
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               {approvals.length ? (
@@ -3684,9 +3820,7 @@ export default function RequestDetailPage() {
                             <span
                               className={`rounded-full border px-3 py-1 text-xs ${
                                 approval.status === "pending"
-                                  ? canCurrentUserDecideApproval(approval)
-                                    ? "border-amber-200 bg-amber-100 text-amber-800"
-                                    : "border-amber-200 bg-amber-50 text-amber-700"
+                                  ? "border-amber-200 bg-amber-50 text-amber-700"
                                   : getApprovalStatusClass(approval.status)
                               }`}
                             >
@@ -3948,7 +4082,6 @@ export default function RequestDetailPage() {
           <Card>
             <CardHeader>
               <CardTitle>Комментарии</CardTitle>
-              <CardDescription>История обсуждения заявки.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
               <div className="space-y-3">
@@ -3958,7 +4091,9 @@ export default function RequestDetailPage() {
                       ? `${comment.authorName} · ${comment.authorEmail}`
                       : comment.authorEmail;
                     const createdAt = new Date(comment.createdAt).toLocaleString("ru-RU");
+                    const parentComment = comment.parentId ? commentsById.get(String(comment.parentId)) : null;
                     const canEdit = canEditComment(comment);
+                    const canDelete = canDeleteComment(comment);
                     return (
                       <div
                         key={comment._id}
@@ -3969,6 +4104,14 @@ export default function RequestDetailPage() {
                         <div className="text-xs text-muted-foreground">
                           {author} · {createdAt}
                         </div>
+                        {parentComment ? (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Ответ на комментарий:{" "}
+                            {parentComment.authorName
+                              ? `${parentComment.authorName} · ${parentComment.authorEmail}`
+                              : parentComment.authorEmail}
+                          </div>
+                        ) : null}
                         {editingId === comment._id ? (
                           <form className="mt-2 space-y-2" onSubmit={handleEditComment}>
                             <Textarea
@@ -4052,6 +4195,17 @@ export default function RequestDetailPage() {
                               Редактировать
                             </Button>
                           )}
+                          {canDelete ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="border-rose-300 text-rose-700 hover:bg-rose-50"
+                              onClick={() => handleDeleteComment(comment._id)}
+                            >
+                              Удалить
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -4114,6 +4268,35 @@ export default function RequestDetailPage() {
               </form>
             </CardContent>
           </Card>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-2 rounded-full border border-zinc-200 bg-white p-1 shadow-sm">
+              <Button
+                type="button"
+                size="sm"
+                variant={activeTab === "details" ? "default" : "ghost"}
+                onClick={() => setActiveTab("details")}
+              >
+                Заявка
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={activeTab === "changes" ? "default" : "ghost"}
+                onClick={() => setActiveTab("changes")}
+              >
+                Изменения
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={activeTab === "timeline" ? "default" : "ghost"}
+                onClick={() => setActiveTab("timeline")}
+              >
+                Таймлайн
+              </Button>
+            </div>
           </div>
 
           <div className={activeTab === "changes" ? "block" : "hidden"}>

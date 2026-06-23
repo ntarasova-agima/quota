@@ -255,3 +255,44 @@ export const editComment = mutation({
     return { updated: true };
   },
 });
+
+export const deleteComment = mutation({
+  args: {
+    id: v.id("comments"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const comment = await ctx.db.get(args.id);
+    if (!comment) {
+      throw new Error("Комментарий не найден");
+    }
+    if (comment.authorId !== userId) {
+      throw new Error("Удалить комментарий может только автор");
+    }
+    const replies = await ctx.db
+      .query("comments")
+      .withIndex("by_parent", (q) => q.eq("parentId", comment._id))
+      .collect();
+    if (replies.length > 0) {
+      throw new Error("Комментарий нельзя удалить после ответа");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    const identity = await ctx.auth.getUserIdentity();
+    await ctx.db.delete(comment._id);
+    await logTimelineEvent(ctx, {
+      requestId: comment.requestId,
+      type: "comment_deleted",
+      title: "Комментарий удален",
+      actorEmail: email,
+      actorName: roleRecord?.fullName ?? identity?.name ?? undefined,
+    });
+    return { deleted: true };
+  },
+});

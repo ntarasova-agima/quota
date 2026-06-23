@@ -19,6 +19,7 @@ import {
 import {
   OPEN_PAYMENT_TASK_STATUSES,
   getPaymentDeadlineTimestamp,
+  hasPendingFotTask,
   isOpenPaymentTask,
 } from "../src/lib/requestStatus";
 
@@ -108,16 +109,20 @@ async function scheduleFotDeadlineReminders(ctx: any, request: { _id: any; payme
 
 async function sendPaymentPlanningRequestedAndScheduleReminders(
   ctx: any,
-  request: { _id: any; paymentDeadline?: number; neededBy?: number },
+  request: { _id: any; category?: string; paymentDeadline?: number; neededBy?: number },
 ) {
-  await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
-    requestId: request._id,
-  });
-  await schedulePaymentDeadlineReminders(ctx, request);
-  await ctx.scheduler.runAfter(0, internal.emails.sendFotRecordingRequested, {
-    requestId: request._id,
-  });
-  await scheduleFotDeadlineReminders(ctx, request);
+  if (request.category !== "Welcome-бонус") {
+    await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
+      requestId: request._id,
+    });
+    await schedulePaymentDeadlineReminders(ctx, request);
+  }
+  if (request.category !== "Welcome-бонус") {
+    await ctx.scheduler.runAfter(0, internal.emails.sendFotRecordingRequested, {
+      requestId: request._id,
+    });
+    await scheduleFotDeadlineReminders(ctx, request);
+  }
 }
 
 export const listPendingForMe = query({
@@ -163,7 +168,7 @@ export const listPendingForMe = query({
     }
 
     const seen = new Set<string>();
-    const results: Array<{ approval: any; request: any; kind: "approval" | "payment" | "hod" }> = [];
+    const results: Array<{ approval: any; request: any; kind: "approval" | "payment" | "hod" | "fot" }> = [];
     for (const approval of approvals) {
       if (seen.has(approval.requestId)) {
         continue;
@@ -214,6 +219,34 @@ export const listPendingForMe = query({
             status: "pending",
           },
           kind: "payment",
+        });
+      }
+    }
+
+    if (roles.includes("BUH Inside") || roles.includes("ADMIN")) {
+      const fotRequests = (
+        await Promise.all(
+          ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].map((status) =>
+            ctx.db
+              .query("requests")
+              .withIndex("by_status", (q) => q.eq("status", status as any))
+              .collect(),
+          ),
+        )
+      ).flat();
+      for (const request of fotRequests) {
+        if (seen.has(request._id) || !hasPendingFotTask(request)) {
+          continue;
+        }
+        seen.add(request._id);
+        results.push({
+          request,
+          approval: {
+            requestId: request._id,
+            role: "BUH Inside",
+            status: "pending",
+          },
+          kind: "fot",
         });
       }
     }

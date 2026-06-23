@@ -8,9 +8,11 @@ import AppHeader from "@/components/AppHeader";
 import DateRangeFilter from "@/components/date-range-filter";
 import RequestMetaSummary from "@/components/request-meta-summary";
 import {
-  getBuhPaymentStatusSummary,
+  getFotActionHint,
+  getPaymentActionHint,
   getPaymentDeadlineTimestamp,
   getPaymentTaskTimestamp,
+  getRequestStatusSummary,
   getUnallocatedPaymentAmounts,
 } from "@/lib/requestStatus";
 import { formatAmountPair } from "@/lib/vat";
@@ -58,12 +60,12 @@ const statusOptions = [
   { value: "hod_pending", label: "Ждет валидации цеха" },
   { value: "pending", label: "Ожидает согласования" },
   { value: "approved", label: "Согласовано" },
-  { value: "rejected", label: "Отклонено" },
-  { value: "awaiting_payment", label: "Требуется оплата" },
+  { value: "rejected", label: "Не согласовано" },
   { value: "payment_planned", label: "Запланирована оплата" },
   { value: "partially_paid", label: "Частично оплачено" },
   { value: "paid", label: "Оплачено" },
   { value: "closed", label: "Заявка закрыта" },
+  { value: "canceled", label: "Отменена" },
 ];
 
 function summarizeStatuses(statusFilters: string[]) {
@@ -96,7 +98,7 @@ export default function ApprovalsPage() {
   const myProfile = useQuery(api.roles.myProfile);
   const adContacts = useQuery(api.roles.listAdContacts);
   const businessCategories = useQuery(api.businessCategories.list, {});
-  const [taskTypeFilter, setTaskTypeFilter] = useState<"all" | "approval" | "payment">("all");
+  const [taskTypeFilter, setTaskTypeFilter] = useState<"all" | "approval" | "payment" | "fot">("all");
   const [buhQuickFilter, setBuhQuickFilter] = useState<"all" | "today" | "overdue">("all");
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [authorFilter, setAuthorFilter] = useState("all");
@@ -162,7 +164,11 @@ export default function ApprovalsPage() {
     let filtered = [...items];
     if (taskTypeFilter !== "all") {
       filtered = filtered.filter(({ kind }) =>
-        taskTypeFilter === "payment" ? kind === "payment" : kind !== "payment",
+        taskTypeFilter === "payment"
+          ? kind === "payment"
+          : taskTypeFilter === "fot"
+            ? kind === "fot"
+            : kind !== "payment" && kind !== "fot",
       );
     }
     if (isFinanceRole && buhQuickFilter !== "all") {
@@ -178,7 +184,11 @@ export default function ApprovalsPage() {
       });
     }
     if (statusFilters.length > 0) {
-      filtered = filtered.filter(({ request }) => statusFilters.includes(request.status));
+      filtered = filtered.filter(({ request }) =>
+        statusFilters.includes("canceled") && request.isCanceled
+          ? true
+          : statusFilters.includes(request.status) && !request.isCanceled,
+      );
     }
     if (authorFilter !== "all") {
       filtered = filtered.filter(({ request }) => request.createdByEmail === authorFilter);
@@ -305,6 +315,15 @@ export default function ApprovalsPage() {
                         onClick={() => setTaskTypeFilter("payment")}
                       >
                         Нужна оплата
+                      </Button>
+                    ) : null}
+                    {myRoles?.some((role) => ["BUH Inside", "ADMIN"].includes(role)) ? (
+                      <Button
+                        type="button"
+                        variant={taskTypeFilter === "fot" ? "default" : "outline"}
+                        onClick={() => setTaskTypeFilter("fot")}
+                      >
+                        Нужно вынести ФОТ
                       </Button>
                     ) : null}
                   </>
@@ -472,8 +491,27 @@ export default function ApprovalsPage() {
                 {visibleItems.length ? (
                   visibleItems.map(({ request, kind }) => (
                     (() => {
-                      const buhStatusSummary =
-                        kind === "payment" ? getBuhPaymentStatusSummary(request) : null;
+                      const statusSummary = getRequestStatusSummary(request);
+                      const paymentActionHint =
+                        kind === "payment" ? getPaymentActionHint(request) : null;
+                      const fotActionHint =
+                        kind === "fot" || myRoles?.some((role) => ["BUH Inside", "ADMIN"].includes(role))
+                          ? getFotActionHint(request)
+                          : null;
+                      const actionHint =
+                        kind === "payment"
+                          ? paymentActionHint
+                          : kind === "fot"
+                            ? fotActionHint
+                          : kind === "hod"
+                            ? {
+                                label: "Провалидируйте затраты",
+                                className: "border-violet-200 bg-violet-50 text-violet-700",
+                              }
+                            : {
+                                label: "Ждет вашего решения",
+                                className: "border-amber-200 bg-amber-100 text-amber-800",
+                              };
                       const unallocatedPaymentAmounts =
                         kind === "payment" ? getUnallocatedPaymentAmounts(request) : null;
                       const paymentDeadline = getPaymentDeadlineTimestamp(request);
@@ -551,7 +589,7 @@ export default function ApprovalsPage() {
                                   })}
                                 </div>
                               ) : null}
-                              {buhStatusSummary?.label === "Есть нераспределенный платеж" &&
+                              {paymentActionHint?.label === "Есть нераспределенный платеж" &&
                               unallocatedPaymentAmounts ? (
                                 <div>
                                   Не распределено:{" "}
@@ -562,6 +600,9 @@ export default function ApprovalsPage() {
                                     vatRate: request.vatRate,
                                   })}
                                 </div>
+                              ) : null}
+                              {fotActionHint ? (
+                                <div>ФОТ по штатным специалистам не вынесен.</div>
                               ) : null}
                             </div>
                           ) : kind === "hod" ? (
@@ -585,20 +626,24 @@ export default function ApprovalsPage() {
                       </div>
                       <div className="flex flex-col items-start gap-2 md:items-end">
                         <span
-                          className={`h-fit rounded-full border px-3 py-1 text-xs font-medium ${
-                            kind === "payment"
-                              ? buhStatusSummary?.className
-                              : kind === "hod"
-                                ? "border-violet-200 bg-violet-50 text-violet-700"
-                              : "border-amber-200 bg-amber-100 text-amber-800"
-                          }`}
+                          className={`h-fit rounded-full border px-3 py-1 text-xs font-medium ${statusSummary.className}`}
                         >
-                          {kind === "payment"
-                            ? buhStatusSummary?.label
-                            : kind === "hod"
-                              ? "Провалидируйте затраты"
-                              : "Ждет вашего решения"}
+                          {statusSummary.label}
                         </span>
+                        {actionHint ? (
+                          <span
+                            className={`h-fit rounded-full border px-3 py-1 text-xs font-medium ${actionHint.className}`}
+                          >
+                            {actionHint.label}
+                          </span>
+                        ) : null}
+                        {kind !== "fot" && fotActionHint ? (
+                          <span
+                            className={`h-fit rounded-full border px-3 py-1 text-xs font-medium ${fotActionHint.className}`}
+                          >
+                            {fotActionHint.label}
+                          </span>
+                        ) : null}
                         {hasFinplanEntryMark(request) ? (
                           <HoverHint
                             label={

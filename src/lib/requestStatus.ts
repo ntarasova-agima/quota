@@ -30,6 +30,11 @@ type RequestLike = {
   paymentResidualAmount?: number;
   paymentResidualAmountWithVat?: number;
   vatRate?: number;
+  category?: string;
+  specialists?: Array<{
+    sourceType?: string;
+    fotRecorded?: boolean;
+  }>;
 };
 
 type ApprovalLike = {
@@ -42,6 +47,25 @@ export const OPEN_PAYMENT_TASK_STATUSES = [
   "payment_planned",
   "partially_paid",
 ] as const;
+
+function isWelcomeBonusRequest(request: Pick<RequestLike, "category">) {
+  return request.category === "Welcome-бонус";
+}
+
+export function hasPendingFotTask(
+  request: Pick<RequestLike, "status" | "isCanceled" | "category" | "specialists">,
+) {
+  if (
+    request.isCanceled ||
+    isWelcomeBonusRequest(request) ||
+    ["draft", "hod_pending", "pending", "rejected"].includes(request.status)
+  ) {
+    return false;
+  }
+  return (request.specialists ?? []).some(
+    (item) => item.sourceType === "internal" && !item.fotRecorded,
+  );
+}
 
 export function getPaymentDeadlineTimestamp(request: Pick<RequestLike, "paymentDeadline" | "neededBy">) {
   return request.paymentDeadline ?? request.neededBy;
@@ -80,10 +104,15 @@ export function isOpenPaymentTask(
     | "paymentPlannedAt"
     | "plannedPaymentSplits"
     | "paymentSplits"
+    | "category"
+    | "specialists"
   >,
 ) {
   return (
     !request.isCanceled &&
+    !isWelcomeBonusRequest(request) &&
+    (!(request.specialists?.length) ||
+      request.specialists.some((item) => item.sourceType === "contractor")) &&
     OPEN_PAYMENT_TASK_STATUSES.includes(request.status as (typeof OPEN_PAYMENT_TASK_STATUSES)[number]) &&
     getPaymentTaskTimestamp(request) !== undefined
   );
@@ -170,6 +199,83 @@ export function hasUnallocatedPayment(request: RequestLike) {
   return getUnallocatedPaymentAmounts(request).amountWithoutVat > 0;
 }
 
+export type PaymentTaskFilter =
+  | "open"
+  | "needs_action"
+  | "payment_planned"
+  | "partially_paid"
+  | "unallocated"
+  | "fot"
+  | "today"
+  | "overdue";
+
+export function matchesPaymentTaskFilter(
+  request: RequestLike,
+  filter: PaymentTaskFilter,
+  todayStart: number,
+  todayEnd: number,
+) {
+  if (filter === "fot") {
+    return hasPendingFotTask(request);
+  }
+  if (filter === "open") {
+    return isOpenPaymentTask(request) || hasPendingFotTask(request);
+  }
+  if (!isOpenPaymentTask(request)) {
+    return false;
+  }
+  const paymentTaskAt = getPaymentTaskTimestamp(request);
+
+  if (filter === "needs_action") {
+    return request.status === "approved" || request.status === "awaiting_payment";
+  }
+  if (filter === "payment_planned") {
+    return request.status === "payment_planned";
+  }
+  if (filter === "partially_paid") {
+    return request.status === "partially_paid";
+  }
+  if (filter === "unallocated") {
+    return hasUnallocatedPayment(request);
+  }
+  if (filter === "today") {
+    return paymentTaskAt !== undefined && paymentTaskAt >= todayStart && paymentTaskAt <= todayEnd;
+  }
+  return paymentTaskAt !== undefined && paymentTaskAt < todayStart;
+}
+
+export function getPaymentActionHint(request: RequestLike) {
+  if (!isOpenPaymentTask(request)) {
+    return null;
+  }
+
+  if (hasUnallocatedPayment(request)) {
+    return {
+      label: "Есть нераспределенный платеж",
+      className: "border-amber-200 bg-amber-50 text-amber-800",
+    };
+  }
+
+  if (request.status === "approved" || request.status === "awaiting_payment") {
+    return {
+      label: "Нужно запланировать или оплатить",
+      className: "border-indigo-200 bg-indigo-50 text-indigo-700",
+    };
+  }
+
+  return null;
+}
+
+export function getFotActionHint(request: RequestLike) {
+  if (!hasPendingFotTask(request)) {
+    return null;
+  }
+  return {
+    label: "Нужно вынести ФОТ",
+    className: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700",
+  };
+}
+
 export function getBuhPaymentStatusSummary(request: RequestLike) {
   if (hasUnallocatedPayment(request)) {
     return {
@@ -211,7 +317,7 @@ export function getRequestStatusSummary(
 
   if (request.status === "draft") {
     return {
-      label: "Новая заявка",
+      label: "Черновик",
       className: "border-sky-200 bg-sky-50 text-sky-700",
     };
   }
@@ -232,8 +338,8 @@ export function getRequestStatusSummary(
 
   if (request.status === "awaiting_payment") {
     return {
-      label: "Требуется оплата",
-      className: "border-indigo-200 bg-indigo-50 text-indigo-700",
+      label: "Согласовано",
+      className: "border-emerald-200 bg-emerald-600 text-white",
     };
   }
 
