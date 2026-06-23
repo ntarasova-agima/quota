@@ -989,9 +989,9 @@ export default function NewRequestPage() {
   return (
     <RequireAuth>
       <div className="min-h-screen bg-background text-foreground">
-        <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-12">
+        <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-12">
           <AppHeader title="Редактирование заявки" />
-          <Card className="w-full">
+          <Card className="mx-auto w-full max-w-3xl">
             <CardHeader>
               <CardTitle>Редактирование заявки</CardTitle>
               <CardDescription>

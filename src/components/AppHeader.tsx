@@ -43,7 +43,7 @@ export default function AppHeader({
   const requestView = searchParams.get("view") ?? "my";
 
   return (
-    <div className="relative left-1/2 flex w-[calc(100vw-3rem)] max-w-5xl -translate-x-1/2 flex-col gap-3 border-b border-zinc-200 pb-5">
+    <div className="flex w-full flex-col gap-3 border-b border-zinc-200 pb-5">
       <div className="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
         <div className="flex min-w-0 items-center gap-3">
           <Link
