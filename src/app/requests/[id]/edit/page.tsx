@@ -48,7 +48,6 @@ import {
 import {
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
-  CLIENT_SERVICES_TRANSIT_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
@@ -89,10 +88,6 @@ type PendingEditConfirmation = {
   confirmationLines: string[];
   infoLines: string[];
 };
-
-function isTransitRequestCategory(category: string) {
-  return normalizeRequestCategory(category) === CLIENT_SERVICES_TRANSIT_CATEGORY;
-}
 
 function getEnforcedRoleSet(category: string, fundingSource: string) {
   const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
@@ -718,7 +713,7 @@ export default function NewRequestPage() {
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
     }
-    if (!isHodSelectableCategory(nextCategory) || isTransitRequestCategory(nextCategory)) {
+    if (!isHodSelectableCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
     }
@@ -733,7 +728,7 @@ export default function NewRequestPage() {
     if (nextCategory === "Welcome-бонус") {
       setPaymentMethod("");
     }
-    if (!isHodSelectableCategory(nextCategory) || isTransitRequestCategory(nextCategory)) {
+    if (!isHodSelectableCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
     }

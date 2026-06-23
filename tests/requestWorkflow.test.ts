@@ -46,7 +46,7 @@ describe("requestWorkflow", () => {
         requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT],
         category: CLIENT_SERVICES_TRANSIT_CATEGORY,
       }),
-    ).toEqual(["BUH Transit"]);
+    ).toEqual(["HOD", "BUH Transit"]);
 
     expect(
       getEffectiveRequiredRoles({
@@ -61,7 +61,10 @@ describe("requestWorkflow", () => {
         requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT],
         category: CLIENT_SERVICES_TRANSIT_CATEGORY,
       }),
-    ).toEqual([{ role: "BUH Transit" }]);
+    ).toEqual([
+      { role: "HOD", department: FINANCE_LEGAL_DEPARTMENT },
+      { role: "BUH Transit" },
+    ]);
   });
 
   it("does not add management HOD to transit requests unless HOD is selected", () => {
@@ -81,21 +84,24 @@ describe("requestWorkflow", () => {
     ).toEqual(["BUH Transit"]);
   });
 
-  it("does not keep manual HOD approval for transit requests", () => {
+  it("keeps manual HOD approval available for transit requests", () => {
     const departments = getEffectiveRequiredHodDepartments({
       category: CLIENT_SERVICES_TRANSIT_CATEGORY,
       requiredRoles: ["HOD"],
       requiredHodDepartments: ["Производственный менеджмент"],
     });
 
-    expect(departments).toEqual([]);
+    expect(departments).toEqual(["Производственный менеджмент"]);
     expect(
       buildApprovalTargets({
         requiredRoles: ["HOD"],
         requiredHodDepartments: departments,
         category: CLIENT_SERVICES_TRANSIT_CATEGORY,
       }),
-    ).toEqual([{ role: "BUH Transit" }]);
+    ).toEqual([
+      { role: "HOD", department: "Производственный менеджмент" },
+      { role: "BUH Transit" },
+    ]);
   });
 
   it("marks only BUH Transit as mandatory for transit requests without auto HOD", () => {

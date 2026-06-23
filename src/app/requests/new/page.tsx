@@ -46,14 +46,12 @@ import {
 } from "@/lib/requestFields";
 import {
   AI_TOOLS_FUNDING_SOURCE,
-  CLIENT_SERVICES_TRANSIT_CATEGORY,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   isAiToolsRequestCategory,
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
-  normalizeRequestCategory,
   supportsRequestSpecialists,
   usesServiceRecipientLabel,
 } from "@/lib/requestRules";
@@ -79,10 +77,6 @@ import {
   MAX_REQUEST_ATTACHMENT_SIZE,
 } from "@/lib/requestAttachments";
 import { resolveCopiedRequestCoreFields } from "@/lib/requestCopy";
-
-function isTransitRequestCategory(category: string) {
-  return normalizeRequestCategory(category) === CLIENT_SERVICES_TRANSIT_CATEGORY;
-}
 
 function getEnforcedRoleSet(category: string, fundingSource: string) {
   const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
@@ -725,7 +719,7 @@ export default function NewRequestPage() {
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
     }
-    if (!isHodSelectableCategory(nextCategory) || isTransitRequestCategory(nextCategory)) {
+    if (!isHodSelectableCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
     }
@@ -740,7 +734,7 @@ export default function NewRequestPage() {
     if (nextCategory === "Welcome-бонус") {
       setPaymentMethod("");
     }
-    if (!isHodSelectableCategory(nextCategory) || isTransitRequestCategory(nextCategory)) {
+    if (!isHodSelectableCategory(nextCategory)) {
       setRequiredRoles((current) => current.filter((role) => role !== "HOD"));
       setRequiredHodDepartments([]);
     }
