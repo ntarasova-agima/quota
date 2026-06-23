@@ -178,7 +178,7 @@ describe("requestWorkflow", () => {
     }
   });
 
-  it("requires Accounting HOD when contractor specialists are present", () => {
+  it("does not require Accounting HOD only because contractor specialists are present", () => {
     expect(
       getEffectiveRequiredHodDepartments({
         category: "Конкурсное задание",
@@ -190,7 +190,7 @@ describe("requestWorkflow", () => {
           },
         ],
       }),
-    ).toContain(ACCOUNTING_REQUEST_AREA);
+    ).not.toContain(ACCOUNTING_REQUEST_AREA);
 
     expect(
       getEffectiveRequiredHodDepartments({

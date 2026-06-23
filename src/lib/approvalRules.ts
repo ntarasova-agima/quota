@@ -1,25 +1,9 @@
-import { normalizeContestSpecialistSource } from "./requestFields";
 import {
   ACCOUNTING_REQUEST_AREA,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
   PURCHASE_CATEGORY,
   normalizeRequestCategory,
 } from "./requestRules";
-
-type SpecialistLike = {
-  sourceType?: string;
-  contractorTypes?: string[];
-  name?: string;
-  contractorLegalEntity?: string;
-  department?: string;
-  hours?: number | string;
-  directCost?: number | string;
-  taxAmount?: number | string;
-  taxUnknown?: boolean;
-  amountIncludesTaxes?: boolean;
-  amountExcludesTaxes?: boolean;
-  validationSkipped?: boolean;
-};
 
 const ACCOUNTING_HOD_REQUIRED_CATEGORIES = [
   PURCHASE_CATEGORY,
@@ -33,46 +17,18 @@ const NBD_REQUIRED_CATEGORIES = [
   "Конкурсное задание",
 ] as const;
 
-function hasSpecialistContent(specialist: SpecialistLike) {
-  return Boolean(
-    specialist.name?.trim() ||
-      specialist.contractorLegalEntity?.trim() ||
-      specialist.department?.trim() ||
-      specialist.contractorTypes?.length ||
-      specialist.hours !== undefined ||
-      specialist.directCost !== undefined ||
-      specialist.taxAmount !== undefined ||
-      specialist.taxUnknown ||
-      specialist.amountIncludesTaxes ||
-      specialist.amountExcludesTaxes ||
-      specialist.validationSkipped,
-  );
-}
-
-export function requestHasContractorSpecialists(specialists: SpecialistLike[] = []) {
-  return specialists.some(
-    (specialist) =>
-      normalizeContestSpecialistSource(specialist.sourceType) === "contractor" &&
-      hasSpecialistContent(specialist),
-  );
-}
-
 export function requiresAccountingHodApproval(params: {
   category: string;
-  specialists?: SpecialistLike[];
 }) {
   const normalizedCategory = normalizeRequestCategory(params.category);
-  return (
-    ACCOUNTING_HOD_REQUIRED_CATEGORIES.includes(
-      normalizedCategory as (typeof ACCOUNTING_HOD_REQUIRED_CATEGORIES)[number],
-    ) ||
-    requestHasContractorSpecialists(params.specialists)
+  return ACCOUNTING_HOD_REQUIRED_CATEGORIES.includes(
+    normalizedCategory as (typeof ACCOUNTING_HOD_REQUIRED_CATEGORIES)[number],
   );
 }
 
 export function getAutoRequiredHodDepartmentsForRequest(params: {
   category: string;
-  specialists?: SpecialistLike[];
+  specialists?: unknown[];
 }) {
   return requiresAccountingHodApproval(params) ? [ACCOUNTING_REQUEST_AREA] : [];
 }

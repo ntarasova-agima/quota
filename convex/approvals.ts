@@ -834,8 +834,8 @@ export const adminRemoveAdditionalApproval = mutation({
     if (!approval) {
       throw new Error("Approval entry not found");
     }
-    if (!approval.requestedByRole) {
-      throw new Error("Можно удалить только дополнительное согласование");
+    if (!approval.requestedByRole && isMandatoryApproval(request, approval)) {
+      throw new Error("Можно удалить только дополнительное или необязательное согласование");
     }
 
     const remainingApprovals = approvalsBefore.filter((item) => item._id !== approval._id);
