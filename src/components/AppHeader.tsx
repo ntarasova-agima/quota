@@ -43,22 +43,22 @@ export default function AppHeader({
   const requestView = searchParams.get("view") ?? "my";
 
   return (
-    <div className="flex flex-col gap-4 border-b border-zinc-200 pb-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+    <div className="flex flex-col gap-3 border-b border-zinc-200 pb-5">
+      <div className="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
+        <div className="flex min-w-0 items-center gap-3">
           <Link
             href={isBuh || isHod || isCfd ? "/approvals" : "/requests"}
-            className="inline-flex items-center gap-3 rounded-[50px] border-2 border-emerald-500 px-4 py-2 text-2xl font-semibold uppercase tracking-[0.2em] text-amber-500"
+            className="inline-flex h-11 shrink-0 items-center rounded-full border-2 border-emerald-500 px-5 text-xl font-semibold uppercase tracking-[0.16em] text-amber-500"
           >
             Aurum
           </Link>
           <span className="sr-only">{title}</span>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="text-xs text-muted-foreground text-right">
+        <div className="flex min-w-0 flex-col gap-2 lg:items-end">
+          <div className="max-w-full truncate text-sm text-muted-foreground lg:text-right">
             {name}{name ? " · " : ""}{roles}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 lg:justify-end">
             <Button asChild>
               <Link href="/requests/new">Создать заявку</Link>
             </Button>
@@ -72,36 +72,36 @@ export default function AppHeader({
           </div>
         </div>
       </div>
-      <div className="flex flex-col gap-2" aria-label={`Раздел ${title}`}>
+      <div aria-label={`Раздел ${title}`}>
         <div className="flex flex-wrap gap-2">
-        {canApprove && (
-          <Button asChild variant={pathname === "/approvals" ? "default" : "outline"}>
-            <Link href="/approvals">На согласовании</Link>
+          {canApprove && (
+            <Button asChild variant={pathname === "/approvals" ? "default" : "outline"}>
+              <Link href="/approvals">На согласовании</Link>
+            </Button>
+          )}
+          <Button asChild variant={pathname === "/requests" && requestView === "my" ? "default" : "outline"}>
+            <Link href="/requests?view=my">Мои заявки</Link>
           </Button>
-        )}
-        <Button asChild variant={pathname === "/requests" && requestView === "my" ? "default" : "outline"}>
-          <Link href="/requests?view=my">Мои заявки</Link>
-        </Button>
-        {canViewAllRequests && (
-          <Button asChild variant={pathname === "/requests" && requestView === "all" ? "default" : "outline"}>
-            <Link href="/requests?view=all">Все заявки</Link>
-          </Button>
-        )}
-        {canManageTags && (
-          <Button asChild variant={pathname === "/cfd-tags" ? "default" : "outline"}>
-            <Link href="/cfd-tags">Справочник тегов</Link>
-          </Button>
-        )}
-        {(showAdmin || isAdmin || pathname.startsWith("/admin")) && (
-          <Button asChild variant={pathname === "/admin/roles" ? "default" : "outline"}>
-            <Link href="/admin/roles">Роли</Link>
-          </Button>
-        )}
-        {canSeeAdministrationQuota && (
-          <Button asChild variant={pathname === "/administration-quota" ? "default" : "outline"}>
-            <Link href="/administration-quota">Квоты</Link>
-          </Button>
-        )}
+          {canViewAllRequests && (
+            <Button asChild variant={pathname === "/requests" && requestView === "all" ? "default" : "outline"}>
+              <Link href="/requests?view=all">Все заявки</Link>
+            </Button>
+          )}
+          {canManageTags && (
+            <Button asChild variant={pathname === "/cfd-tags" ? "default" : "outline"}>
+              <Link href="/cfd-tags">Справочник тегов</Link>
+            </Button>
+          )}
+          {(showAdmin || isAdmin || pathname.startsWith("/admin")) && (
+            <Button asChild variant={pathname === "/admin/roles" ? "default" : "outline"}>
+              <Link href="/admin/roles">Роли</Link>
+            </Button>
+          )}
+          {canSeeAdministrationQuota && (
+            <Button asChild variant={pathname === "/administration-quota" ? "default" : "outline"}>
+              <Link href="/administration-quota">Квоты</Link>
+            </Button>
+          )}
         </div>
       </div>
     </div>
