@@ -488,7 +488,10 @@ export default function RequestsPage() {
                             className: "border-amber-200 bg-amber-50 text-amber-800",
                           }
                         : paymentActionHint;
-                    const canCloseFromList = !request.isCanceled && request.status === "paid";
+                    const canCloseFromList =
+                      !request.isCanceled &&
+                      request.status === "paid" &&
+                      !getFotActionHint(request);
                     const canReopenFromList = !request.isCanceled && request.status === "closed";
                     return (
                       <div

@@ -3,6 +3,7 @@ import {
   getPaymentProgressStatus,
   getRequestPaymentRemainingAmounts,
   getRequestPaymentTargetAmounts,
+  getSpecialistPaymentReconciliation,
   validateQuotaResolutionBeforePayment,
 } from "../convex/requests";
 
@@ -89,6 +90,63 @@ describe("request payment helpers", () => {
       amountWithoutVat: 40_000,
       amountWithVat: 48_800,
       vatRate: 22,
+    });
+  });
+
+  it("ignores a stale residual after a specialist moves from contractor to internal", () => {
+    const request = {
+      amount: 213_740.16,
+      amountWithVat: 260_763,
+      vatRate: 22,
+      actualPaidAmount: 200_000,
+      actualPaidAmountWithVat: 244_000,
+      paymentResidualAmount: 14_400,
+      paymentResidualAmountWithVat: 17_568,
+      paymentSplits: [
+        {
+          amountWithoutVat: 200_000,
+          amountWithVat: 244_000,
+          vatRate: 22,
+        },
+      ],
+      specialists: [
+        { sourceType: "contractor", directCost: 200_000 },
+        { sourceType: "internal", directCost: 13_740.16 },
+      ],
+    };
+
+    expect(getRequestPaymentTargetAmounts(request).amountWithoutVat).toBe(200_000);
+    expect(getRequestPaymentRemainingAmounts(request).amountWithoutVat).toBe(0);
+  });
+
+  it("marks specialist payment complete when paid splits cover current contractors", () => {
+    expect(
+      getSpecialistPaymentReconciliation({
+        status: "partially_paid",
+        vatRate: 22,
+        actualPaidAmount: 200_000,
+        actualPaidAmountWithVat: 244_000,
+        paymentSplits: [
+          {
+            amountWithoutVat: 200_000,
+            amountWithVat: 244_000,
+            vatRate: 22,
+            paidAt: 123,
+            actorEmail: "finance@agima.ru",
+          },
+        ],
+        specialists: [
+          { sourceType: "contractor", directCost: 200_000 },
+          { sourceType: "internal", directCost: 13_740.16 },
+        ],
+      }),
+    ).toMatchObject({
+      status: "paid",
+      paymentResidualAmount: undefined,
+      actualPaidAmount: 200_000,
+      paidAt: 123,
+      paidByEmail: "finance@agima.ru",
+      becamePaid: true,
     });
   });
 

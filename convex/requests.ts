@@ -73,6 +73,7 @@ import { hasAnyRole, hasFinanceApproverRole } from "../src/lib/financeRole";
 import {
   OPEN_PAYMENT_TASK_STATUSES,
   getPaymentTaskTimestamp,
+  hasPendingFotTask,
   isOpenPaymentTask,
   matchesPaymentTaskFilter,
 } from "../src/lib/requestStatus";
@@ -878,6 +879,14 @@ export function getRequestPaymentTargetAmounts(request: {
   }>;
   vatRate?: number;
 }) {
+  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(request.specialists);
+  if (contractorPaymentAmounts.hasSpecialists) {
+    return {
+      amountWithoutVat: contractorPaymentAmounts.amountWithoutVat,
+      amountWithVat: contractorPaymentAmounts.amountWithVat,
+      vatRate: request.vatRate,
+    };
+  }
   const existingSplits = request.paymentSplits ?? [];
   const splitTotal = sumPaymentSplitAmounts(existingSplits);
   const splitTotalWithVat = sumPaymentSplitAmountsWithVat(existingSplits, request.vatRate);
@@ -913,6 +922,28 @@ export function getRequestPaymentRemainingAmounts(request: {
   }>;
   vatRate?: number;
 }) {
+  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(request.specialists);
+  if (contractorPaymentAmounts.hasSpecialists) {
+    const paidWithoutVat =
+      request.paymentSplits?.length
+        ? sumPaymentSplitAmounts(request.paymentSplits)
+        : request.actualPaidAmount ?? 0;
+    const paidWithVat =
+      request.paymentSplits?.length
+        ? sumPaymentSplitAmountsWithVat(request.paymentSplits, request.vatRate)
+        : request.actualPaidAmountWithVat ?? 0;
+    return {
+      amountWithoutVat: Math.max(
+        contractorPaymentAmounts.amountWithoutVat - paidWithoutVat,
+        0,
+      ),
+      amountWithVat: Math.max(
+        contractorPaymentAmounts.amountWithVat - paidWithVat,
+        0,
+      ),
+      vatRate: request.vatRate,
+    };
+  }
   const residual = resolvePaymentAmountInput({
     amountWithoutVat: request.paymentResidualAmount,
     amountWithVat: request.paymentResidualAmountWithVat,
@@ -922,6 +953,95 @@ export function getRequestPaymentRemainingAmounts(request: {
     return residual;
   }
   return getRequestPaymentTargetAmounts(request);
+}
+
+export function getSpecialistPaymentReconciliation(params: {
+  status: string;
+  specialists?: Array<{
+    sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
+  }>;
+  paymentSplits?: Array<{
+    amountWithoutVat?: number;
+    amountWithVat?: number;
+    vatRate?: number;
+    paidAt?: number;
+    actorEmail?: string;
+    actorName?: string;
+  }>;
+  actualPaidAmount?: number;
+  actualPaidAmountWithVat?: number;
+  paidAt?: number;
+  paidByEmail?: string;
+  paidByName?: string;
+  vatRate?: number;
+}) {
+  const target = getContractorSpecialistPaymentAmounts(params.specialists);
+  if (!target.hasSpecialists) {
+    return null;
+  }
+
+  const paymentSplits = params.paymentSplits ?? [];
+  const paidWithoutVat = paymentSplits.length
+    ? sumPaymentSplitAmounts(paymentSplits)
+    : params.actualPaidAmount ?? 0;
+  const paidWithVat = paymentSplits.length
+    ? sumPaymentSplitAmountsWithVat(paymentSplits, params.vatRate)
+    : params.actualPaidAmountWithVat;
+  const remainingWithoutVat = Math.max(target.amountWithoutVat - paidWithoutVat, 0);
+  const remainingWithVat = Math.max(target.amountWithVat - (paidWithVat ?? 0), 0);
+  const lastPaidSplit = [...paymentSplits]
+    .sort((left, right) => (left.paidAt ?? 0) - (right.paidAt ?? 0))
+    .at(-1);
+
+  if (target.amountWithoutVat <= PAYMENT_EPSILON) {
+    return {
+      status: "approved" as const,
+      paymentResidualAmount: undefined,
+      paymentResidualAmountWithVat: undefined,
+      plannedPaymentAmount: undefined,
+      plannedPaymentAmountWithVat: undefined,
+      paymentPlannedAt: undefined,
+      paymentPlannedByEmail: undefined,
+      paymentPlannedByName: undefined,
+      plannedPaymentSplits: undefined,
+      paidAt: undefined,
+      paidByEmail: undefined,
+      paidByName: undefined,
+      actualPaidAmount: undefined,
+      actualPaidAmountWithVat: undefined,
+      becamePaid: false,
+    };
+  }
+
+  if (remainingWithoutVat <= PAYMENT_EPSILON) {
+    return {
+      status: "paid" as const,
+      paymentResidualAmount: undefined,
+      paymentResidualAmountWithVat: undefined,
+      plannedPaymentAmount: paidWithoutVat,
+      plannedPaymentAmountWithVat: paidWithVat,
+      paymentPlannedAt: undefined,
+      paymentPlannedByEmail: undefined,
+      paymentPlannedByName: undefined,
+      plannedPaymentSplits: undefined,
+      paidAt: params.paidAt ?? lastPaidSplit?.paidAt,
+      paidByEmail: params.paidByEmail ?? lastPaidSplit?.actorEmail,
+      paidByName: params.paidByName ?? lastPaidSplit?.actorName,
+      actualPaidAmount: paidWithoutVat,
+      actualPaidAmountWithVat: paidWithVat,
+      becamePaid: params.status !== "paid" && params.status !== "closed",
+    };
+  }
+
+  return {
+    status: paidWithoutVat > PAYMENT_EPSILON ? ("partially_paid" as const) : ("awaiting_payment" as const),
+    paymentResidualAmount: remainingWithoutVat,
+    paymentResidualAmountWithVat: remainingWithVat,
+    becamePaid: false,
+  };
 }
 
 function hasPaymentAmountDifference(
@@ -3587,16 +3707,29 @@ export const updateContestSpecialist = mutation({
       "paid",
       "closed",
     ].includes(request.status);
-    const nextStatus = preservesPaymentStatus ? request.status : approvalStatus;
+    const paymentReconciliation =
+      preservesPaymentStatus && request.status !== "closed"
+        ? getSpecialistPaymentReconciliation({
+            ...request,
+            specialists,
+          })
+        : null;
+    const nextStatus = paymentReconciliation?.status ??
+      (preservesPaymentStatus ? request.status : approvalStatus);
     const releasedFromHodPending = request.status === "hod_pending" && nextStatus !== "hod_pending";
+    const { becamePaid = false, ...paymentPatch } = paymentReconciliation ?? {};
     const requestPatch: Record<string, any> = {
       specialists,
       amount: nextAmount,
       amountWithVat: nextAmountWithVat,
       status: nextStatus,
+      ...paymentPatch,
       submittedAt: releasedFromHodPending ? Date.now() : request.submittedAt,
       updatedAt: Date.now(),
     };
+    if (becamePaid && !requestPatch.paidAt) {
+      requestPatch.paidAt = Date.now();
+    }
     if (request.status === "approved" && hasPendingInternalFot({ specialists })) {
       requestPatch.fotRecordingRequestedAt = undefined;
       requestPatch.fotReminderLastDateKey = undefined;
@@ -3646,6 +3779,19 @@ export const updateContestSpecialist = mutation({
         ? "Все нужные цеха провалидировали прямые затраты. Заявка отправлена на согласование."
         : undefined,
     });
+    if (becamePaid) {
+      await logTimelineEvent(ctx, {
+        requestId: request._id,
+        type: "payment_paid_after_specialist_update",
+        title: "Оплата подрядчиков полностью учтена",
+        description: "Платежный остаток пересчитан после изменения типа специалиста.",
+        actorEmail: email,
+        actorName: roleRecord?.fullName ?? undefined,
+      });
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaidNotification, {
+        requestId: request._id,
+      });
+    }
     if (request.status !== "approved" && nextStatus === "approved") {
       await sendPaymentPlanningRequestedAndScheduleReminders(ctx, { ...request, specialists });
     }
@@ -4264,6 +4410,16 @@ export const updatePaymentStatus = mutation({
     }
     if (args.status === "closed" && !["approved", "paid"].includes(request.status)) {
       throw new Error("Закрыть можно только согласованную или оплаченную заявку");
+    }
+    if (args.status === "closed" && hasPendingFotTask(request)) {
+      throw new Error("Сначала отметьте вынос ФОТ по всем штатным специалистам");
+    }
+    if (
+      args.status === "closed" &&
+      request.status === "approved" &&
+      getContractorSpecialistPaymentAmounts(request.specialists).hasContractors
+    ) {
+      throw new Error("Сначала отметьте оплату подрядчиков");
     }
     if (args.status === "reopen" && request.status !== "closed") {
       throw new Error("Открыть заново можно только закрытую заявку");

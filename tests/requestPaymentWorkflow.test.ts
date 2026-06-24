@@ -256,4 +256,50 @@ describe("updatePaymentStatus workflow", () => {
       }),
     ).rejects.toThrow("Для валютной заявки укажите курс валюты");
   });
+
+  it("does not close a request while internal specialist FOT is pending", async () => {
+    const { ctx } = createPaymentCtx({
+      createdBy: USER_ID,
+      createdByEmail: "finance@agima.ru",
+      category: "Конкурсное задание",
+      fundingSource: "Квоты AGIMA",
+      cfdTag: "Тендер",
+      status: "paid",
+      amount: 100_000,
+      currency: "RUB",
+      specialists: [
+        { id: "internal-1", sourceType: "internal", directCost: 10_000, fotRecorded: false },
+        { id: "contractor-1", sourceType: "contractor", directCost: 90_000 },
+      ],
+      isCanceled: false,
+      createdAt: new Date("2030-04-01").getTime(),
+      updatedAt: new Date("2030-04-01").getTime(),
+    });
+
+    await expect(
+      runUpdatePaymentStatus(ctx, { status: "closed" }),
+    ).rejects.toThrow("Сначала отметьте вынос ФОТ");
+  });
+
+  it("allows an internal-only request to close after FOT is recorded", async () => {
+    const { ctx, db } = createPaymentCtx({
+      createdBy: USER_ID,
+      createdByEmail: "finance@agima.ru",
+      category: "Конкурсное задание",
+      fundingSource: "Квоты AGIMA",
+      cfdTag: "Тендер",
+      status: "approved",
+      amount: 10_000,
+      currency: "RUB",
+      specialists: [
+        { id: "internal-1", sourceType: "internal", directCost: 10_000, fotRecorded: true },
+      ],
+      isCanceled: false,
+      createdAt: new Date("2030-04-01").getTime(),
+      updatedAt: new Date("2030-04-01").getTime(),
+    });
+
+    await runUpdatePaymentStatus(ctx, { status: "closed" });
+    expect(getRequest(db)?.status).toBe("closed");
+  });
 });

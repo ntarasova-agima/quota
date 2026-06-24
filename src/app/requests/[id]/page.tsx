@@ -21,6 +21,7 @@ import {
   getApprovalStatusClass,
   getRequestStatusSummary,
   getUnallocatedPaymentAmounts,
+  hasPendingFotTask,
   isOpenPaymentTask,
 } from "@/lib/requestStatus";
 import { EMPTY_BUSINESS_CATEGORY, FUNDING_SOURCES, HOD_DEPARTMENTS } from "@/lib/constants";
@@ -422,6 +423,13 @@ function getPaymentTargetAmounts(request: {
   }>;
   vatRate?: number;
 }) {
+  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(request.specialists);
+  if (contractorPaymentAmounts.hasSpecialists) {
+    return {
+      amountWithoutVat: contractorPaymentAmounts.amountWithoutVat,
+      amountWithVat: contractorPaymentAmounts.amountWithVat,
+    };
+  }
   const splits = request.paymentSplits ?? [];
   const splitTotal = sumPaymentSplitAmounts(splits);
   const splitTotalWithVat = sumPaymentSplitAmountsWithVat(splits, request.vatRate);
@@ -434,13 +442,6 @@ function getPaymentTargetAmounts(request: {
     return {
       amountWithoutVat: splitTotal + (residual.amountWithoutVat ?? 0),
       amountWithVat: splitTotalWithVat + (residual.amountWithVat ?? 0),
-    };
-  }
-  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(request.specialists);
-  if (contractorPaymentAmounts.hasSpecialists) {
-    return {
-      amountWithoutVat: contractorPaymentAmounts.amountWithoutVat,
-      amountWithVat: contractorPaymentAmounts.amountWithVat,
     };
   }
   return resolvePaymentPair({
@@ -477,6 +478,27 @@ function getPaymentRemainingAmounts(request: {
     return {
       amountWithoutVat: 0,
       amountWithVat: 0,
+    };
+  }
+  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(request.specialists);
+  if (contractorPaymentAmounts.hasSpecialists) {
+    const paidWithoutVat =
+      request.paymentSplits?.length
+        ? sumPaymentSplitAmounts(request.paymentSplits)
+        : request.actualPaidAmount ?? 0;
+    const paidWithVat =
+      request.paymentSplits?.length
+        ? sumPaymentSplitAmountsWithVat(request.paymentSplits, request.vatRate)
+        : request.actualPaidAmountWithVat ?? 0;
+    return {
+      amountWithoutVat: Math.max(
+        contractorPaymentAmounts.amountWithoutVat - paidWithoutVat,
+        0,
+      ),
+      amountWithVat: Math.max(
+        contractorPaymentAmounts.amountWithVat - paidWithVat,
+        0,
+      ),
     };
   }
   const residual = resolvePaymentPair({
@@ -1120,7 +1142,12 @@ export default function RequestDetailPage() {
   const canManageSpecialistFot =
     (isAdmin || myRoles.includes("BUH Inside")) &&
     !["draft", "hod_pending", "pending", "rejected"].includes(request.status);
+  const requestHasPendingFot = hasPendingFotTask(request);
   const fotActionHint = canManageSpecialistFot ? getFotActionHint(request) : null;
+  const canCompleteRequest =
+    !requestHasPendingFot &&
+    (request.status === "paid" ||
+      (request.status === "approved" && !isOpenPaymentTask(request)));
   const viewerAccessEntries = (request.viewerAccess ?? []) as Array<{
     email: string;
     fullName?: string;
@@ -1225,7 +1252,7 @@ export default function RequestDetailPage() {
         ? "Есть нераспределенный платеж"
       : canSetPaymentPlanned && isOpenPaymentTask(request)
         ? "Нужно запланировать или оплатить"
-        : isCreator && request.status === "paid"
+        : isCreator && canCompleteRequest
           ? "Закройте заявку до конца следующего рабочего дня"
           : groupedChangeHistory.some((group) => group.triggeredRepeatApproval)
             ? "Заявка изменена и отправлена на повторное согласование"
@@ -2138,7 +2165,7 @@ export default function RequestDetailPage() {
                         Открыть заново
                       </Button>
                     </HoverHint>
-                  ) : canClose && request.status === "paid" ? (
+                  ) : canClose && canCompleteRequest ? (
                     <HoverHint label="Подтвердить, что заявка завершена">
                       <Button
                         type="button"
