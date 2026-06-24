@@ -2467,6 +2467,12 @@ export default function RequestDetailPage() {
                         className="h-9"
                         disabled={updatingStatus}
                         onClick={async () => {
+                          const confirmed = window.confirm(
+                            "Отменить отметку об оплате и вернуть заявку в статус «Согласовано»?",
+                          );
+                          if (!confirmed) {
+                            return;
+                          }
                           setError(null);
                           setPaymentActionError(null);
                           setUpdatingStatus(true);
@@ -2486,7 +2492,7 @@ export default function RequestDetailPage() {
                           }
                         }}
                       >
-                        Пока не оплачено
+                        Отменить отметку об оплате
                       </Button>
                     </div>
                   ) : null}
