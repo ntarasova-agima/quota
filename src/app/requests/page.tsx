@@ -910,18 +910,6 @@ export default function RequestsPage() {
                               vatRate={request.vatRate}
                             />
                             <div className="text-muted-foreground">
-                              <HoverHint label="Сумма заявки">
-                                <span>
-                                  {formatAmountWithoutVat({
-                                    amountWithoutVat: request.amount,
-                                    amountWithVat: request.amountWithVat,
-                                    currency: request.currency,
-                                    vatRate: request.vatRate,
-                                  })}
-                                </span>
-                              </HoverHint>
-                            </div>
-                            <div className="text-muted-foreground">
                               <HoverHint label="Дата создания заявки">
                                 <span>Создано: {new Date(request.createdAt).toLocaleDateString("ru-RU")}</span>
                               </HoverHint>
