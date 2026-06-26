@@ -556,10 +556,6 @@ export default function ApprovalsPage() {
                             requestCode={request.requestCode}
                             clientName={request.clientName}
                             category={request.category}
-                            amount={request.amount}
-                            amountWithVat={request.amountWithVat}
-                            currency={request.currency}
-                            vatRate={request.vatRate}
                             className="text-sm"
                           />
                           {request.createdByName ? (

@@ -533,10 +533,6 @@ export default function RequestsPage() {
                               requestCode={request.requestCode}
                               clientName={request.clientName}
                               category={request.category}
-                              amount={request.amount}
-                              amountWithVat={request.amountWithVat}
-                              currency={request.currency}
-                              vatRate={request.vatRate}
                             />
                             <div className="text-muted-foreground">
                               <HoverHint label="Дата создания заявки">
@@ -904,10 +900,6 @@ export default function RequestsPage() {
                               requestCode={request.requestCode}
                               clientName={request.clientName}
                               category={request.category}
-                              amount={request.amount}
-                              amountWithVat={request.amountWithVat}
-                              currency={request.currency}
-                              vatRate={request.vatRate}
                             />
                             <div className="text-muted-foreground">
                               <HoverHint label="Дата создания заявки">
