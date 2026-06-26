@@ -2,7 +2,7 @@
 
 import { HoverHint } from "@/components/ui/hover-hint";
 import { normalizeRequestCategory, usesServiceRecipientLabel } from "@/lib/requestRules";
-import { formatAmountPair } from "@/lib/vat";
+import { formatAmountWithoutVat } from "@/lib/vat";
 import { cn } from "@/lib/utils";
 
 type RequestMetaSummaryProps = {
@@ -51,7 +51,7 @@ export default function RequestMetaSummary({
           <span aria-hidden="true">·</span>
           <HoverHint label="Сумма заявки">
             <span>
-              {formatAmountPair({
+              {formatAmountWithoutVat({
                 amountWithoutVat: amount,
                 amountWithVat,
                 currency,

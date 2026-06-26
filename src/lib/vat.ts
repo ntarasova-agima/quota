@@ -209,3 +209,18 @@ export function formatAmountPair(params: {
   const currency = params.currency ?? "";
   return `${formatAmount(amountWithoutVat)} ${currency} без НДС / ${formatAmount(amountWithVat)} ${currency} с НДС`;
 }
+
+export function formatAmountWithoutVat(params: {
+  amountWithoutVat?: number;
+  amountWithVat?: number;
+  currency?: string;
+  vatRate?: number;
+}) {
+  const amountWithoutVat = getAmountWithoutVat(
+    params.amountWithoutVat,
+    params.amountWithVat,
+    params.vatRate,
+  );
+  const currency = params.currency ?? "";
+  return `${formatAmount(amountWithoutVat)} ${currency} без НДС`;
+}

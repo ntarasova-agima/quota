@@ -5,6 +5,7 @@ import {
   calculateAmountWithoutVat,
   fillMissingVatAmounts,
   formatAmountPair,
+  formatAmountWithoutVat,
   matchesCalculatedAmountWithVat,
   parseMoneyInput,
   parseVatRateInput,
@@ -136,5 +137,15 @@ describe("vat", () => {
         currency: "RUB",
       }),
     ).toBe("100 RUB без НДС / 122 RUB с НДС");
+  });
+
+  it("formats only amount without VAT for display", () => {
+    expect(
+      formatAmountWithoutVat({
+        amountWithVat: 122,
+        currency: "RUB",
+        vatRate: 22,
+      }),
+    ).toBe("100 RUB без НДС");
   });
 });

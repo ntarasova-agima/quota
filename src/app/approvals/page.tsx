@@ -15,7 +15,7 @@ import {
   getRequestStatusSummary,
   getUnallocatedPaymentAmounts,
 } from "@/lib/requestStatus";
-import { formatAmountPair } from "@/lib/vat";
+import { formatAmountWithoutVat } from "@/lib/vat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { HoverHint } from "@/components/ui/hover-hint";
@@ -606,7 +606,7 @@ export default function ApprovalsPage() {
                               {request.paymentResidualAmount !== undefined ? (
                                 <div>
                                   Остаток:{" "}
-                                  {formatAmountPair({
+                                  {formatAmountWithoutVat({
                                     amountWithoutVat: request.paymentResidualAmount,
                                     currency: request.currency,
                                     vatRate: request.vatRate,
@@ -617,7 +617,7 @@ export default function ApprovalsPage() {
                               unallocatedPaymentAmounts ? (
                                 <div>
                                   Не распределено:{" "}
-                                  {formatAmountPair({
+                                  {formatAmountWithoutVat({
                                     amountWithoutVat: unallocatedPaymentAmounts.amountWithoutVat,
                                     amountWithVat: unallocatedPaymentAmounts.amountWithVat,
                                     currency: request.currency,
@@ -639,7 +639,7 @@ export default function ApprovalsPage() {
                       <div className="text-right font-medium">
                         <HoverHint label="Сумма заявки">
                           <span>
-                            {formatAmountPair({
+                            {formatAmountWithoutVat({
                               amountWithoutVat: request.amount,
                               amountWithVat: request.amountWithVat,
                               currency: request.currency,

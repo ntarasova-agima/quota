@@ -32,7 +32,7 @@ import {
 import { EMPTY_BUSINESS_CATEGORY, EXPENSE_CATEGORIES, FUNDING_SOURCES } from "@/lib/constants";
 import { hasFinanceApproverRole } from "@/lib/financeRole";
 import { normalizeRequestCategory } from "@/lib/requestRules";
-import { formatAmountPair } from "@/lib/vat";
+import { formatAmountWithoutVat } from "@/lib/vat";
 
 function getRequestDisplayTitle(request: {
   title?: string;
@@ -613,7 +613,7 @@ export default function RequestsPage() {
                         <div className="text-right font-medium">
                           <HoverHint label="Сумма заявки">
                             <span>
-                              {formatAmountPair({
+                              {formatAmountWithoutVat({
                                 amountWithoutVat: request.amount,
                                 amountWithVat: request.amountWithVat,
                                 currency: request.currency,
@@ -912,7 +912,7 @@ export default function RequestsPage() {
                             <div className="text-muted-foreground">
                               <HoverHint label="Сумма заявки">
                                 <span>
-                                  {formatAmountPair({
+                                  {formatAmountWithoutVat({
                                     amountWithoutVat: request.amount,
                                     amountWithVat: request.amountWithVat,
                                     currency: request.currency,
@@ -934,7 +934,7 @@ export default function RequestsPage() {
                           <div className="text-right font-medium">
                             <HoverHint label="Сумма заявки">
                               <span>
-                                {formatAmountPair({
+                                {formatAmountWithoutVat({
                                   amountWithoutVat: request.amount,
                                   amountWithVat: request.amountWithVat,
                                   currency: request.currency,

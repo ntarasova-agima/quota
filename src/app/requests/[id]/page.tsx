@@ -54,6 +54,7 @@ import {
   DEFAULT_VAT_RATE,
   formatAmount,
   formatAmountPair,
+  formatAmountWithoutVat,
   parseMoneyInput,
   resolveVatAmounts,
   sanitizeNumericInput,
@@ -570,7 +571,7 @@ function shouldShowFinplanMissingHint(request: {
 }
 
 function formatAmountWithoutVatLabel(amount?: number, currency?: string) {
-  return `${formatAmount(amount)} ${currency ?? ""} без НДС`;
+  return formatAmountWithoutVat({ amountWithoutVat: amount, currency });
 }
 
 function buildPaymentTimelineRows(request: {
@@ -3175,7 +3176,7 @@ export default function RequestDetailPage() {
                   <div className="text-muted-foreground">Сумма отгрузки</div>
                   <p className="mt-1 text-xs text-muted-foreground">Сколько платят нам</p>
                   <p className="mt-1">
-                    {formatAmountPair({
+                    {formatAmountWithoutVat({
                       amountWithoutVat: request.incomingAmount,
                       amountWithVat: request.incomingAmountWithVat,
                       currency: request.currency,
