@@ -547,6 +547,28 @@ function getUnifiedFinplanCostIds(request: {
   ]);
 }
 
+function hasFinplanEntryMark(request: {
+  finplanEntered?: boolean;
+  finplanEntryIds?: string[];
+  finplanCostIds?: string[];
+}) {
+  return Boolean(request.finplanEntered || getUnifiedFinplanCostIds(request).length);
+}
+
+function shouldShowFinplanMissingHint(request: {
+  status: string;
+  isCanceled?: boolean;
+  finplanEntered?: boolean;
+  finplanEntryIds?: string[];
+  finplanCostIds?: string[];
+}) {
+  return (
+    !request.isCanceled &&
+    ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status) &&
+    !hasFinplanEntryMark(request)
+  );
+}
+
 function formatAmountWithoutVatLabel(amount?: number, currency?: string) {
   return `${formatAmount(amount)} ${currency ?? ""} без НДС`;
 }
@@ -711,6 +733,7 @@ export default function RequestDetailPage() {
   const paymentTargetAmountEditorRef = useRef<HTMLDivElement | null>(null);
   const specialistsBlockRef = useRef<HTMLDivElement | null>(null);
   const approvalsBlockRef = useRef<HTMLDivElement | null>(null);
+  const operationalFieldsBlockRef = useRef<HTMLDivElement | null>(null);
   const todayDate = useMemo(() => formatDateInputFromTimestamp(Date.now()), []);
 
   const financeApproverRecord = useMemo(
@@ -1144,6 +1167,10 @@ export default function RequestDetailPage() {
     !["draft", "hod_pending", "pending", "rejected"].includes(request.status);
   const requestHasPendingFot = hasPendingFotTask(request);
   const fotActionHint = canManageSpecialistFot ? getFotActionHint(request) : null;
+  const finplanMissingHint =
+    canManageOperationalFields && shouldShowFinplanMissingHint(request)
+      ? "Нужно занести затраты"
+      : null;
   const canCompleteRequest =
     !requestHasPendingFot &&
     (request.status === "paid" ||
@@ -1246,6 +1273,8 @@ export default function RequestDetailPage() {
       ? "Ждет вашего решения"
       : fotActionHint
         ? fotActionHint.label
+      : finplanMissingHint
+        ? finplanMissingHint
       : canSetPaymentPlanned &&
           ["payment_planned", "partially_paid"].includes(request.status) &&
           hasUnallocatedPayment
@@ -1292,6 +1321,12 @@ export default function RequestDetailPage() {
     setActiveTab("details");
     window.requestAnimationFrame(() => {
       specialistsBlockRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+  const scrollToOperationalFieldsBlock = () => {
+    setActiveTab("details");
+    window.requestAnimationFrame(() => {
+      operationalFieldsBlockRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   };
   const startPaymentTargetAmountEditing = () => {
@@ -2101,6 +2136,15 @@ export default function RequestDetailPage() {
                     Перейти к выносу ФОТ
                   </Button>
                 ) : null}
+                {finplanMissingHint ? (
+                  <Button
+                    type="button"
+                    className="justify-start"
+                    onClick={scrollToOperationalFieldsBlock}
+                  >
+                    Перейти к затратам
+                  </Button>
+                ) : null}
                 <Button asChild variant="outline" className="justify-start bg-white">
                   <Link href={`/requests/new?copyFrom=${request._id}`}>
                     <Copy className="h-4 w-4" />
@@ -2406,7 +2450,10 @@ export default function RequestDetailPage() {
                 </div>
               )}
               {canManageOperationalFields && (
-                <div className="space-y-3 rounded-xl border border-border p-4">
+                <div
+                  ref={operationalFieldsBlockRef}
+                  className="space-y-3 rounded-xl border border-border p-4 scroll-mt-6"
+                >
                   <div>
                     <div className="text-lg font-semibold">Затраты в финплане</div>
                     <p className="text-sm text-muted-foreground">

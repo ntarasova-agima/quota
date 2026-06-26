@@ -54,6 +54,30 @@ function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryId
   return Boolean(request.finplanEntered || getFinplanCostIds(request).length);
 }
 
+function shouldShowFinplanMissingHint(request: {
+  status: string;
+  isCanceled?: boolean;
+  finplanEntered?: boolean;
+  finplanEntryIds?: string[];
+  finplanCostIds?: string[];
+}) {
+  return (
+    !request.isCanceled &&
+    ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status) &&
+    !hasFinplanEntryMark(request)
+  );
+}
+
+function FinplanMissingBadge() {
+  return (
+    <HoverHint label="BUH нужно занести строки затрат в финплан" className="w-fit">
+      <span className="h-fit rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
+        Нужно занести затраты
+      </span>
+    </HoverHint>
+  );
+}
+
 const statusOptions = [
   { value: "all", label: "Все" },
   { value: "draft", label: "Черновик" },
@@ -644,19 +668,8 @@ export default function ApprovalsPage() {
                             {fotActionHint.label}
                           </span>
                         ) : null}
-                        {hasFinplanEntryMark(request) ? (
-                          <HoverHint
-                            label={
-                              getFinplanCostIds(request).length
-                                ? `Строки в финплане: ${getFinplanCostIds(request).join(", ")}`
-                                : "BUH отметил, что строки затрат занесены в финплан"
-                            }
-                            className="w-fit"
-                          >
-                            <span className="h-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-                              Затраты занесены
-                            </span>
-                          </HoverHint>
+                        {shouldShowFinplanMissingHint(request) ? (
+                          <FinplanMissingBadge />
                         ) : null}
                       </div>
                         </Link>

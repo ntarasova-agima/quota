@@ -111,6 +111,17 @@ const requestStatus = v.union(
   v.literal("closed"),
 );
 const requestListStatusFilter = v.union(requestStatus, v.literal("canceled"));
+type RequestStatusValue =
+  | "draft"
+  | "hod_pending"
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "awaiting_payment"
+  | "payment_planned"
+  | "partially_paid"
+  | "paid"
+  | "closed";
 
 const SPECIALIST_BUH_ROLES = ["BUH Inside", "BUH Outsource"] as const;
 type SpecialistBuhRole = (typeof SPECIALIST_BUH_ROLES)[number];
@@ -1065,6 +1076,89 @@ export function getPaymentProgressStatus(params: {
     return "payment_planned" as const;
   }
   return "awaiting_payment" as const;
+}
+
+function canAutoCloseCompletedRequest(request: {
+  status: RequestStatusValue;
+  isCanceled?: boolean;
+  category?: string;
+  specialists?: Array<{
+    sourceType?: string;
+    fotRecorded?: boolean;
+  }>;
+}) {
+  return request.status === "paid" && !request.isCanceled && !hasPendingFotTask(request);
+}
+
+function isWelcomeBonusPaymentStatus(status: string) {
+  return ["awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(status);
+}
+
+function getPaymentCleanupPatch(now: number) {
+  return {
+    status: "approved" as const,
+    awaitingPaymentAt: undefined,
+    awaitingPaymentByEmail: undefined,
+    awaitingPaymentByName: undefined,
+    paidAt: undefined,
+    paidByEmail: undefined,
+    paidByName: undefined,
+    paymentPlannedAt: undefined,
+    paymentPlannedByEmail: undefined,
+    paymentPlannedByName: undefined,
+    paymentResidualAmount: undefined,
+    paymentResidualAmountWithVat: undefined,
+    plannedPaymentAmount: undefined,
+    plannedPaymentAmountWithVat: undefined,
+    paymentCurrencyRate: undefined,
+    paymentSplits: undefined,
+    plannedPaymentSplits: undefined,
+    actualPaidAmount: undefined,
+    actualPaidAmountWithVat: undefined,
+    paymentReminderSentAt: undefined,
+    paymentDeadlineReminderLastDateKey: undefined,
+    closeReminderSentAt: undefined,
+    previousClosedStatus: undefined,
+    updatedAt: now,
+  };
+}
+
+async function autoCloseCompletedRequestIfReady(
+  ctx: any,
+  request: {
+    _id: any;
+    status: RequestStatusValue;
+    isCanceled?: boolean;
+    category?: string;
+    specialists?: Array<{
+      sourceType?: string;
+      fotRecorded?: boolean;
+    }>;
+  },
+  params: {
+    now: number;
+    actorEmail?: string;
+    actorName?: string;
+  },
+) {
+  if (!canAutoCloseCompletedRequest(request)) {
+    return false;
+  }
+  await ctx.db.patch(request._id, {
+    status: "closed",
+    previousClosedStatus: "paid",
+    closeReminderSentAt: undefined,
+    updatedAt: params.now,
+  });
+  await logTimelineEvent(ctx, {
+    requestId: request._id,
+    type: "request_closed",
+    title: "Заявка закрыта автоматически",
+    description: "Оплата завершена, открытых задач по ФОТ нет",
+    actorEmail: params.actorEmail,
+    actorName: params.actorName,
+  });
+  return true;
 }
 
 function resolveRequestAmounts(
@@ -3887,7 +3981,16 @@ export const updateSpecialistFot = mutation({
       actorEmail: email,
       actorName: roleRecord.fullName ?? undefined,
     });
-    return { updated: true };
+    const autoClosed = await autoCloseCompletedRequestIfReady(
+      ctx,
+      { ...request, specialists },
+      {
+        now,
+        actorEmail: email,
+        actorName: roleRecord.fullName ?? undefined,
+      },
+    );
+    return { updated: true, status: autoClosed ? "closed" : request.status };
   },
 });
 
@@ -3957,6 +4060,113 @@ export const adminBackfillPaymentDeadlineReminders = mutation({
       scheduled += 1;
     }
     return { scheduled };
+  },
+});
+
+export const adminBackfillCompletedRequestClosures = mutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    if (!roleRecord?.active || !roleRecord.roles?.includes("ADMIN")) {
+      throw new Error("Not authorized");
+    }
+    const dryRun = args.dryRun ?? true;
+    const paidRequests = await ctx.db
+      .query("requests")
+      .withIndex("by_status", (q: any) => q.eq("status", "paid"))
+      .collect();
+    const candidates = paidRequests.filter(canAutoCloseCompletedRequest);
+    if (dryRun) {
+      return {
+        dryRun,
+        candidates: candidates.length,
+        closed: 0,
+        requestIds: candidates.map((request) => request._id),
+        requestCodes: candidates.map((request) => request.requestCode).filter(Boolean),
+      };
+    }
+    let closed = 0;
+    const now = Date.now();
+    for (const request of candidates) {
+      const autoClosed = await autoCloseCompletedRequestIfReady(ctx, request, {
+        now,
+        actorEmail: email,
+        actorName: roleRecord.fullName ?? undefined,
+      });
+      if (autoClosed) {
+        closed += 1;
+      }
+    }
+    return {
+      dryRun,
+      candidates: candidates.length,
+      closed,
+      requestIds: candidates.map((request) => request._id),
+      requestCodes: candidates.map((request) => request.requestCode).filter(Boolean),
+    };
+  },
+});
+
+export const adminBackfillWelcomeBonusPaymentState = mutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const roleRecord = await getRoleRecord(ctx, email);
+    if (!roleRecord?.active || !roleRecord.roles?.includes("ADMIN")) {
+      throw new Error("Not authorized");
+    }
+    const dryRun = args.dryRun ?? true;
+    const candidates = (
+      await Promise.all(
+        ["awaiting_payment", "payment_planned", "partially_paid", "paid"].map((status) =>
+          ctx.db
+            .query("requests")
+            .withIndex("by_status", (q: any) => q.eq("status", status as any))
+            .collect(),
+        ),
+      )
+    ).flat().filter((request) => request.category === "Welcome-бонус" && !request.isCanceled);
+    if (dryRun) {
+      return {
+        dryRun,
+        candidates: candidates.length,
+        cleaned: 0,
+        requestIds: candidates.map((request) => request._id),
+        requestCodes: candidates.map((request) => request.requestCode).filter(Boolean),
+      };
+    }
+    let cleaned = 0;
+    const now = Date.now();
+    for (const request of candidates) {
+      await ctx.db.patch(request._id, getPaymentCleanupPatch(now));
+      await logTimelineEvent(ctx, {
+        requestId: request._id,
+        type: "payment_status_updated",
+        title: "Платежный статус Welcome-бонуса очищен",
+        description: "Welcome-бонус не передается в оплату",
+        actorEmail: email,
+        actorName: roleRecord.fullName ?? undefined,
+      });
+      cleaned += 1;
+    }
+    return {
+      dryRun,
+      candidates: candidates.length,
+      cleaned,
+      requestIds: candidates.map((request) => request._id),
+      requestCodes: candidates.map((request) => request.requestCode).filter(Boolean),
+    };
   },
 });
 
@@ -4423,6 +4633,9 @@ export const updatePaymentStatus = mutation({
     }
     if (args.status === "reopen" && request.status !== "closed") {
       throw new Error("Открыть заново можно только закрытую заявку");
+    }
+    if (request.category === "Welcome-бонус" && isWelcomeBonusPaymentStatus(args.status)) {
+      throw new Error("Welcome-бонус не передается в оплату");
     }
     const nextCfdTag = args.cfdTag?.trim() || request.cfdTag;
     if (["payment_planned", "partially_paid", "paid"].includes(args.status)) {
@@ -4899,15 +5112,26 @@ export const updatePaymentStatus = mutation({
           changedAt: now,
         });
       }
-      await ctx.scheduler.runAfter(
-        Math.max(0, addBusinessDays(now, 2) - now),
-        internal.emails.sendCloseDeadlineReminder,
+      const autoClosed = await autoCloseCompletedRequestIfReady(
+        ctx,
+        { ...request, status: "paid" },
         {
-          requestId: request._id,
-          paidAt,
+          now,
+          actorEmail: email,
+          actorName,
         },
       );
-      return { status: args.status };
+      if (!autoClosed) {
+        await ctx.scheduler.runAfter(
+          Math.max(0, addBusinessDays(now, 2) - now),
+          internal.emails.sendCloseDeadlineReminder,
+          {
+            requestId: request._id,
+            paidAt,
+          },
+        );
+      }
+      return { status: autoClosed ? "closed" : args.status };
     }
 
     if (args.status === "reopen") {

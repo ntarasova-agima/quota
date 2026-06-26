@@ -58,18 +58,14 @@ function getFinplanCostIds(request: { finplanEntryIds?: string[]; finplanCostIds
   );
 }
 
-function FinplanEnteredBadge({ finplanCostIds }: { finplanCostIds?: string[] }) {
+function FinplanMissingBadge() {
   return (
     <HoverHint
-      label={
-        finplanCostIds?.length
-          ? `Строки в финплане: ${finplanCostIds.join(", ")}`
-          : "BUH отметил, что строки затрат занесены в финплан"
-      }
+      label="BUH нужно занести строки затрат в финплан"
       className="w-fit"
     >
-      <span className="h-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-        Затраты занесены
+      <span className="h-fit rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
+        Нужно занести затраты
       </span>
     </HoverHint>
   );
@@ -77,6 +73,20 @@ function FinplanEnteredBadge({ finplanCostIds }: { finplanCostIds?: string[] }) 
 
 function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryIds?: string[]; finplanCostIds?: string[] }) {
   return Boolean(request.finplanEntered || getFinplanCostIds(request).length);
+}
+
+function shouldShowFinplanMissingHint(request: {
+  status: string;
+  isCanceled?: boolean;
+  finplanEntered?: boolean;
+  finplanEntryIds?: string[];
+  finplanCostIds?: string[];
+}) {
+  return (
+    !request.isCanceled &&
+    ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status) &&
+    !hasFinplanEntryMark(request)
+  );
 }
 
 const statusOptions = [
@@ -632,8 +642,8 @@ export default function RequestsPage() {
                               {fotActionHint.label}
                             </span>
                           ) : null}
-                          {hasFinplanEntryMark(request) ? (
-                            <FinplanEnteredBadge finplanCostIds={getFinplanCostIds(request)} />
+                          {shouldShowFinplanMissingHint(request) ? (
+                            <FinplanMissingBadge />
                           ) : null}
                         </div>
                       </div>
@@ -953,8 +963,8 @@ export default function RequestsPage() {
                                 {fotActionHint.label}
                               </span>
                             ) : null}
-                            {hasFinplanEntryMark(request) ? (
-                              <FinplanEnteredBadge finplanCostIds={getFinplanCostIds(request)} />
+                            {shouldShowFinplanMissingHint(request) ? (
+                              <FinplanMissingBadge />
                             ) : null}
                           </div>
                         </Link>
