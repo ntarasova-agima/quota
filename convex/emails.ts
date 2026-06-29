@@ -139,6 +139,24 @@ function getPaymentPlanningRecipients(roles: PaymentPlanningRole[]) {
   );
 }
 
+function getPaymentDeadlineReminderRecipients(
+  roles: PaymentPlanningRole[],
+  reminderKind: "before" | "overdue",
+) {
+  return Array.from(
+    new Set(
+      roles
+        .filter((role) => {
+          if (!role.active || !role.roles.includes("BUH Payment")) {
+            return false;
+          }
+          return reminderKind === "before" || !hasFinanceApproverRole(role);
+        })
+        .map((role) => role.email),
+    ),
+  );
+}
+
 function getBuhInsideRecipients(roles: PaymentPlanningRole[]) {
   return Array.from(
     new Set(
@@ -1321,10 +1339,7 @@ export const sendPaymentDeadlineReminder = internalAction({
     ) {
       return;
     }
-    const buhRecipients = roles
-      .filter((role) => role.active && role.roles.includes("BUH Payment"))
-      .map((role) => role.email);
-    const recipients = Array.from(new Set(buhRecipients));
+    const recipients = getPaymentDeadlineReminderRecipients(roles, args.reminderKind);
     if (recipients.length === 0) {
       return;
     }
