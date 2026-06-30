@@ -965,9 +965,11 @@ export default function RequestDetailPage() {
       setFinplanEntryIdsRaw(getUnifiedFinplanCostIds(data.request).join("\n"));
       setPaymentPlannedDate(
         data.request.paymentPlannedAt
-          ? new Date(data.request.paymentPlannedAt).toISOString().slice(0, 10)
-          : shouldUsePrepaymentAsNext && data.request.prepaymentDate
-            ? new Date(data.request.prepaymentDate).toISOString().slice(0, 10)
+          ? formatDateInputFromTimestamp(data.request.paymentPlannedAt)
+          : data.request.paymentDeadline ?? data.request.neededBy
+            ? formatDateInputFromTimestamp(data.request.paymentDeadline ?? data.request.neededBy!)
+            : shouldUsePrepaymentAsNext && data.request.prepaymentDate
+              ? formatDateInputFromTimestamp(data.request.prepaymentDate)
             : "",
       );
       setPaymentTargetAmount(
@@ -983,9 +985,7 @@ export default function RequestDetailPage() {
             ? String(remainingAmounts.amountWithoutVat)
             : "",
       );
-      setPaymentExecutedDate(
-        todayDate,
-      );
+      setPaymentExecutedDate("");
       setPaymentCurrencyRate(
         data.request.paymentCurrencyRate !== undefined
           ? String(data.request.paymentCurrencyRate)
@@ -2743,9 +2743,9 @@ export default function RequestDetailPage() {
                                           {formatAmountWithoutVatLabel(row.amountWithoutVat, request.currency)}
                                         </div>
                                       </div>
-                                      <div className="flex flex-wrap gap-2">
+                                      <div className="flex flex-wrap items-center gap-2">
                                         <span
-                                          className={`rounded-full border px-2.5 py-1 text-xs ${
+                                          className={`inline-flex h-9 items-center rounded-full border px-3 text-xs font-medium ${
                                             row.status === "paid"
                                               ? "border-emerald-200 bg-emerald-100 text-emerald-800"
                                               : isActivePlannedRow
@@ -2790,7 +2790,7 @@ export default function RequestDetailPage() {
                                             />
                                           </div>
                                           <div className="space-y-2">
-                                            <Label htmlFor="paymentExecutedDate">Дата оплаты</Label>
+                                            <Label htmlFor="paymentExecutedDate">Дата фактического платежа</Label>
                                             <Input
                                               id="paymentExecutedDate"
                                               type="date"
@@ -2860,7 +2860,7 @@ export default function RequestDetailPage() {
                                   />
                                 </div>
                                 <div className="space-y-2">
-                                  <Label htmlFor="paymentDatePlanned">Дата оплаты</Label>
+                                  <Label htmlFor="paymentDatePlanned">Планируемая дата платежа</Label>
                                   <Input
                                     id="paymentDatePlanned"
                                     type="date"
@@ -2919,7 +2919,7 @@ export default function RequestDetailPage() {
                                       />
                                     </div>
                                     <div className="space-y-2">
-                                      <Label htmlFor="paymentExecutedDateDirect">Дата оплаты</Label>
+                                      <Label htmlFor="paymentExecutedDateDirect">Дата фактического платежа</Label>
                                       <Input
                                         id="paymentExecutedDateDirect"
                                         type="date"

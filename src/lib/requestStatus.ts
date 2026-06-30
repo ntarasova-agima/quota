@@ -113,8 +113,7 @@ export function isOpenPaymentTask(
     !isWelcomeBonusRequest(request) &&
     (!(request.specialists?.length) ||
       request.specialists.some((item) => item.sourceType === "contractor")) &&
-    OPEN_PAYMENT_TASK_STATUSES.includes(request.status as (typeof OPEN_PAYMENT_TASK_STATUSES)[number]) &&
-    getPaymentTaskTimestamp(request) !== undefined
+    OPEN_PAYMENT_TASK_STATUSES.includes(request.status as (typeof OPEN_PAYMENT_TASK_STATUSES)[number])
   );
 }
 

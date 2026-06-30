@@ -132,7 +132,7 @@ describe("requestStatus", () => {
     });
   });
 
-  it("treats fully approved requests with payment dates as open payment tasks", () => {
+  it("treats fully approved contractor requests as open payment tasks", () => {
     expect(isOpenPaymentTask({ status: "approved", paymentDeadline: 1000 })).toBe(true);
     expect(isOpenPaymentTask({ status: "approved", paymentDeadline: 1000, category: "Welcome-бонус" })).toBe(false);
     expect(
@@ -149,7 +149,7 @@ describe("requestStatus", () => {
         specialists: [{ sourceType: "internal" }, { sourceType: "contractor" }],
       }),
     ).toBe(true);
-    expect(isOpenPaymentTask({ status: "approved" })).toBe(false);
+    expect(isOpenPaymentTask({ status: "approved" })).toBe(true);
     expect(isOpenPaymentTask({ status: "paid", paymentDeadline: 1000 })).toBe(false);
   });
 
