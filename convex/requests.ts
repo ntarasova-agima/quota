@@ -4567,7 +4567,7 @@ export const updatePaymentStatus = mutation({
     const isCreator = request.createdBy === userId || request.createdByEmail === email;
     const canManagePayments =
       record.roles.some((role: string) =>
-        ["BUH", "BUH Payment"].includes(role),
+        ["BUH", "BUH Payment", "BUH Transit"].includes(role),
       ) || hasFinanceApproverRole(record);
 
     const canBuhReturnPaid =
@@ -5192,7 +5192,7 @@ export const cancelPaymentEntry = mutation({
     const record = await getRoleRecord(ctx, email);
     if (
       !record ||
-      (!record.roles.some((role: string) => ["BUH", "ADMIN", "BUH Payment"].includes(role)) &&
+      (!record.roles.some((role: string) => ["BUH", "ADMIN", "BUH Payment", "BUH Transit"].includes(role)) &&
         !hasFinanceApproverRole(record))
     ) {
       throw new Error("Not authorized");
@@ -5369,7 +5369,8 @@ export const remindPayment = mutation({
       roleRecord?.roles?.includes("ADMIN") ||
       hasFinanceApproverRole(roleRecord) ||
       roleRecord?.roles?.includes("BUH") ||
-      roleRecord?.roles?.includes("BUH Payment");
+      roleRecord?.roles?.includes("BUH Payment") ||
+      roleRecord?.roles?.includes("BUH Transit");
     if (!canRemind) {
       throw new Error("Not authorized");
     }

@@ -140,7 +140,11 @@ export default function ApprovalsPage() {
     () => hasFinanceApproverRole({ roles: myRoles ?? [], hodDepartments: myProfile?.hodDepartments ?? [] }),
     [myProfile?.hodDepartments, myRoles],
   );
-  const isFinanceRole = myRoles?.includes("BUH") || myRoles?.includes("BUH Payment") || isFinanceHead;
+  const isFinanceRole =
+    myRoles?.includes("BUH") ||
+    myRoles?.includes("BUH Payment") ||
+    myRoles?.includes("BUH Transit") ||
+    isFinanceHead;
   const canFilterByTags = myRoles?.some((role) => ["CFD", "BUH", "COO", "ADMIN"].includes(role)) || isFinanceHead;
   const cfdTags = useQuery(api.cfdTags.list, canFilterByTags ? {} : "skip");
   const todayStart = useMemo(() => {

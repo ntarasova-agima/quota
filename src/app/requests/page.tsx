@@ -210,7 +210,11 @@ export default function RequestsPage() {
     [isFinanceHead, myRoles],
   );
   const isFinanceRole = useMemo(
-    () => myRoles?.includes("BUH") || myRoles?.includes("BUH Payment") || isFinanceHead,
+    () =>
+      myRoles?.includes("BUH") ||
+      myRoles?.includes("BUH Payment") ||
+      myRoles?.includes("BUH Transit") ||
+      isFinanceHead,
     [isFinanceHead, myRoles],
   );
   const rawView = searchParams.get("view") ?? "my";

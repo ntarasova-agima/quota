@@ -804,7 +804,11 @@ export default function RequestDetailPage() {
     setOperationalFieldsSavedAt(null);
   };
   const canManagePayments = useMemo(
-    () => myRoles.includes("BUH") || isFinanceApprover || myRoles.includes("BUH Payment"),
+    () =>
+      myRoles.includes("BUH") ||
+      isFinanceApprover ||
+      myRoles.includes("BUH Payment") ||
+      myRoles.includes("BUH Transit"),
     [isFinanceApprover, myRoles],
   );
   const canSetPaymentPlanned = canManagePayments;

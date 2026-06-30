@@ -88,12 +88,12 @@ function createFakeDb(initialRequest: Record<string, any>, roleRecord: Record<st
   };
 }
 
-function createPaymentCtx(initialRequest: Record<string, any>) {
+function createPaymentCtx(initialRequest: Record<string, any>, roles: string[] = ["BUH Payment"]) {
   const db = createFakeDb(initialRequest, {
     email: "finance@agima.ru",
     fullName: "Finance User",
     active: true,
-    roles: ["BUH Payment"],
+    roles,
   });
   const scheduled: Array<{ delay: number; args: any }> = [];
 
@@ -208,6 +208,36 @@ async function runBackfillWelcomeBonusPaymentState(ctx: any, args: Record<string
 }
 
 describe("updatePaymentStatus workflow", () => {
+  it("allows BUH Transit to plan payments", async () => {
+    const { db, ctx } = createPaymentCtx(
+      {
+        createdBy: "author",
+        createdByEmail: "author@agima.ru",
+        category: "Транзит",
+        fundingSource: "Квоты AGIMA",
+        cfdTag: "Офис",
+        status: "approved",
+        amount: 50_000,
+        amountWithVat: 61_000,
+        vatRate: 22,
+        currency: "RUB",
+        paymentDeadline: new Date("2030-05-20").getTime(),
+        isCanceled: false,
+        createdAt: new Date("2030-04-01").getTime(),
+        updatedAt: new Date("2030-04-01").getTime(),
+      },
+      ["BUH Transit"],
+    );
+
+    await runUpdatePaymentStatus(ctx, {
+      status: "payment_planned",
+      paymentPlannedAt: new Date("2030-05-10").getTime(),
+    });
+
+    expect(getRequest(db)?.status).toBe("payment_planned");
+    expect(getRequest(db)?.paymentPlannedByEmail).toBe("finance@agima.ru");
+  });
+
   it("moves approved request through payment planning, partial payment, and final payment", async () => {
     const { ctx, db, scheduled } = createPaymentCtx({
       createdBy: USER_ID,
