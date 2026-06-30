@@ -2712,7 +2712,9 @@ export default function RequestDetailPage() {
                                     }
                                   }}
                                 >
-                                  {paymentReminderSent ? "✓ Напоминание отправлено!" : "Напомнить об оплате"}
+                                  {paymentReminderSent
+                                    ? "✓ Напоминание отправлено!"
+                                    : "Дополнительно напомнить о платеже"}
                                 </Button>
                               </div>
                             ) : null}
