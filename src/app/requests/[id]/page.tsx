@@ -1264,6 +1264,7 @@ export default function RequestDetailPage() {
     : null;
   const baseStatusSummary = getRequestStatusSummary(request, approvals);
   const isActionableForViewer =
+    !request.isCanceled &&
     request.status === "pending" &&
     approvals.some((approval) => approval.status === "pending" && canCurrentUserDecideApproval(approval));
   const statusSummary =
@@ -2161,7 +2162,7 @@ export default function RequestDetailPage() {
                     <Link href={`/requests/${requestId}/edit`}>Редактировать заявку</Link>
                   </Button>
                 ) : null}
-                {isAdmin && request.status === "pending" ? (
+                {isAdmin && request.status === "pending" && !request.isCanceled ? (
                   <Button
                     type="button"
                     variant="outline"
@@ -3930,7 +3931,7 @@ export default function RequestDetailPage() {
                             </p>
                           ) : null}
 
-                          {approval.status === "pending" && canCurrentUserDecideApproval(approval) ? (
+                          {approval.status === "pending" && !request.isCanceled && canCurrentUserDecideApproval(approval) ? (
                             <div className="mt-4 space-y-3">
                               <div className="space-y-2">
                                 <Label htmlFor={`comment-${approvalKey}`}>Комментарий</Label>
@@ -4110,7 +4111,7 @@ export default function RequestDetailPage() {
                               </div>
                             </div>
                           ) : null}
-                          {approval.status === "pending" && isAdmin && !canCurrentUserDecideApproval(approval) ? (
+                          {approval.status === "pending" && !request.isCanceled && isAdmin && !canCurrentUserDecideApproval(approval) ? (
                             <div className="mt-4 space-y-3">
                               <div className="space-y-2">
                                 <Label htmlFor={`admin-comment-${approvalKey}`}>Комментарий админа</Label>

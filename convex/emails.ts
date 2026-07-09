@@ -16,6 +16,7 @@ import { formatAmount, formatAmountPair, getAmountWithoutVat } from "../src/lib/
 import {
   getPaymentDeadlineTimestamp,
   getPaymentTaskTimestamp,
+  isOpenPaymentTask,
 } from "../src/lib/requestStatus";
 
 const decisionEnum = v.union(v.literal("approved"), v.literal("rejected"));
@@ -1331,6 +1332,7 @@ export const sendPaymentDeadlineReminder = internalAction({
     const effectivePaymentAt = getPaymentTaskTimestamp(request);
     if (
       request.isCanceled ||
+      !isOpenPaymentTask(request) ||
       request.status === "paid" ||
       request.status === "closed" ||
       !effectivePaymentAt ||

@@ -2116,7 +2116,7 @@ async function sendPaymentPlanningRequestedAndScheduleReminders(
   ctx: any,
   request: { _id: any; category?: string; paymentDeadline?: number; neededBy?: number; specialists?: Array<any> },
 ) {
-  if (request.category !== "Welcome-бонус") {
+  if (isOpenPaymentTask({ ...request, status: "approved" })) {
     await ctx.scheduler.runAfter(0, internal.emails.sendPaymentPlanningRequested, {
       requestId: request._id,
     });
