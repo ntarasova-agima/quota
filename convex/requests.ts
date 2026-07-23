@@ -1256,6 +1256,7 @@ const requestPayloadValidator = {
   vatRate: v.optional(v.number()),
   currency: v.string(),
   fundingSource: v.string(),
+  cfdTag: v.optional(v.string()),
   counterparty: v.string(),
   paymentMethod: v.optional(v.string()),
   contractLink: v.optional(v.string()),
@@ -1299,6 +1300,7 @@ const requestFieldLabels: Record<string, string> = {
   vatRate: "НДС",
   currency: "Валюта",
   fundingSource: "Источник финансирования",
+  cfdTag: "Тег заявки",
   counterparty: "Кому платим мы (ЮЛ подрядчика/поставщика)",
   paymentMethod: "Способ оплаты",
   requestArea: "Тип направления",
@@ -3437,6 +3439,18 @@ export const createRequest = mutation({
     }
     const normalizedDepartment = normalizeHodDepartment(payloadArgs.department);
     const normalizedFundingSource = normalizeFundingSource(payloadArgs.fundingSource);
+    const cfdTag = payloadArgs.cfdTag?.trim() || undefined;
+    if (cfdTag) {
+      const existingTag = (await ctx.db.query("cfdTags").collect()).find(
+        (tag: any) =>
+          tag.name === cfdTag &&
+          tag.active &&
+          normalizeHodDepartment(tag.department) === normalizedDepartment,
+      );
+      if (!existingTag && cfdTag !== TRANSIT_TAG_NAME) {
+        throw new Error("Тег не найден");
+      }
+    }
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
     const requestCode = await getNextRequestCode(ctx, normalizedCategory, normalizedFundingSource);
     const normalizedSpecialists = normalizeSpecialists(payloadArgs.specialists ?? []);
@@ -3515,7 +3529,7 @@ export const createRequest = mutation({
       fundingSource: normalizedFundingSource,
       counterparty: payloadArgs.counterparty,
       paymentMethod: payloadArgs.paymentMethod,
-      cfdTag: undefined,
+      cfdTag,
       contractLink: payloadArgs.contractLink?.trim() || undefined,
       contractAttachmentCount: 0,
       lastContractAttachmentName: undefined,
@@ -4335,15 +4349,15 @@ export const assignCfdTag = mutation({
     if (!isFundingSourceAllowedForCategory(request.category, nextFundingSource)) {
       throw new Error("Так не бывает");
     }
-    if (args.tag?.trim()) {
-      const tagName = args.tag.trim();
+    const nextTag = args.tag === undefined ? request.cfdTag : args.tag.trim() || undefined;
+    if (nextTag) {
       const existingTag = (await ctx.db.query("cfdTags").collect()).find(
         (tag: any) =>
-          tag.name === tagName &&
+          tag.name === nextTag &&
           tag.active &&
           normalizeHodDepartment(tag.department) === requestDepartment,
       );
-      if ((!existingTag || !existingTag.active) && tagName !== TRANSIT_TAG_NAME) {
+      if ((!existingTag || !existingTag.active) && nextTag !== TRANSIT_TAG_NAME) {
         throw new Error("Тег не найден");
       }
     }
@@ -4351,19 +4365,31 @@ export const assignCfdTag = mutation({
       args.businessCategory === undefined
         ? normalizeBusinessCategory(request.businessCategory)
         : normalizeBusinessCategory(args.businessCategory);
-    await ctx.db.patch(request._id, {
-      cfdTag: args.tag?.trim() || undefined,
-      fundingSource: nextFundingSource,
-      businessCategory: nextBusinessCategory,
+    const patch: {
+      cfdTag?: string;
+      fundingSource?: string;
+      businessCategory?: string;
+      updatedAt: number;
+    } = {
       updatedAt: Date.now(),
-    });
+    };
+    if (args.tag !== undefined) {
+      patch.cfdTag = nextTag;
+    }
+    if (args.fundingSource !== undefined) {
+      patch.fundingSource = nextFundingSource;
+    }
+    if (args.businessCategory !== undefined) {
+      patch.businessCategory = nextBusinessCategory;
+    }
+    await ctx.db.patch(request._id, patch);
     await logTimelineEvent(ctx, {
       requestId: request._id,
       type: "cfd_tag_updated",
       title: "Изменена классификация заявки",
       description: [
         nextFundingSource,
-        args.tag?.trim() ? args.tag.trim() : "тег снят",
+        nextTag ? nextTag : "тег снят",
         nextBusinessCategory ? `категория: ${nextBusinessCategory}` : undefined,
       ].filter(Boolean).join(" · "),
       actorEmail: email,

@@ -225,6 +225,34 @@ export function getEffectiveQuotaAllocations(request: any) {
   ];
 }
 
+export function getApprovedRequestQuotaAllocations(request: any) {
+  if (
+    request.isCanceled ||
+    request.category === "Welcome-бонус" ||
+    ["draft", "hod_pending", "pending", "rejected"].includes(request.status)
+  ) {
+    return [] as Array<{ monthKey: string; amountWithoutVat: number; amountWithVat: number }>;
+  }
+
+  const monthKey = monthKeyFromTimestamp(request.neededBy ?? request.createdAt);
+  if (!monthKey) {
+    return [];
+  }
+
+  return [
+    {
+      monthKey,
+      ...toRubVatAmounts({
+        amountWithoutVat: request.amount ?? 0,
+        amountWithVat: request.amountWithVat,
+        currency: request.currency,
+        currencyRate: request.paymentCurrencyRate,
+        vatRate: request.vatRate,
+      }),
+    },
+  ];
+}
+
 export function sumQuotaUsageByMonth(
   requests: any[],
   predicate: (request: any) => boolean,

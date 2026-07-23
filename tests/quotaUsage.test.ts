@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getEffectiveQuotaAllocations, sumQuotaUsageByMonth, sumQuotaUsageByMonthAndTag } from "../convex/quotaUsage";
+import {
+  getApprovedRequestQuotaAllocations,
+  getEffectiveQuotaAllocations,
+  sumQuotaUsageByMonth,
+  sumQuotaUsageByMonthAndTag,
+} from "../convex/quotaUsage";
 
 describe("quotaUsage", () => {
   it("allocates approved requests to expense expectation month", () => {
@@ -168,6 +173,35 @@ describe("quotaUsage", () => {
         vatRate: 22,
         currency: "RUB",
         neededBy: new Date("2026-04-20").getTime(),
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps the approved request amount after partial payment details change", () => {
+    expect(
+      getApprovedRequestQuotaAllocations({
+        status: "partially_paid",
+        category: "Конкурсное задание",
+        amount: 5000,
+        amountWithVat: 6100,
+        actualPaidAmount: 1000,
+        paymentResidualAmount: 2500,
+        vatRate: 22,
+        currency: "RUB",
+        neededBy: new Date("2026-07-20").getTime(),
+      }),
+    ).toEqual([{ monthKey: "2026-07", amountWithoutVat: 5000, amountWithVat: 6100 }]);
+  });
+
+  it("removes a canceled approved request from quota usage", () => {
+    expect(
+      getApprovedRequestQuotaAllocations({
+        status: "approved",
+        isCanceled: true,
+        category: "Конкурсное задание",
+        amount: 5000,
+        currency: "RUB",
+        neededBy: new Date("2026-07-20").getTime(),
       }),
     ).toEqual([]);
   });

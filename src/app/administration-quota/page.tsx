@@ -6,7 +6,7 @@ export default function AdministrationQuotaPage() {
   return (
     <RequireAuth>
       <div className="min-h-screen bg-background text-foreground">
-        <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-12">
+        <main className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
           <AppHeader title="Квоты" />
           <AdministrationQuotaClient />
         </main>

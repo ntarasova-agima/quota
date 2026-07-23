@@ -56,18 +56,9 @@ async function ensureCanViewTags(ctx: any) {
     .query("roles")
     .withIndex("by_email", (q: any) => q.eq("email", email))
     .first();
-  const canView =
-    record?.roles?.some((role: string) =>
-      ["ADMIN", "COO", "BUH", "HOD"].includes(role),
-    ) || hasFinanceApproverRole(record);
-  if (!canView) {
-    throw new Error("Not authorized");
-  }
   return {
     record,
-    canViewAll:
-      record?.roles?.some((role: string) => ["ADMIN", "COO", "BUH"].includes(role)) ||
-      hasFinanceApproverRole(record),
+    canViewAll: true,
     visibleDepartments: (
       record?.roles?.some((role: string) => ["ADMIN", "COO", "BUH"].includes(role)) ||
       hasFinanceApproverRole(record)

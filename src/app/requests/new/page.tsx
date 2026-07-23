@@ -131,6 +131,7 @@ export default function NewRequestPage() {
   const [vatInputSource, setVatInputSource] = useState<VatAmountSource>("without");
   const [currency, setCurrency] = useState("RUB");
   const [fundingSource, setFundingSource] = useState(() => (copyFromRequestId ? "" : "Квоты AGIMA"));
+  const [cfdTag, setCfdTag] = useState("");
   const [justification, setJustification] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
@@ -226,12 +227,13 @@ export default function NewRequestPage() {
   );
   const wrappedSelectTriggerClass =
     "h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left *:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:pr-6 *:data-[slot=select-value]:whitespace-normal *:data-[slot=select-value]:break-words *:data-[slot=select-value]:leading-snug";
-  const headerFieldLabelClass = "min-h-11 items-start leading-snug";
+  const headerFieldLabelClass = "items-start leading-snug";
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
   const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(category), [category]);
   const requestSupportsSpecialists = useMemo(() => supportsRequestSpecialists(category), [category]);
   const isWelcomeBonus = category === "Welcome-бонус";
   const selectedDepartment = requestArea;
+  const availableTags = useQuery(api.cfdTags.list, { department: selectedDepartment });
   const categoryOptions = useMemo(
     () => getCategoriesForDepartment(selectedDepartment),
     [selectedDepartment],
@@ -330,6 +332,7 @@ export default function NewRequestPage() {
     setVatInputSource("without");
     setCurrency(request.currency ?? "RUB");
     setFundingSource(normalizedFundingSource);
+    setCfdTag(request.cfdTag ?? "");
     setJustification([request.justification, request.details].filter(Boolean).join("\n\n"));
     setInvestmentReturn(request.investmentReturn ?? "");
     setClientName(request.clientName ?? "");
@@ -713,6 +716,7 @@ export default function NewRequestPage() {
 
   function handleRequestAreaChange(nextArea: RequestArea) {
     setRequestArea(nextArea);
+    setCfdTag("");
     const nextCategory = getCategoriesForDepartment(nextArea)[0];
     setCategory(nextCategory);
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
@@ -886,6 +890,7 @@ export default function NewRequestPage() {
         vatRate: resolvedAmounts.vatRate,
         currency,
         fundingSource,
+        cfdTag: cfdTag || undefined,
         justification,
         investmentReturn: investmentReturn.trim() || undefined,
         clientName,
@@ -1035,6 +1040,22 @@ export default function NewRequestPage() {
                     {fundingError && (
                       <p className="text-xs text-destructive">{fundingError}</p>
                     )}
+                  </div>
+                  <div className="space-y-2">
+                    <FieldLabel className={headerFieldLabelClass}>Тег заявки (необязательно)</FieldLabel>
+                    <Select value={cfdTag || "none"} onValueChange={(value) => setCfdTag(value === "none" ? "" : value)}>
+                      <SelectTrigger className={wrappedSelectTriggerClass}>
+                        <SelectValue placeholder="Выберите тег" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Не выбран</SelectItem>
+                        {(availableTags ?? []).map((tag) => (
+                          <SelectItem key={tag._id} value={tag.name}>
+                            {tag.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 

@@ -2,7 +2,12 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getCurrentEmail } from "./authHelpers";
-import { sumQuotaUsageByMonth, sumQuotaUsageByMonthAndTag } from "./quotaUsage";
+import {
+  getApprovedRequestQuotaAllocations,
+  getEffectiveQuotaAllocations,
+  sumQuotaUsageByMonth,
+  sumQuotaUsageByMonthAndTag,
+} from "./quotaUsage";
 import {
   AI_TOOLS_REQUEST_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
@@ -114,11 +119,11 @@ async function ensureCoo(ctx: any) {
 }
 
 async function ensureAdministrationQuotaViewer(ctx: any) {
-  return await ensureAnyRole(ctx, ["CFD", "COO", "BUH", "ADMIN", "HOD"]);
+  return await ensureAnyRole(ctx, ["NBD", "CFD", "COO", "BUH", "ADMIN", "HOD"]);
 }
 
 async function ensureAdministrationQuotaEditor(ctx: any) {
-  return await ensureAnyRole(ctx, ["CFD", "COO", "BUH", "ADMIN", "HOD"]);
+  return await ensureAnyRole(ctx, ["NBD", "CFD", "COO", "BUH", "ADMIN", "HOD"]);
 }
 
 function getAllowedHodDepartments(record: any) {
@@ -139,6 +144,9 @@ function canEditAdministrationQuotaRow(record: any, departmentKey: string) {
   if (departmentKey === ADMINISTRATION_TOTAL_KEY) {
     return false;
   }
+  if (record?.roles?.includes("NBD") && departmentKey === "Аккаунтинг") {
+    return true;
+  }
   return record?.roles?.includes("HOD") && getAllowedHodDepartments(record).includes(departmentKey);
 }
 
@@ -147,7 +155,11 @@ function getAdministrationQuotaVisibility(record: any) {
     record?.roles?.some((role: string) =>
       ["COO", "BUH", "ADMIN"].includes(role),
     ) || hasFinanceApproverRole(record);
-  const allowedDepartments = canSeeAllDepartments ? HOD_DEPARTMENTS : getAllowedHodDepartments(record);
+  const allowedDepartments = canSeeAllDepartments
+    ? HOD_DEPARTMENTS
+    : record?.roles?.includes("NBD")
+      ? ["Аккаунтинг"]
+      : getAllowedHodDepartments(record);
   return {
     canSeeAllDepartments,
     allowedDepartments,
@@ -161,6 +173,27 @@ function isAdministrationQuotaRequest(request: any) {
   return isAgimaQuotaFundingSource(request.fundingSource) && !shouldSkipQuotaByTag(request.cfdTag);
 }
 
+function getAdministrationQuotaDepartment(request: any) {
+  return (
+    normalizeHodDepartment(request.requestArea) ??
+    normalizeHodDepartment(request.department) ??
+    "Без цеха"
+  );
+}
+
+function isWelcomeBonusRequest(request: any) {
+  return (
+    isAgimaQuotaFundingSource(request.fundingSource) &&
+    normalizeRequestCategory(request.category) === "Welcome-бонус" &&
+    !request.isCanceled &&
+    !["draft", "hod_pending", "pending", "rejected"].includes(request.status)
+  );
+}
+
+function isQuotaVisibleRequest(request: any) {
+  return isAdministrationQuotaRequest(request) || isWelcomeBonusRequest(request);
+}
+
 function emptyUsage() {
   return { amountWithoutVat: 0, amountWithVat: 0 };
 }
@@ -171,6 +204,72 @@ function addUsage(
 ) {
   current.amountWithoutVat += amount.amountWithoutVat;
   current.amountWithVat += amount.amountWithVat;
+}
+
+function monthKeyFromTimestamp(timestamp?: number) {
+  if (!timestamp) {
+    return undefined;
+  }
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getRequestAmountPair(request: any) {
+  const amountWithoutVat = request.amount ?? 0;
+  const amountWithVat =
+    getAmountWithVat(
+      amountWithoutVat,
+      request.amountWithVat,
+      request.vatRate,
+    ) ?? amountWithoutVat;
+  return { amountWithoutVat, amountWithVat };
+}
+
+function requestMatchesAdministrationFilters(
+  request: any,
+  options: { department?: string; tag?: string } = {},
+) {
+  const requestDepartment = getAdministrationQuotaDepartment(request);
+  if (options.department && requestDepartment !== options.department) {
+    return false;
+  }
+  const tag = request.cfdTag?.trim() || "Без тега";
+  if (options.tag !== undefined && tag !== options.tag) {
+    return false;
+  }
+  return true;
+}
+
+function buildRequestCounterpartyLines(request: any, approvedAmount: number) {
+  const specialists = (request.specialists ?? []).filter(
+    (specialist: any) => (specialist.name?.trim() || specialist.contractorLegalEntity?.trim()) && (specialist.directCost ?? 0) > 0,
+  );
+  if (!specialists.length) {
+    return [{ lineKey: "request", counterparty: request.counterparty?.trim() || "", amount: approvedAmount }];
+  }
+
+  const lines = specialists.map((specialist: any) => ({
+    lineKey: `specialist:${specialist.id}`,
+    counterparty: specialist.contractorLegalEntity?.trim() || specialist.name?.trim() || "",
+    amount: specialist.directCost ?? 0,
+  }));
+  const allocated = lines.reduce((sum: number, line: { amount: number }) => sum + line.amount, 0);
+  const remainder = Math.max(approvedAmount - allocated, 0);
+  if (remainder > 0) {
+    lines.push({
+      lineKey: "request",
+      counterparty: request.counterparty?.trim() || "",
+      amount: remainder,
+    });
+  }
+  return lines;
+}
+
+function getLatestApprovalTimestamp(approvalsByRequest: Map<string, any[]>, request: any) {
+  const decidedAt = (approvalsByRequest.get(request._id) ?? [])
+    .filter((approval: any) => approval.status === "approved" && approval.decidedAt)
+    .map((approval: any) => approval.decidedAt);
+  return decidedAt.length ? Math.max(...decidedAt) : request.updatedAt ?? request.createdAt;
 }
 
 function getAdministrationUsage(
@@ -187,7 +286,7 @@ function getAdministrationUsage(
     if (!isAdministrationQuotaRequest(request)) {
       continue;
     }
-    const requestDepartment = normalizeHodDepartment(request.department);
+    const requestDepartment = getAdministrationQuotaDepartment(request);
     if (normalizedDepartment && requestDepartment !== normalizedDepartment) {
       continue;
     }
@@ -200,8 +299,8 @@ function getAdministrationUsage(
         continue;
       }
     }
-    for (const allocation of sumQuotaUsageByMonth([request], () => true).entries()) {
-      const [monthKey, amount] = allocation;
+    for (const allocation of getApprovedRequestQuotaAllocations(request)) {
+      const { monthKey, ...amount } = allocation;
       if (!byMonth.has(monthKey)) {
         byMonth.set(monthKey, {
           total: emptyUsage(),
@@ -211,7 +310,7 @@ function getAdministrationUsage(
       }
       const month = byMonth.get(monthKey)!;
       addUsage(month.total, amount);
-      const departmentKey = requestDepartment ?? "Без цеха";
+      const departmentKey = requestDepartment;
       const departmentUsage = month.departments.get(departmentKey) ?? emptyUsage();
       addUsage(departmentUsage, amount);
       month.departments.set(departmentKey, departmentUsage);
@@ -684,10 +783,102 @@ export const listAdministrationByMonthKeys = query({
     const quotaRows = await ctx.db.query("administrationQuotas").collect();
     const allTags = await ctx.db.query("cfdTags").collect();
     const requests = await ctx.db.query("requests").collect();
+    const approvals = await ctx.db.query("approvals").collect();
+    const savedEntries = await ctx.db.query("administrationQuotaEntries").collect();
+    const approvalsByRequest = new Map<string, any[]>();
+    for (const approval of approvals) {
+      const list = approvalsByRequest.get(approval.requestId) ?? [];
+      list.push(approval);
+      approvalsByRequest.set(approval.requestId, list);
+    }
+    const entryMap = new Map(
+      savedEntries.map((entry: any) => [
+        `${entry.requestId}:${entry.monthKey}:${entry.lineKey ?? "request"}`,
+        entry,
+      ]),
+    );
     const usageByMonth = getAdministrationUsage(requests, {
       department: departmentFilter,
       tag: args.tag,
     });
+    const quotaEntriesByMonth = new Map<string, any[]>();
+    const welcomeBonusByMonth = new Map<string, { amountWithoutVat: number; amountWithVat: number }>();
+    const monthSet = new Set(args.monthKeys);
+    for (const request of requests) {
+      const department = getAdministrationQuotaDepartment(request);
+      if (!visibility.canSeeAllDepartments && !visibleDepartments.includes(department as any)) {
+        continue;
+      }
+      if (!requestMatchesAdministrationFilters(request, { department: departmentFilter, tag: args.tag })) {
+        continue;
+      }
+      if (!isQuotaVisibleRequest(request)) {
+        continue;
+      }
+      const tagName = request.cfdTag?.trim() || "Без тега";
+      const isWelcomeBonus = isWelcomeBonusRequest(request);
+      const allocations = isWelcomeBonus
+        ? [
+            {
+              monthKey: monthKeyFromTimestamp(getLatestApprovalTimestamp(approvalsByRequest, request)),
+              ...getRequestAmountPair(request),
+            },
+          ].filter(
+            (
+              allocation,
+            ): allocation is {
+              monthKey: string;
+              amountWithoutVat: number;
+              amountWithVat: number;
+            } => Boolean(allocation.monthKey),
+          )
+        : getApprovedRequestQuotaAllocations(request);
+      for (const allocation of allocations) {
+        if (!monthSet.has(allocation.monthKey)) {
+          continue;
+        }
+        const list = quotaEntriesByMonth.get(allocation.monthKey) ?? [];
+        const counterpartyLines = isWelcomeBonus
+          ? [{ lineKey: "request", counterparty: request.counterparty?.trim() || "", amount: allocation.amountWithoutVat }]
+          : buildRequestCounterpartyLines(request, allocation.amountWithoutVat);
+        counterpartyLines.forEach((line: any, lineIndex: number) => {
+          const savedEntry = entryMap.get(`${request._id}:${allocation.monthKey}:${line.lineKey}`);
+          list.push({
+            key: `${request._id}:${allocation.monthKey}:${line.lineKey}`,
+            lineKey: line.lineKey,
+            requestId: request._id,
+            monthKey: allocation.monthKey,
+            departmentKey: department,
+            tagName,
+            requestCode: request.requestCode,
+            requestTitle: request.title,
+            clientName: request.clientName,
+            assignmentTitle: request.title ?? request.justification,
+            counterparty: line.counterparty,
+            amount: line.amount,
+            amountWithVat:
+              allocation.amountWithoutVat > 0
+                ? allocation.amountWithVat * (line.amount / allocation.amountWithoutVat)
+                : 0,
+            currency: "RUB",
+            comment: savedEntry?.comment ?? "",
+            workStatus: savedEntry?.workStatus ?? "",
+            result: savedEntry?.result ?? "",
+            isFirstForRequest: lineIndex === 0,
+            requestRowSpan: counterpartyLines.length,
+            isWelcomeBonus,
+            canEditEntry: canEditAdministrationQuotaRow(roleRecord, department) || roleRecord?.roles?.includes("NBD"),
+            updatedAt: savedEntry?.updatedAt ?? request.updatedAt ?? request.createdAt,
+          });
+        });
+        quotaEntriesByMonth.set(allocation.monthKey, list);
+        if (isWelcomeBonus) {
+          const current = welcomeBonusByMonth.get(allocation.monthKey) ?? emptyUsage();
+          addUsage(current, allocation);
+          welcomeBonusByMonth.set(allocation.monthKey, current);
+        }
+      }
+    }
     const rowMap = new Map(
       quotaRows.map((row: any) => [
         `${row.monthKey}:${row.departmentKey}:${row.tagName ?? ""}`,
@@ -726,6 +917,9 @@ export const listAdministrationByMonthKeys = query({
                 .filter((quotaRow: any) => quotaRow.monthKey === key && quotaRow.departmentKey === department && quotaRow.tagName)
                 .map((quotaRow: any) => quotaRow.tagName),
               ...Array.from(spentTags.keys()),
+              ...(quotaEntriesByMonth.get(key) ?? [])
+                .filter((entry: any) => entry.departmentKey === department)
+                .map((entry: any) => entry.tagName),
             ]),
           ).filter((tag): tag is string => Boolean(tag));
           const tagRows = tagNames
@@ -735,16 +929,15 @@ export const listAdministrationByMonthKeys = query({
               const tagRow = rowMap.get(`${key}:${department}:${tagName}`);
               const requestTagSpent = spentTags.get(tagName) ?? emptyUsage();
               const manualTagSpent = getManualSpentPair(tagRow);
-              const tagSpent = {
-                amountWithoutVat: requestTagSpent.amountWithoutVat + manualTagSpent.amountWithoutVat,
-                amountWithVat: requestTagSpent.amountWithVat + manualTagSpent.amountWithVat,
-              };
+              const entries = (quotaEntriesByMonth.get(key) ?? []).filter(
+                (entry: any) =>
+                  entry.departmentKey === department &&
+                  (entry.tagName ?? "Без тега") === tagName,
+              );
+              const tagSpent = requestTagSpent;
               const quota = quotaValue(tagRow);
               const quotaWithVat = quotaValueWithVat(tagRow);
               const tagIssues: string[] = [];
-              if (quota > quotaValue(row)) {
-                tagIssues.push("Квота тега больше квоты цеха");
-              }
               return {
                 monthKey: key,
                 year,
@@ -760,6 +953,7 @@ export const listAdministrationByMonthKeys = query({
                 spentWithVat: tagSpent.amountWithVat,
                 remaining: quota - tagSpent.amountWithoutVat,
                 remainingWithVat: quotaWithVat - tagSpent.amountWithVat,
+                entries,
                 issues: tagIssues,
                 updatedAt: tagRow?.updatedAt ?? 0,
                 canEdit: canEditAdministrationQuotaRow(roleRecord, department),
@@ -769,28 +963,12 @@ export const listAdministrationByMonthKeys = query({
             });
           const tagAllocated = tagRows.reduce((sum, tagRow) => sum + tagRow.quota, 0);
           const tagAllocatedWithVat = tagRows.reduce((sum, tagRow) => sum + (tagRow.quotaWithVat ?? tagRow.quota), 0);
-          const tagManualSpent = tagRows.reduce(
-            (sum, tagRow) => ({
-              amountWithoutVat: sum.amountWithoutVat + (tagRow.manualSpent ?? 0),
-              amountWithVat: sum.amountWithVat + (tagRow.manualSpentWithVat ?? 0),
-            }),
-            emptyUsage(),
-          );
-          const spent = {
-            amountWithoutVat: requestSpent.amountWithoutVat + tagManualSpent.amountWithoutVat,
-            amountWithVat: requestSpent.amountWithVat + tagManualSpent.amountWithVat,
-          };
+          const spent = requestSpent;
           const quota = quotaValue(row);
           const quotaWithVat = quotaValueWithVat(row);
           const departmentIssues: string[] = [];
           if (quota > quotaValue(totalRow)) {
             departmentIssues.push("Квота цеха больше общей квоты AGIMA");
-          }
-          if (tagAllocated > quota) {
-            departmentIssues.push("Сумма квот тегов больше квоты цеха");
-            for (const tagRow of tagRows) {
-              tagRow.issues = Array.from(new Set([...(tagRow.issues ?? []), "Сумма квот тегов больше квоты цеха"]));
-            }
           }
           return {
             monthKey: key,
@@ -820,22 +998,8 @@ export const listAdministrationByMonthKeys = query({
         (sum: number, row: any) => sum + (row.quotaWithVat ?? row.quota),
         0,
       );
-      const totalManualSpent = departmentRows.reduce(
-        (sum: { amountWithoutVat: number; amountWithVat: number }, row: any) => ({
-          amountWithoutVat:
-            sum.amountWithoutVat +
-            row.tags.reduce((nestedSum: number, tagRow: any) => nestedSum + (tagRow.manualSpent ?? 0), 0),
-          amountWithVat:
-            sum.amountWithVat +
-            row.tags.reduce((nestedSum: number, tagRow: any) => nestedSum + (tagRow.manualSpentWithVat ?? 0), 0),
-        }),
-        emptyUsage(),
-      );
       const totalRequestSpent = monthUsage?.total ?? emptyUsage();
-      const totalSpent = {
-        amountWithoutVat: totalRequestSpent.amountWithoutVat + totalManualSpent.amountWithoutVat,
-        amountWithVat: totalRequestSpent.amountWithVat + totalManualSpent.amountWithVat,
-      };
+      const totalSpent = totalRequestSpent;
       const totalQuota = quotaValue(totalRow);
       const totalQuotaWithVat = quotaValueWithVat(totalRow);
       const totalIssues: string[] = [];
@@ -849,6 +1013,35 @@ export const listAdministrationByMonthKeys = query({
         monthKey: key,
         year,
         month,
+        sheetRows: departmentRows.flatMap((department: any) =>
+          department.tags.flatMap((tag: any) => {
+            const entries = tag.entries?.length ? tag.entries : [undefined];
+            return entries.map((entry: any, index: number) => ({
+              key: `${department.departmentKey}:${tag.tagName ?? "Без тега"}:${entry?.key ?? "empty"}:${index}`,
+              monthKey: key,
+              departmentKey: department.departmentKey,
+              tagName: tag.tagName ?? "Без тега",
+              isFirstForTag: index === 0,
+              tagRowSpan: entries.length,
+              quota: tag.quota,
+              remaining: tag.remaining,
+              manualSpent: tag.manualSpent,
+              canEdit: tag.canEdit,
+              vatRate: tag.vatRate,
+              entry,
+            }));
+          }),
+        ),
+        quotaEntries: (quotaEntriesByMonth.get(key) ?? []).sort((a: any, b: any) => {
+          if (a.isWelcomeBonus !== b.isWelcomeBonus) {
+            return a.isWelcomeBonus ? 1 : -1;
+          }
+          return `${a.departmentKey}:${a.tagName}:${a.requestCode ?? ""}`.localeCompare(
+            `${b.departmentKey}:${b.tagName}:${b.requestCode ?? ""}`,
+            "ru",
+          );
+        }),
+        welcomeBonus: welcomeBonusByMonth.get(key) ?? emptyUsage(),
         total: visibility.canSeeAllDepartments
           ? {
               departmentKey: ADMINISTRATION_TOTAL_KEY,
@@ -964,17 +1157,6 @@ export const updateAdministrationQuota = mutation({
         .filter((row: any) => row.departmentKey === departmentKey && row.tagName)
         .reduce((sum: number, row: any) => sum + quotaValue(row), 0);
       if (tagQuotaSum > args.quota) {
-        throw new Error("Сумма квот тегов не может быть больше квоты цеха");
-      }
-    } else {
-      const departmentQuota = projectedQuota(departmentKey);
-      if (args.quota > departmentQuota) {
-        throw new Error("Квота тега не может быть больше квоты цеха");
-      }
-      const tagQuotaSum = projectedRows
-        .filter((row: any) => row.departmentKey === departmentKey && row.tagName)
-        .reduce((sum: number, row: any) => sum + quotaValue(row), 0);
-      if (tagQuotaSum > departmentQuota) {
         throw new Error("Сумма квот тегов не может быть больше квоты цеха");
       }
     }
@@ -1158,6 +1340,80 @@ export const updateAdministrationManualSpent = mutation({
   },
 });
 
+export const updateAdministrationQuotaEntry = mutation({
+  args: {
+    requestId: v.id("requests"),
+    lineKey: v.optional(v.string()),
+    monthKey: v.string(),
+    departmentKey: v.string(),
+    tagName: v.optional(v.string()),
+    counterparty: v.optional(v.string()),
+    workStatus: v.optional(v.string()),
+    result: v.optional(v.string()),
+    comment: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const access = await ensureAdministrationQuotaEditor(ctx);
+    const roleRecord = access.record;
+    const departmentKey = normalizeHodDepartment(args.departmentKey);
+    if (!departmentKey || !HOD_DEPARTMENTS.includes(departmentKey as any)) {
+      throw new Error("Укажите цех");
+    }
+    if (
+      !canEditAdministrationQuotaRow(roleRecord, departmentKey) &&
+      !roleRecord?.roles?.includes("NBD")
+    ) {
+      throw new Error("Недостаточно прав для редактирования строки квоты");
+    }
+
+    const request = await ctx.db.get(args.requestId);
+    if (
+      !request ||
+      request.isCanceled ||
+      ["draft", "hod_pending", "pending", "rejected"].includes(request.status) ||
+      !isQuotaVisibleRequest(request)
+    ) {
+      throw new Error("Заявка не входит в таблицу квоты");
+    }
+    const requestDepartment = getAdministrationQuotaDepartment(request);
+    if (requestDepartment !== departmentKey) {
+      throw new Error("Цех строки не совпадает с заявкой");
+    }
+
+    const existing = await ctx.db
+      .query("administrationQuotaEntries")
+      .withIndex("by_request", (q: any) => q.eq("requestId", args.requestId))
+      .collect();
+    const lineKey = args.lineKey?.trim() || "request";
+    const current = existing.find(
+      (entry: any) => entry.monthKey === args.monthKey && (entry.lineKey ?? "request") === lineKey,
+    );
+    const now = Date.now();
+    const patch = {
+      requestId: args.requestId,
+      lineKey,
+      monthKey: args.monthKey,
+      departmentKey,
+      tagName: args.tagName?.trim() || "Без тега",
+      counterparty: args.counterparty?.trim() || undefined,
+      workStatus: args.workStatus?.trim() || undefined,
+      result: args.result?.trim() || undefined,
+      comment: args.comment?.trim() || undefined,
+      updatedByEmail: access.email,
+      updatedByName: access.record?.fullName?.trim() || undefined,
+      updatedAt: now,
+    };
+    if (current) {
+      await ctx.db.patch(current._id, patch);
+      return current._id;
+    }
+    return await ctx.db.insert("administrationQuotaEntries", {
+      ...patch,
+      createdAt: now,
+    });
+  },
+});
+
 export const listAdministrationHistory = query({
   args: {
     monthKeys: v.array(v.string()),
@@ -1208,7 +1464,7 @@ export const listAdministrationHistory = query({
     const requests = (await ctx.db.query("requests").collect())
       .filter((request: any) => isAdministrationQuotaRequest(request))
       .filter((request: any) => {
-        const department = normalizeHodDepartment(request.department);
+        const department = getAdministrationQuotaDepartment(request);
         if (!visibility.canSeeAllDepartments && department && !visibleDepartments.includes(department as any)) {
           return false;
         }
@@ -1232,7 +1488,7 @@ export const listAdministrationHistory = query({
           key: `request:${request._id}:${monthKey}`,
           type: "request_usage" as const,
           monthKey,
-          departmentKey: normalizeHodDepartment(request.department),
+          departmentKey: getAdministrationQuotaDepartment(request),
           tagName: request.cfdTag?.trim() || "Без тега",
           requestId: request._id,
           requestCode: request.requestCode,

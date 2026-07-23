@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useParams, useRouter } from "next/navigation";
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { api } from "@/lib/convex";
 import { Button } from "@/components/ui/button";
@@ -703,6 +703,7 @@ export default function RequestDetailPage() {
   const [selectedFundingSource, setSelectedFundingSource] = useState("");
   const [selectedBusinessCategory, setSelectedBusinessCategory] = useState(EMPTY_BUSINESS_CATEGORY);
   const [customTagName, setCustomTagName] = useState("");
+  const [savingClassificationField, setSavingClassificationField] = useState<string | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
   const [finplanEntered, setFinplanEntered] = useState(false);
@@ -799,6 +800,37 @@ export default function RequestDetailPage() {
   const businessCategories = useQuery(
     api.businessCategories.list,
     isAuthenticated && canManageClassification ? {} : "skip",
+  );
+  const saveClassification = useCallback(
+    async (
+      field: "fundingSource" | "businessCategory" | "tag",
+      values: {
+        fundingSource?: string;
+        businessCategory?: string;
+        tag?: string;
+      },
+    ) => {
+      if (!data?.request) {
+        return;
+      }
+      setError(null);
+      setSavingClassificationField(field);
+      try {
+        await assignCfdTag({
+          id: data.request._id,
+          ...values,
+        });
+        router.refresh();
+      } catch (err) {
+        setError(getDisplayErrorMessage(err, "Не удалось сохранить классификацию заявки"));
+        setSelectedTag(data.request.cfdTag ?? "");
+        setSelectedFundingSource(normalizeFundingSource(data.request.fundingSource));
+        setSelectedBusinessCategory(data.request.businessCategory ?? EMPTY_BUSINESS_CATEGORY);
+      } finally {
+        setSavingClassificationField(null);
+      }
+    },
+    [assignCfdTag, data?.request, router],
   );
   const markOperationalFieldsDirty = () => {
     setOperationalFieldsSavedAt(null);
@@ -2364,7 +2396,13 @@ export default function RequestDetailPage() {
                     {canManageClassification ? (
                       <div className="space-y-2">
                         <Label>Источник финансирования</Label>
-                        <Select value={selectedFundingSource} onValueChange={setSelectedFundingSource}>
+                        <Select
+                          value={selectedFundingSource}
+                          onValueChange={(value) => {
+                            setSelectedFundingSource(value);
+                            void saveClassification("fundingSource", { fundingSource: value });
+                          }}
+                        >
                           <SelectTrigger>
                             <SelectValue placeholder="Выберите источник" />
                           </SelectTrigger>
@@ -2383,7 +2421,10 @@ export default function RequestDetailPage() {
                         <Label>Категория</Label>
                         <Select
                           value={selectedBusinessCategory}
-                          onValueChange={setSelectedBusinessCategory}
+                          onValueChange={(value) => {
+                            setSelectedBusinessCategory(value);
+                            void saveClassification("businessCategory", { businessCategory: value });
+                          }}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Выберите категорию" />
@@ -2400,7 +2441,14 @@ export default function RequestDetailPage() {
                     ) : null}
                     <div className="space-y-2">
                       <Label>Тег заявки</Label>
-                      <Select value={selectedTag || "none"} onValueChange={(value) => setSelectedTag(value === "none" ? "" : value)}>
+                      <Select
+                        value={selectedTag || "none"}
+                        onValueChange={(value) => {
+                          const nextTag = value === "none" ? "" : value;
+                          setSelectedTag(nextTag);
+                          void saveClassification("tag", { tag: nextTag });
+                        }}
+                      >
                         <SelectTrigger>
                           <SelectValue placeholder="Выберите тег" />
                         </SelectTrigger>
@@ -2425,8 +2473,10 @@ export default function RequestDetailPage() {
                     <Button
                       type="button"
                       variant="outline"
+                      disabled={!customTagName.trim() || savingClassificationField === "tag"}
                       onClick={async () => {
                         setError(null);
+                        setSavingClassificationField("tag");
                         try {
                           let nextTag = selectedTag || undefined;
                           if (customTagName.trim()) {
@@ -2441,18 +2491,21 @@ export default function RequestDetailPage() {
                           await assignCfdTag({
                             id: request._id,
                             tag: nextTag,
-                            fundingSource: canManageClassification ? selectedFundingSource : undefined,
-                            businessCategory: canManageClassification ? selectedBusinessCategory : undefined,
                           });
                           router.refresh();
                         } catch (err) {
                           setError(err instanceof Error ? err.message : "Не удалось сохранить тег");
+                        } finally {
+                          setSavingClassificationField(null);
                         }
                       }}
                     >
-                      Сохранить
+                      Создать и выбрать
                     </Button>
                   </div>
+                  {savingClassificationField ? (
+                    <div className="text-xs text-muted-foreground">Сохраняю...</div>
+                  ) : null}
                 </div>
               )}
               {canManageOperationalFields && (

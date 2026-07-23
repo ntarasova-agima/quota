@@ -379,6 +379,24 @@ const schema = defineSchema({
     .index("by_monthKey", ["monthKey"])
     .index("by_month_department", ["monthKey", "departmentKey"])
     .index("by_month_department_tag", ["monthKey", "departmentKey", "tagName"]),
+  administrationQuotaEntries: defineTable({
+    requestId: v.id("requests"),
+    lineKey: v.optional(v.string()),
+    monthKey: v.string(),
+    departmentKey: v.string(),
+    tagName: v.optional(v.string()),
+    counterparty: v.optional(v.string()),
+    workStatus: v.optional(v.string()),
+    result: v.optional(v.string()),
+    comment: v.optional(v.string()),
+    updatedByEmail: v.string(),
+    updatedByName: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_monthKey", ["monthKey"])
+    .index("by_month_department_tag", ["monthKey", "departmentKey", "tagName"]),
   quotaChangeLogs: defineTable({
     monthKey: v.string(),
     changeType: v.optional(v.union(v.literal("quota"), v.literal("manual_spent"))),
