@@ -549,7 +549,7 @@ export default function ApprovalsPage() {
                         <Link
                       key={request._id}
                       href={`/requests/${request._id}`}
-                      className="grid min-h-[126px] gap-3 rounded-lg border border-zinc-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.985)_0%,rgba(252,252,251,0.96)_100%)] px-4 py-3 text-sm transition-all hover:border-amber-200 hover:bg-[linear-gradient(135deg,rgba(252,249,244,0.96)_0%,rgba(249,246,241,0.94)_100%)] hover:shadow-[0_10px_30px_rgba(63,63,70,0.08)] md:grid-cols-[minmax(0,1fr)_auto_auto]"
+                      className="grid min-h-[126px] gap-3 rounded-lg border border-zinc-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.985)_0%,rgba(252,252,251,0.96)_100%)] px-4 py-3 text-sm transition-all hover:border-amber-200 hover:bg-[linear-gradient(135deg,rgba(252,249,244,0.96)_0%,rgba(249,246,241,0.94)_100%)] hover:shadow-[0_10px_30px_rgba(63,63,70,0.08)] md:grid-cols-[minmax(0,1fr)_190px_320px]"
                         >
                       <div className="space-y-2">
                         <div>
