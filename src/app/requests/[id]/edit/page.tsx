@@ -82,6 +82,7 @@ import {
   MAX_REQUEST_ATTACHMENTS,
   MAX_REQUEST_ATTACHMENT_SIZE,
 } from "@/lib/requestAttachments";
+import { parseEditConfirmationFromErrorMessage } from "@/lib/editConfirmation";
 
 type PendingEditConfirmation = {
   submit: boolean;
@@ -139,6 +140,7 @@ export default function NewRequestPage() {
   const [vatInputSource, setVatInputSource] = useState<VatAmountSource>("without");
   const [currency, setCurrency] = useState("RUB");
   const [fundingSource, setFundingSource] = useState("Квоты AGIMA");
+  const [cfdTag, setCfdTag] = useState("");
   const [justification, setJustification] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
@@ -233,7 +235,7 @@ export default function NewRequestPage() {
   const showTransitFields = fundingSource === "Отгрузки проекта";
   const wrappedSelectTriggerClass =
     "h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left *:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:pr-6 *:data-[slot=select-value]:whitespace-normal *:data-[slot=select-value]:break-words *:data-[slot=select-value]:leading-snug";
-  const headerFieldLabelClass = "min-h-11 items-start leading-snug";
+  const headerFieldLabelClass = "items-start leading-snug";
   const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
   const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(category), [category]);
   const requestSupportsSpecialists = useMemo(() => supportsRequestSpecialists(category), [category]);
@@ -244,9 +246,22 @@ export default function NewRequestPage() {
   const canEditSpecialists = requestSupportsSpecialists || requestHadSpecialists;
   const isWelcomeBonus = category === "Welcome-бонус";
   const selectedDepartment = requestArea;
+  const availableTags = useQuery(api.cfdTags.list, { department: selectedDepartment });
   const categoryOptions = useMemo(
     () => getCategoriesForDepartment(selectedDepartment),
     [selectedDepartment],
+  );
+  const displayedCategoryOptions = useMemo(
+    () => Array.from(new Set([...categoryOptions, ...(category ? [category] : [])])),
+    [category, categoryOptions],
+  );
+  const displayedFundingSources = useMemo(
+    () => Array.from(new Set([...FUNDING_SOURCES, ...(fundingSource ? [fundingSource] : [])])),
+    [fundingSource],
+  );
+  const displayedTagNames = useMemo(
+    () => Array.from(new Set([...(availableTags ?? []).map((tag) => tag.name), ...(cfdTag ? [cfdTag] : [])])),
+    [availableTags, cfdTag],
   );
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
   const contractAttachments = useMemo(
@@ -287,6 +302,7 @@ export default function NewRequestPage() {
     setVatInputSource("without");
     setCurrency(request.currency);
     setFundingSource(normalizedFundingSource);
+    setCfdTag(request.cfdTag ?? "");
     setJustification([request.justification, request.details].filter(Boolean).join("\n\n"));
     setInvestmentReturn(request.investmentReturn ?? "");
     setClientName(request.clientName ?? "");
@@ -884,6 +900,7 @@ export default function NewRequestPage() {
         vatRate: resolvedAmounts.vatRate,
         currency,
         fundingSource,
+        cfdTag: cfdTag || undefined,
         justification,
         investmentReturn: investmentReturn.trim() || undefined,
         clientName,
@@ -956,20 +973,15 @@ export default function NewRequestPage() {
       router.push(`/requests/${requestId}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось сохранить заявку";
-      if (message.startsWith("CONFIRM_EDIT_EFFECTS::")) {
-        try {
-          const payload = JSON.parse(message.replace("CONFIRM_EDIT_EFFECTS::", ""));
-          setPendingConfirmation({
-            submit,
-            confirmationLines: payload.confirmationLines ?? [],
-            infoLines: payload.infoLines ?? [],
-          });
-          setError(null);
-          return;
-        } catch {
-          setError("Не удалось определить влияние изменений на согласование");
-          return;
-        }
+      const confirmationPayload = parseEditConfirmationFromErrorMessage(message);
+      if (confirmationPayload) {
+        setPendingConfirmation({
+          submit,
+          confirmationLines: confirmationPayload.confirmationLines,
+          infoLines: confirmationPayload.infoLines,
+        });
+        setError(null);
+        return;
       }
       if (message === "Так не бывает") {
         setError("Выбран неверный источник финансирования или тип заявки");
@@ -1001,7 +1013,7 @@ export default function NewRequestPage() {
             </CardHeader>
             <CardContent>
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
-                <div className="grid gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
                   <div className="space-y-2">
                     <FieldLabel required className={headerFieldLabelClass}>Цех</FieldLabel>
                     <Input
@@ -1021,7 +1033,7 @@ export default function NewRequestPage() {
                         <SelectValue placeholder="Выберите тип заявки" />
                       </SelectTrigger>
                       <SelectContent>
-                        {categoryOptions.map((item) => (
+                        {displayedCategoryOptions.map((item) => (
                           <SelectItem key={item} value={item} className="whitespace-normal">
                             {item}
                           </SelectItem>
@@ -1039,7 +1051,7 @@ export default function NewRequestPage() {
                         <SelectValue placeholder="Выберите источник" />
                       </SelectTrigger>
                       <SelectContent>
-                        {FUNDING_SOURCES.map((item) => (
+                        {displayedFundingSources.map((item) => (
                           <SelectItem key={item} value={item}>
                             {item}
                           </SelectItem>
@@ -1049,6 +1061,22 @@ export default function NewRequestPage() {
                     {fundingError && (
                       <p className="text-xs text-destructive">{fundingError}</p>
                     )}
+                  </div>
+                  <div className="space-y-2">
+                    <FieldLabel className={headerFieldLabelClass}>Тег заявки (необязательно)</FieldLabel>
+                    <Select value={cfdTag || "none"} onValueChange={(value) => setCfdTag(value === "none" ? "" : value)}>
+                      <SelectTrigger className={wrappedSelectTriggerClass}>
+                        <SelectValue placeholder="Выберите тег" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Не выбран</SelectItem>
+                        {displayedTagNames.map((tagName) => (
+                          <SelectItem key={tagName} value={tagName}>
+                            {tagName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 

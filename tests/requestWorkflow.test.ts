@@ -19,17 +19,19 @@ describe("requestWorkflow", () => {
       getEffectiveRequiredHodDepartments({
         category: "Закупка",
         requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT, "Разработка"],
+        requiredRoles: ["HOD"],
       }),
-    ).toEqual([FINANCE_LEGAL_DEPARTMENT, "Разработка", ACCOUNTING_REQUEST_AREA]);
+    ).toEqual([FINANCE_LEGAL_DEPARTMENT, "Разработка"]);
   });
 
-  it("adds HOD role when finance HOD is required", () => {
+  it("adds HOD role when finance HOD is selected manually", () => {
     const departments = getEffectiveRequiredHodDepartments({
       category: "Закупка",
       requiredHodDepartments: [FINANCE_LEGAL_DEPARTMENT],
+      requiredRoles: ["HOD"],
     });
 
-    expect(departments).toEqual([FINANCE_LEGAL_DEPARTMENT, ACCOUNTING_REQUEST_AREA]);
+    expect(departments).toEqual([FINANCE_LEGAL_DEPARTMENT]);
     expect(
       getEffectiveRequiredRoles({
         requiredRoles: [],
@@ -162,7 +164,7 @@ describe("requestWorkflow", () => {
     ).not.toContain("NBD");
   });
 
-  it("requires Accounting HOD for purchase, gifts, informal events, and merch", () => {
+  it("does not require Accounting HOD for account request categories", () => {
     for (const category of [
       PURCHASE_CATEGORY,
       "Подарки",
@@ -174,7 +176,7 @@ describe("requestWorkflow", () => {
           category,
           requiredHodDepartments: [],
         }),
-      ).toContain(ACCOUNTING_REQUEST_AREA);
+      ).not.toContain(ACCOUNTING_REQUEST_AREA);
     }
   });
 

@@ -1,16 +1,7 @@
 import {
-  ACCOUNTING_REQUEST_AREA,
   CLIENT_SERVICES_TRANSIT_CATEGORY,
-  PURCHASE_CATEGORY,
   normalizeRequestCategory,
 } from "./requestRules";
-
-const ACCOUNTING_HOD_REQUIRED_CATEGORIES = [
-  PURCHASE_CATEGORY,
-  "Подарки",
-  "Неформальное мероприятие",
-  "Совместный мерч",
-] as const;
 
 const NBD_REQUIRED_CATEGORIES = [
   "Welcome-бонус",
@@ -20,17 +11,16 @@ const NBD_REQUIRED_CATEGORIES = [
 export function requiresAccountingHodApproval(params: {
   category: string;
 }) {
-  const normalizedCategory = normalizeRequestCategory(params.category);
-  return ACCOUNTING_HOD_REQUIRED_CATEGORIES.includes(
-    normalizedCategory as (typeof ACCOUNTING_HOD_REQUIRED_CATEGORIES)[number],
-  );
+  void params;
+  return false;
 }
 
 export function getAutoRequiredHodDepartmentsForRequest(params: {
   category: string;
   specialists?: unknown[];
 }) {
-  return requiresAccountingHodApproval(params) ? [ACCOUNTING_REQUEST_AREA] : [];
+  void params;
+  return [];
 }
 
 export function getAutoRequiredRolesForRequest(params: {

@@ -1446,6 +1446,7 @@ function diffRequestFields(previous: any, next: any) {
     "vatRate",
     "currency",
     "fundingSource",
+    "cfdTag",
     "counterparty",
     "paymentMethod",
     "contractLink",
@@ -2882,6 +2883,7 @@ export const previewEditImpact = query({
       vatRate: effectiveAmounts.vatRate,
       currency: args.currency,
       fundingSource: normalizedFundingSource,
+      cfdTag: args.cfdTag?.trim() || undefined,
       counterparty: args.counterparty,
       paymentMethod: args.paymentMethod,
       contractLink: args.contractLink?.trim() || undefined,
@@ -2977,6 +2979,18 @@ export const editRequest = mutation({
     );
     const normalizedDepartment = normalizeHodDepartment(args.department);
     const normalizedFundingSource = normalizeFundingSource(args.fundingSource);
+    const cfdTag = args.cfdTag?.trim() || undefined;
+    if (cfdTag) {
+      const existingTag = (await ctx.db.query("cfdTags").collect()).find(
+        (tag: any) =>
+          tag.name === cfdTag &&
+          tag.active &&
+          normalizeHodDepartment(tag.department) === normalizedDepartment,
+      );
+      if (!existingTag && cfdTag !== TRANSIT_TAG_NAME) {
+        throw new Error("Тег не найден");
+      }
+    }
     const requestArea = getRequestAreaForDepartment(normalizedDepartment);
     const effectiveRequiredHodDepartments = getEffectiveRequiredHodDepartments({
       category: normalizedCategory,
@@ -3026,6 +3040,7 @@ export const editRequest = mutation({
       vatRate: effectiveAmounts.vatRate,
       currency: args.currency,
       fundingSource: normalizedFundingSource,
+      cfdTag,
       counterparty: args.counterparty,
       paymentMethod: args.paymentMethod,
       contractLink: args.contractLink?.trim() || undefined,
