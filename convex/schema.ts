@@ -397,6 +397,55 @@ const schema = defineSchema({
     .index("by_request", ["requestId"])
     .index("by_monthKey", ["monthKey"])
     .index("by_month_department_tag", ["monthKey", "departmentKey", "tagName"]),
+  administrationManualExpenses: defineTable({
+    monthKey: v.string(),
+    departmentKey: v.string(),
+    tagName: v.string(),
+    clientName: v.string(),
+    counterparties: v.array(
+      v.object({
+        id: v.optional(v.string()),
+        name: v.string(),
+        amount: v.number(),
+      }),
+    ),
+    amount: v.number(),
+    workStatus: v.optional(v.string()),
+    result: v.optional(v.string()),
+    comment: v.optional(v.string()),
+    createdByEmail: v.string(),
+    createdByName: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_monthKey", ["monthKey"])
+    .index("by_month_department_tag", ["monthKey", "departmentKey", "tagName"]),
+  administrationQuotaRequestStates: defineTable({
+    requestId: v.id("requests"),
+    workStatus: v.optional(v.string()),
+    result: v.optional(v.string()),
+    updatedByEmail: v.string(),
+    updatedByName: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_request", ["requestId"]),
+  administrationQuotaTransfers: defineTable({
+    sourceType: v.union(v.literal("request"), v.literal("manual")),
+    requestId: v.optional(v.id("requests")),
+    manualExpenseId: v.optional(v.id("administrationManualExpenses")),
+    lineKey: v.string(),
+    sourceMonthKey: v.string(),
+    targetMonthKey: v.string(),
+    amount: v.number(),
+    createdByEmail: v.string(),
+    createdByName: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_manual_expense", ["manualExpenseId"])
+    .index("by_source_month", ["sourceMonthKey"])
+    .index("by_target_month", ["targetMonthKey"]),
   quotaChangeLogs: defineTable({
     monthKey: v.string(),
     changeType: v.optional(v.union(v.literal("quota"), v.literal("manual_spent"))),

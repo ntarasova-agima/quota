@@ -19,6 +19,7 @@ import {
 import { HOD_DEPARTMENTS, normalizeHodDepartment } from "../src/lib/departments";
 import { hasAnyRole, hasFinanceApproverRole } from "../src/lib/financeRole";
 import { DEFAULT_VAT_RATE, getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
+import { getQuotaAllocations, getQuotaAllocationBalance, roundQuotaAmount } from "../src/lib/quotaTransfers";
 
 const ADMINISTRATION_TOTAL_KEY = "__total__";
 
@@ -785,6 +786,9 @@ export const listAdministrationByMonthKeys = query({
     const requests = await ctx.db.query("requests").collect();
     const approvals = await ctx.db.query("approvals").collect();
     const savedEntries = await ctx.db.query("administrationQuotaEntries").collect();
+    const manualExpenses = await ctx.db.query("administrationManualExpenses").collect();
+    const requestStates = await ctx.db.query("administrationQuotaRequestStates").collect();
+    const quotaTransfers = await ctx.db.query("administrationQuotaTransfers").collect();
     const approvalsByRequest = new Map<string, any[]>();
     for (const approval of approvals) {
       const list = approvalsByRequest.get(approval.requestId) ?? [];
@@ -797,13 +801,22 @@ export const listAdministrationByMonthKeys = query({
         entry,
       ]),
     );
-    const usageByMonth = getAdministrationUsage(requests, {
-      department: departmentFilter,
-      tag: args.tag,
-    });
+    const requestStateMap = new Map(requestStates.map((state: any) => [String(state.requestId), state]));
     const quotaEntriesByMonth = new Map<string, any[]>();
     const welcomeBonusByMonth = new Map<string, { amountWithoutVat: number; amountWithVat: number }>();
     const monthSet = new Set(args.monthKeys);
+    const visibleManualExpenses = manualExpenses.filter((expense: any) => {
+      if (!visibility.canSeeAllDepartments && !visibleDepartments.includes(expense.departmentKey as any)) {
+        return false;
+      }
+      if (departmentFilter && expense.departmentKey !== departmentFilter) {
+        return false;
+      }
+      if (args.tag !== undefined && expense.tagName !== args.tag) {
+        return false;
+      }
+      return true;
+    });
     for (const request of requests) {
       const department = getAdministrationQuotaDepartment(request);
       if (!visibility.canSeeAllDepartments && !visibleDepartments.includes(department as any)) {
@@ -833,15 +846,32 @@ export const listAdministrationByMonthKeys = query({
             } => Boolean(allocation.monthKey),
           )
         : getApprovedRequestQuotaAllocations(request);
-      for (const allocation of allocations) {
-        if (!monthSet.has(allocation.monthKey)) {
-          continue;
-        }
-        const list = quotaEntriesByMonth.get(allocation.monthKey) ?? [];
-        const counterpartyLines = isWelcomeBonus
-          ? [{ lineKey: "request", counterparty: request.counterparty?.trim() || "", amount: allocation.amountWithoutVat }]
-          : buildRequestCounterpartyLines(request, allocation.amountWithoutVat);
-        counterpartyLines.forEach((line: any, lineIndex: number) => {
+      const baseAllocation = allocations[0];
+      if (!baseAllocation) {
+        continue;
+      }
+      const counterpartyLines = isWelcomeBonus
+        ? [{ lineKey: "request", counterparty: request.counterparty?.trim() || "", amount: baseAllocation.amountWithoutVat }]
+        : buildRequestCounterpartyLines(request, baseAllocation.amountWithoutVat);
+      const requestState = requestStateMap.get(String(request._id));
+      const vatRatio = baseAllocation.amountWithoutVat > 0
+        ? baseAllocation.amountWithVat / baseAllocation.amountWithoutVat
+        : 1;
+      counterpartyLines.forEach((line: any, lineIndex: number) => {
+        const transfers = isWelcomeBonus
+          ? []
+          : quotaTransfers.filter(
+              (transfer: any) =>
+                transfer.sourceType === "request" &&
+                String(transfer.requestId) === String(request._id) &&
+                transfer.lineKey === line.lineKey,
+            );
+        const lineAllocations = getQuotaAllocations(baseAllocation.monthKey, line.amount, transfers);
+        for (const allocation of lineAllocations) {
+          if (!monthSet.has(allocation.monthKey)) {
+            continue;
+          }
+          const list = quotaEntriesByMonth.get(allocation.monthKey) ?? [];
           const savedEntry = entryMap.get(`${request._id}:${allocation.monthKey}:${line.lineKey}`);
           list.push({
             key: `${request._id}:${allocation.monthKey}:${line.lineKey}`,
@@ -855,29 +885,78 @@ export const listAdministrationByMonthKeys = query({
             clientName: request.clientName,
             assignmentTitle: request.title ?? request.justification,
             counterparty: line.counterparty,
-            amount: line.amount,
-            amountWithVat:
-              allocation.amountWithoutVat > 0
-                ? allocation.amountWithVat * (line.amount / allocation.amountWithoutVat)
-                : 0,
+            amount: allocation.amount,
+            amountWithVat: allocation.amount * vatRatio,
             currency: "RUB",
             comment: savedEntry?.comment ?? "",
-            workStatus: savedEntry?.workStatus ?? "",
-            result: savedEntry?.result ?? "",
+            workStatus: requestState?.workStatus ?? savedEntry?.workStatus ?? "",
+            result: requestState?.result ?? savedEntry?.result ?? "",
             isFirstForRequest: lineIndex === 0,
             requestRowSpan: counterpartyLines.length,
             isWelcomeBonus,
+            transferredFromMonthKeys: allocation.transferredFromMonthKeys,
+            canTransfer: !isWelcomeBonus && canEditAdministrationQuotaRow(roleRecord, department),
             canEditEntry: canEditAdministrationQuotaRow(roleRecord, department) || roleRecord?.roles?.includes("NBD"),
-            updatedAt: savedEntry?.updatedAt ?? request.updatedAt ?? request.createdAt,
+            updatedAt: requestState?.updatedAt ?? savedEntry?.updatedAt ?? request.updatedAt ?? request.createdAt,
           });
-        });
-        quotaEntriesByMonth.set(allocation.monthKey, list);
-        if (isWelcomeBonus) {
-          const current = welcomeBonusByMonth.get(allocation.monthKey) ?? emptyUsage();
-          addUsage(current, allocation);
-          welcomeBonusByMonth.set(allocation.monthKey, current);
+          quotaEntriesByMonth.set(allocation.monthKey, list);
+          if (isWelcomeBonus) {
+            const current = welcomeBonusByMonth.get(allocation.monthKey) ?? emptyUsage();
+            addUsage(current, {
+              amountWithoutVat: allocation.amount,
+              amountWithVat: allocation.amount * vatRatio,
+            });
+            welcomeBonusByMonth.set(allocation.monthKey, current);
+          }
         }
-      }
+      });
+    }
+    for (const expense of visibleManualExpenses) {
+      const counterparties = expense.counterparties.length
+        ? expense.counterparties
+        : [{ name: "", amount: expense.amount }];
+      counterparties.forEach((counterparty: { id?: string; name: string; amount: number }, lineIndex: number) => {
+        const lineKey = counterparty.id?.trim() || `counterparty:${lineIndex}`;
+        const transfers = quotaTransfers.filter(
+          (transfer: any) =>
+            transfer.sourceType === "manual" &&
+            String(transfer.manualExpenseId) === String(expense._id) &&
+            transfer.lineKey === lineKey,
+        );
+        const lineAllocations = getQuotaAllocations(expense.monthKey, counterparty.amount, transfers);
+        for (const allocation of lineAllocations) {
+          if (!monthSet.has(allocation.monthKey)) {
+            continue;
+          }
+          const list = quotaEntriesByMonth.get(allocation.monthKey) ?? [];
+          list.push({
+            key: `manual:${expense._id}:${allocation.monthKey}:${lineKey}`,
+            groupKey: `manual:${expense._id}`,
+            lineKey,
+            manualExpenseId: expense._id,
+            monthKey: allocation.monthKey,
+            departmentKey: expense.departmentKey,
+            tagName: expense.tagName,
+            clientName: expense.clientName,
+            requestTitle: "Добавлено вручную",
+            counterparty: counterparty.name,
+            amount: allocation.amount,
+            amountWithVat: allocation.amount,
+            currency: "RUB",
+            comment: expense.comment ?? "",
+            workStatus: expense.workStatus ?? "",
+            result: expense.result ?? "",
+            isFirstForRequest: lineIndex === 0,
+            requestRowSpan: counterparties.length,
+            isManual: true,
+            transferredFromMonthKeys: allocation.transferredFromMonthKeys,
+            canTransfer: canEditAdministrationQuotaRow(roleRecord, expense.departmentKey),
+            canEditEntry: canEditAdministrationQuotaRow(roleRecord, expense.departmentKey),
+            updatedAt: expense.updatedAt,
+          });
+          quotaEntriesByMonth.set(allocation.monthKey, list);
+        }
+      });
     }
     const rowMap = new Map(
       quotaRows.map((row: any) => [
@@ -903,20 +982,16 @@ export const listAdministrationByMonthKeys = query({
     return args.monthKeys.map((key) => {
       const { year, month } = monthInfoFromKey(key);
       const totalRow = rowMap.get(`${key}:${ADMINISTRATION_TOTAL_KEY}:`);
-      const monthUsage = usageByMonth.get(key);
       const departmentRows = visibleDepartments
         .filter((department: string) => !departmentFilter || department === departmentFilter)
         .map((department: string) => {
           const row = rowMap.get(`${key}:${department}:`);
-          const requestSpent = monthUsage?.departments.get(department) ?? emptyUsage();
-          const spentTags = monthUsage?.tagsByDepartment.get(department) ?? new Map();
           const tagNames = Array.from(
             new Set([
               ...(activeTagsByDepartment.get(department) ?? []),
               ...quotaRows
                 .filter((quotaRow: any) => quotaRow.monthKey === key && quotaRow.departmentKey === department && quotaRow.tagName)
                 .map((quotaRow: any) => quotaRow.tagName),
-              ...Array.from(spentTags.keys()),
               ...(quotaEntriesByMonth.get(key) ?? [])
                 .filter((entry: any) => entry.departmentKey === department)
                 .map((entry: any) => entry.tagName),
@@ -927,14 +1002,26 @@ export const listAdministrationByMonthKeys = query({
             .sort((a, b) => a.localeCompare(b, "ru"))
             .map((tagName) => {
               const tagRow = rowMap.get(`${key}:${department}:${tagName}`);
-              const requestTagSpent = spentTags.get(tagName) ?? emptyUsage();
               const manualTagSpent = getManualSpentPair(tagRow);
               const entries = (quotaEntriesByMonth.get(key) ?? []).filter(
                 (entry: any) =>
                   entry.departmentKey === department &&
                   (entry.tagName ?? "Без тега") === tagName,
               );
-              const tagSpent = requestTagSpent;
+              const entrySpent = entries
+                .filter((entry: any) => !entry.isWelcomeBonus)
+                .reduce(
+                  (total: { amountWithoutVat: number; amountWithVat: number }, entry: any) => {
+                    total.amountWithoutVat += entry.amount ?? 0;
+                    total.amountWithVat += entry.amountWithVat ?? entry.amount ?? 0;
+                    return total;
+                  },
+                  emptyUsage(),
+                );
+              const tagSpent = {
+                amountWithoutVat: entrySpent.amountWithoutVat + manualTagSpent.amountWithoutVat,
+                amountWithVat: entrySpent.amountWithVat + manualTagSpent.amountWithVat,
+              };
               const quota = quotaValue(tagRow);
               const quotaWithVat = quotaValueWithVat(tagRow);
               const tagIssues: string[] = [];
@@ -963,7 +1050,13 @@ export const listAdministrationByMonthKeys = query({
             });
           const tagAllocated = tagRows.reduce((sum, tagRow) => sum + tagRow.quota, 0);
           const tagAllocatedWithVat = tagRows.reduce((sum, tagRow) => sum + (tagRow.quotaWithVat ?? tagRow.quota), 0);
-          const spent = requestSpent;
+          const spent = tagRows.reduce(
+            (total, tagRow) => ({
+              amountWithoutVat: total.amountWithoutVat + tagRow.spent,
+              amountWithVat: total.amountWithVat + tagRow.spentWithVat,
+            }),
+            emptyUsage(),
+          );
           const quota = quotaValue(row);
           const quotaWithVat = quotaValueWithVat(row);
           const departmentIssues: string[] = [];
@@ -998,8 +1091,13 @@ export const listAdministrationByMonthKeys = query({
         (sum: number, row: any) => sum + (row.quotaWithVat ?? row.quota),
         0,
       );
-      const totalRequestSpent = monthUsage?.total ?? emptyUsage();
-      const totalSpent = totalRequestSpent;
+      const totalSpent = departmentRows.reduce(
+        (total: { amountWithoutVat: number; amountWithVat: number }, department: any) => ({
+          amountWithoutVat: total.amountWithoutVat + department.spent,
+          amountWithVat: total.amountWithVat + department.spentWithVat,
+        }),
+        emptyUsage(),
+      );
       const totalQuota = quotaValue(totalRow);
       const totalQuotaWithVat = quotaValueWithVat(totalRow);
       const totalIssues: string[] = [];
@@ -1340,6 +1438,224 @@ export const updateAdministrationManualSpent = mutation({
   },
 });
 
+export const createAdministrationManualExpense = mutation({
+  args: {
+    monthKey: v.string(),
+    departmentKey: v.string(),
+    tagName: v.string(),
+    clientName: v.string(),
+    counterparties: v.array(
+      v.object({
+        name: v.string(),
+        amount: v.number(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const access = await ensureAdministrationQuotaEditor(ctx);
+    const departmentKey = normalizeHodDepartment(args.departmentKey);
+    const tagName = args.tagName.trim();
+    const clientName = args.clientName.trim();
+    const counterparties = args.counterparties.map((counterparty) => ({
+      name: counterparty.name.trim(),
+      amount: counterparty.amount,
+    }));
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(args.monthKey)) {
+      throw new Error("Некорректный месяц");
+    }
+    if (!departmentKey || !HOD_DEPARTMENTS.includes(departmentKey as any)) {
+      throw new Error("Укажите цех");
+    }
+    if (!canEditAdministrationQuotaRow(access.record, departmentKey)) {
+      throw new Error("Недостаточно прав для добавления затраты в эту квоту");
+    }
+    if (!tagName || tagName === "Без тега") {
+      throw new Error("Выберите тег");
+    }
+    if (!clientName) {
+      throw new Error("Укажите клиента");
+    }
+    if (!counterparties.length || counterparties.some((counterparty) => !counterparty.name)) {
+      throw new Error("Добавьте хотя бы одного контрагента");
+    }
+    if (
+      counterparties.some(
+        (counterparty) => !Number.isFinite(counterparty.amount) || counterparty.amount <= 0,
+      )
+    ) {
+      throw new Error("Укажите положительную сумму для каждого контрагента");
+    }
+    const matchingTag = await ctx.db
+      .query("cfdTags")
+      .filter((q: any) =>
+        q.and(
+          q.eq(q.field("department"), departmentKey),
+          q.eq(q.field("name"), tagName),
+          q.eq(q.field("active"), true),
+        ),
+      )
+      .first();
+    if (!matchingTag) {
+      throw new Error("Выбранный тег больше недоступен");
+    }
+    const now = Date.now();
+    return await ctx.db.insert("administrationManualExpenses", {
+      monthKey: args.monthKey,
+      departmentKey,
+      tagName,
+      clientName,
+      counterparties: counterparties.map((counterparty, index) => ({
+        id: `manual-${now}-${index}`,
+        ...counterparty,
+      })),
+      amount: counterparties.reduce((sum, counterparty) => sum + counterparty.amount, 0),
+      createdByEmail: access.email,
+      createdByName: access.record?.fullName?.trim() || undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const updateAdministrationManualExpense = mutation({
+  args: {
+    id: v.id("administrationManualExpenses"),
+    workStatus: v.optional(v.string()),
+    result: v.optional(v.string()),
+    comment: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const access = await ensureAdministrationQuotaEditor(ctx);
+    const expense = await ctx.db.get(args.id);
+    if (!expense) {
+      throw new Error("Ручная затрата не найдена");
+    }
+    if (!canEditAdministrationQuotaRow(access.record, expense.departmentKey)) {
+      throw new Error("Недостаточно прав для редактирования этой затраты");
+    }
+    await ctx.db.patch(expense._id, {
+      workStatus: args.workStatus?.trim() || undefined,
+      result: args.result?.trim() || undefined,
+      comment: args.comment?.trim() || undefined,
+      updatedAt: Date.now(),
+    });
+    return expense._id;
+  },
+});
+
+export const createAdministrationQuotaTransfer = mutation({
+  args: {
+    sourceType: v.union(v.literal("request"), v.literal("manual")),
+    requestId: v.optional(v.id("requests")),
+    manualExpenseId: v.optional(v.id("administrationManualExpenses")),
+    lineKey: v.string(),
+    sourceMonthKey: v.string(),
+    targetMonthKey: v.string(),
+    amount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const access = await ensureAdministrationQuotaEditor(ctx);
+    const monthPattern = /^\d{4}-(0[1-9]|1[0-2])$/;
+    if (!monthPattern.test(args.sourceMonthKey) || !monthPattern.test(args.targetMonthKey)) {
+      throw new Error("Некорректный месяц переноса");
+    }
+    if (args.sourceMonthKey === args.targetMonthKey) {
+      throw new Error("Выберите другой месяц");
+    }
+    const amount = roundQuotaAmount(args.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Сумма переноса должна быть больше нуля");
+    }
+
+    let departmentKey: string;
+    let baseMonthKey: string;
+    let baseAmount: number;
+    let existingTransfers: any[];
+
+    if (args.sourceType === "request") {
+      if (!args.requestId) {
+        throw new Error("Заявка не найдена");
+      }
+      const request = await ctx.db.get(args.requestId);
+      if (!request || !isQuotaVisibleRequest(request) || isWelcomeBonusRequest(request)) {
+        throw new Error("Эту заявку нельзя переносить между квотами");
+      }
+      departmentKey = getAdministrationQuotaDepartment(request);
+      const baseAllocation = getApprovedRequestQuotaAllocations(request)[0];
+      if (!baseAllocation) {
+        throw new Error("У заявки нет согласованной суммы для квоты");
+      }
+      const line = buildRequestCounterpartyLines(request, baseAllocation.amountWithoutVat).find(
+        (candidate: any) => candidate.lineKey === args.lineKey,
+      );
+      if (!line) {
+        throw new Error("Контрагент больше не найден в заявке");
+      }
+      baseMonthKey = baseAllocation.monthKey;
+      baseAmount = line.amount;
+      existingTransfers = await ctx.db
+        .query("administrationQuotaTransfers")
+        .withIndex("by_request", (q: any) => q.eq("requestId", args.requestId))
+        .collect();
+    } else {
+      if (!args.manualExpenseId) {
+        throw new Error("Ручная затрата не найдена");
+      }
+      const expense = await ctx.db.get(args.manualExpenseId);
+      if (!expense) {
+        throw new Error("Ручная затрата не найдена");
+      }
+      departmentKey = expense.departmentKey;
+      const line = expense.counterparties
+        .map((counterparty: any, index: number) => ({
+          ...counterparty,
+          lineKey: counterparty.id?.trim() || `counterparty:${index}`,
+        }))
+        .find((candidate: any) => candidate.lineKey === args.lineKey);
+      if (!line) {
+        throw new Error("Контрагент больше не найден в ручной затрате");
+      }
+      baseMonthKey = expense.monthKey;
+      baseAmount = line.amount;
+      existingTransfers = await ctx.db
+        .query("administrationQuotaTransfers")
+        .withIndex("by_manual_expense", (q: any) => q.eq("manualExpenseId", args.manualExpenseId))
+        .collect();
+    }
+
+    if (!canEditAdministrationQuotaRow(access.record, departmentKey)) {
+      throw new Error("Недостаточно прав для переноса этой затраты");
+    }
+    const lineTransfers = existingTransfers.filter(
+      (transfer: any) => transfer.sourceType === args.sourceType && transfer.lineKey === args.lineKey,
+    );
+    const available = getQuotaAllocationBalance(
+      baseMonthKey,
+      baseAmount,
+      lineTransfers,
+      args.sourceMonthKey,
+    );
+    if (amount > available) {
+      throw new Error(`В выбранном месяце доступно только ${available}`);
+    }
+
+    const now = Date.now();
+    return await ctx.db.insert("administrationQuotaTransfers", {
+      sourceType: args.sourceType,
+      requestId: args.sourceType === "request" ? args.requestId : undefined,
+      manualExpenseId: args.sourceType === "manual" ? args.manualExpenseId : undefined,
+      lineKey: args.lineKey,
+      sourceMonthKey: args.sourceMonthKey,
+      targetMonthKey: args.targetMonthKey,
+      amount,
+      createdByEmail: access.email,
+      createdByName: access.record?.fullName?.trim() || undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
 export const updateAdministrationQuotaEntry = mutation({
   args: {
     requestId: v.id("requests"),
@@ -1380,6 +1696,28 @@ export const updateAdministrationQuotaEntry = mutation({
       throw new Error("Цех строки не совпадает с заявкой");
     }
 
+    const now = Date.now();
+    const existingState = await ctx.db
+      .query("administrationQuotaRequestStates")
+      .withIndex("by_request", (q: any) => q.eq("requestId", args.requestId))
+      .first();
+    const statePatch = {
+      requestId: args.requestId,
+      workStatus: args.workStatus?.trim() || undefined,
+      result: args.result?.trim() || undefined,
+      updatedByEmail: access.email,
+      updatedByName: access.record?.fullName?.trim() || undefined,
+      updatedAt: now,
+    };
+    if (existingState) {
+      await ctx.db.patch(existingState._id, statePatch);
+    } else {
+      await ctx.db.insert("administrationQuotaRequestStates", {
+        ...statePatch,
+        createdAt: now,
+      });
+    }
+
     const existing = await ctx.db
       .query("administrationQuotaEntries")
       .withIndex("by_request", (q: any) => q.eq("requestId", args.requestId))
@@ -1388,7 +1726,6 @@ export const updateAdministrationQuotaEntry = mutation({
     const current = existing.find(
       (entry: any) => entry.monthKey === args.monthKey && (entry.lineKey ?? "request") === lineKey,
     );
-    const now = Date.now();
     const patch = {
       requestId: args.requestId,
       lineKey,

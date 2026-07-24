@@ -3,9 +3,18 @@
 import Link from "next/link";
 import { type SyntheticEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/convex";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,6 +43,8 @@ const MONTH_NAMES = [
   "декабрь",
 ];
 
+const FIRST_QUOTA_YEAR = 2025;
+
 type QuotaEditableRow = {
   monthKey: string;
   departmentKey: string;
@@ -57,8 +68,10 @@ type QuotaEditableRow = {
 
 type QuotaEntryRow = {
   key: string;
+  groupKey?: string;
   lineKey?: string;
-  requestId: string;
+  requestId?: string;
+  manualExpenseId?: string;
   monthKey: string;
   departmentKey: string;
   tagName?: string;
@@ -75,6 +88,9 @@ type QuotaEntryRow = {
   isFirstForRequest?: boolean;
   requestRowSpan?: number;
   isWelcomeBonus?: boolean;
+  isManual?: boolean;
+  transferredFromMonthKeys?: string[];
+  canTransfer?: boolean;
   canEditEntry?: boolean;
 };
 
@@ -573,11 +589,396 @@ function SheetMoneyInput({
   );
 }
 
+type ManualExpenseDraftLine = {
+  id: number;
+  name: string;
+  amount: string;
+};
+
+function ManualExpenseForm({
+  monthKey,
+  tags,
+  onCreate,
+}: {
+  monthKey: string;
+  tags: QuotaEditableRow[];
+  onCreate: (values: {
+    monthKey: string;
+    departmentKey: string;
+    tagName: string;
+    clientName: string;
+    counterparties: Array<{ name: string; amount: number }>;
+  }) => Promise<void>;
+}) {
+  const editableTags = tags.filter(
+    (tag) => tag.canEdit && tag.tagName && tag.tagName !== "Без тега",
+  );
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedTag, setSelectedTag] = useState("");
+  const [clientName, setClientName] = useState("");
+  const [counterparties, setCounterparties] = useState<ManualExpenseDraftLine[]>([
+    { id: 1, name: "", amount: "" },
+  ]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const tagOptions = editableTags.map((tag) => ({
+    value: `${tag.departmentKey}\u0000${tag.tagName}`,
+    departmentKey: tag.departmentKey,
+    tagName: tag.tagName as string,
+  }));
+  const total = counterparties.reduce(
+    (sum, counterparty) => sum + (parseMoneyInput(counterparty.amount) ?? 0),
+    0,
+  );
+
+  function reset() {
+    setSelectedTag("");
+    setClientName("");
+    setCounterparties([{ id: 1, name: "", amount: "" }]);
+    setError(null);
+  }
+
+  async function handleSubmit(event: SyntheticEvent) {
+    event.preventDefault();
+    setError(null);
+    const selected = tagOptions.find((option) => option.value === selectedTag);
+    const lines = counterparties.map((counterparty) => ({
+      name: counterparty.name.trim(),
+      amount: parseMoneyInput(counterparty.amount),
+    }));
+    if (!selected) {
+      setError("Выберите тег");
+      return;
+    }
+    if (!clientName.trim()) {
+      setError("Укажите клиента");
+      return;
+    }
+    if (lines.some((line) => !line.name || line.amount == null || line.amount <= 0)) {
+      setError("Укажите контрагента и положительную сумму в каждой строке");
+      return;
+    }
+    setIsSaving(true);
+    try {
+      await onCreate({
+        monthKey,
+        departmentKey: selected.departmentKey,
+        tagName: selected.tagName,
+        clientName: clientName.trim(),
+        counterparties: lines.map((line) => ({ name: line.name, amount: line.amount as number })),
+      });
+      reset();
+      setIsOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось добавить затрату");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  if (!editableTags.length) {
+    return null;
+  }
+
+  return (
+    <div className="border-t border-zinc-200 pt-4">
+      {!isOpen ? (
+        <Button type="button" variant="outline" onClick={() => setIsOpen(true)}>
+          <Plus className="size-4" />
+          Добавить затрату вручную
+        </Button>
+      ) : (
+        <form className="space-y-4" onSubmit={handleSubmit}>
+          <div>
+            <h3 className="font-semibold">Добавить затрату вручную</h3>
+            <p className="text-sm text-muted-foreground">
+              Запись появится внутри выбранного тега с пометкой «Добавлено вручную».
+            </p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Тег</Label>
+              <Select value={selectedTag} onValueChange={setSelectedTag}>
+                <SelectTrigger className="w-full"><SelectValue placeholder="Выберите тег" /></SelectTrigger>
+                <SelectContent>
+                  {tagOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>{option.tagName}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`manual-client-${monthKey}`}>Клиент</Label>
+              <Input
+                id={`manual-client-${monthKey}`}
+                value={clientName}
+                onChange={(event) => setClientName(event.target.value)}
+                placeholder="Название клиента"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {counterparties.map((counterparty, index) => (
+              <div
+                key={counterparty.id}
+                className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_180px_36px] sm:items-end"
+              >
+                <div className="space-y-1.5">
+                  <Label htmlFor={`manual-counterparty-${monthKey}-${counterparty.id}`}>
+                    Контрагент{counterparties.length > 1 ? ` ${index + 1}` : ""}
+                  </Label>
+                  <Input
+                    id={`manual-counterparty-${monthKey}-${counterparty.id}`}
+                    value={counterparty.name}
+                    onChange={(event) =>
+                      setCounterparties((current) =>
+                        current.map((item) => item.id === counterparty.id ? { ...item, name: event.target.value } : item),
+                      )
+                    }
+                    placeholder="ФИО или юридическое лицо"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor={`manual-amount-${monthKey}-${counterparty.id}`}>Сумма затраты</Label>
+                  <Input
+                    id={`manual-amount-${monthKey}-${counterparty.id}`}
+                    inputMode="decimal"
+                    value={counterparty.amount}
+                    onChange={(event) =>
+                      setCounterparties((current) =>
+                        current.map((item) => item.id === counterparty.id
+                          ? { ...item, amount: sanitizeNumericInput(event.target.value) }
+                          : item),
+                      )
+                    }
+                    placeholder="0"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  title="Удалить контрагента"
+                  disabled={counterparties.length === 1}
+                  onClick={() =>
+                    setCounterparties((current) => current.filter((item) => item.id !== counterparty.id))
+                  }
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
+            ))}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setCounterparties((current) => [
+                  ...current,
+                  { id: Math.max(...current.map((item) => item.id)) + 1, name: "", amount: "" },
+                ])
+              }
+            >
+              <Plus className="size-4" />
+              Добавить контрагента
+            </Button>
+          </div>
+
+          <div className="text-sm">
+            Итого: <span className="font-semibold">{formatAmount(total)}</span> без НДС
+          </div>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={isSaving}>
+              {isSaving ? "Сохраняем..." : "Сохранить затрату"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={isSaving}
+              onClick={() => {
+                reset();
+                setIsOpen(false);
+              }}
+            >
+              Отмена
+            </Button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+function nextMonthKey(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const date = new Date(year, month, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function TransferExpenseDialog({
+  entries,
+  onClose,
+  onTransfer,
+}: {
+  entries: QuotaEntryRow[] | null;
+  onClose: () => void;
+  onTransfer: (entry: QuotaEntryRow, targetMonthKey: string, amount: number) => Promise<void>;
+}) {
+  const transferableEntries = (entries ?? []).filter(
+    (entry) => entry.canTransfer && entry.lineKey && entry.amount > 0,
+  );
+  const [lineKey, setLineKey] = useState("");
+  const [targetMonthKey, setTargetMonthKey] = useState("");
+  const [movedAmount, setMovedAmount] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selectedEntry = transferableEntries.find((entry) => entry.lineKey === lineKey) ?? transferableEntries[0];
+  const available = selectedEntry?.amount ?? 0;
+  const parsedMoved = parseMoneyInput(movedAmount);
+  const remaining = parsedMoved == null ? null : Math.max(available - parsedMoved, 0);
+
+  useEffect(() => {
+    const first = transferableEntries[0];
+    setLineKey(first?.lineKey ?? "");
+    setTargetMonthKey(first ? nextMonthKey(first.monthKey) : "");
+    setMovedAmount("");
+    setError(null);
+  }, [entries]);
+
+  useEffect(() => {
+    if (selectedEntry && targetMonthKey === selectedEntry.monthKey) {
+      setTargetMonthKey(nextMonthKey(selectedEntry.monthKey));
+    }
+    setMovedAmount("");
+  }, [lineKey]);
+
+  async function saveTransfer() {
+    if (!selectedEntry || !targetMonthKey) {
+      setError("Выберите контрагента и месяц");
+      return;
+    }
+    if (targetMonthKey === selectedEntry.monthKey) {
+      setError("Месяц назначения должен отличаться от исходного");
+      return;
+    }
+    if (parsedMoved == null || parsedMoved <= 0 || parsedMoved > available) {
+      setError(`Укажите сумму от 0 до ${formatAmount(available)}`);
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      await onTransfer(selectedEntry, targetMonthKey, parsedMoved);
+      onClose();
+    } catch (err) {
+      setError(getDisplayErrorMessage(err, "Не удалось перенести затрату"));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={Boolean(entries)} onOpenChange={(open) => !open && onClose()}>
+      <AlertDialogContent className="sm:max-w-xl">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Вынести часть затрат в другой месяц</AlertDialogTitle>
+          <AlertDialogDescription>
+            Сумма контрагента будет разделена между месяцами без изменения общей суммы.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        {selectedEntry ? (
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Контрагент</Label>
+              <Select value={selectedEntry.lineKey} onValueChange={setLineKey}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {transferableEntries.map((entry) => (
+                    <SelectItem key={entry.lineKey} value={entry.lineKey as string}>
+                      {entry.counterparty || "Контрагент не указан"} · {formatAmount(entry.amount)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="quota-transfer-source">Исходный месяц</Label>
+                <Input id="quota-transfer-source" value={formatEventMonth(selectedEntry.monthKey)} disabled />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="quota-transfer-target">Перенести в месяц</Label>
+                <Input
+                  id="quota-transfer-target"
+                  type="month"
+                  min={`${FIRST_QUOTA_YEAR}-01`}
+                  value={targetMonthKey}
+                  onChange={(event) => setTargetMonthKey(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="quota-transfer-remaining">
+                  Останется в {formatEventMonth(selectedEntry.monthKey)}
+                </Label>
+                <Input
+                  id="quota-transfer-remaining"
+                  inputMode="decimal"
+                  value={remaining == null ? "" : String(remaining)}
+                  onChange={(event) => {
+                    const nextRemaining = parseMoneyInput(sanitizeNumericInput(event.target.value));
+                    setMovedAmount(nextRemaining == null ? "" : String(Math.max(available - nextRemaining, 0)));
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="quota-transfer-amount">
+                  Переносим в {targetMonthKey ? formatEventMonth(targetMonthKey) : "другой месяц"}
+                </Label>
+                <Input
+                  id="quota-transfer-amount"
+                  inputMode="decimal"
+                  value={movedAmount}
+                  onChange={(event) => setMovedAmount(sanitizeNumericInput(event.target.value))}
+                  placeholder="0"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">
+              Общая сумма контрагента в выбранной части: {formatAmount(available)} без НДС
+            </div>
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Нет доступных затрат для переноса.</p>
+        )}
+
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isSaving}>Отмена</AlertDialogCancel>
+          <Button type="button" disabled={isSaving || !selectedEntry} onClick={saveTransfer}>
+            {isSaving ? "Переносим..." : "Перенести затрату"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function MonthQuotaWorkspace({
   month,
   departments,
   onSaveQuota,
   onSaveEntry,
+  onCreateManualExpense,
+  onTransfer,
 }: {
   month: {
     monthKey: string;
@@ -587,12 +988,21 @@ function MonthQuotaWorkspace({
   departments: Array<QuotaEditableRow & { departmentName?: string; tags: QuotaEditableRow[] }>;
   onSaveQuota: (row: QuotaEditableRow, values: { quota: number; quotaWithVat: number; vatRate: number }) => Promise<void>;
   onSaveEntry: (entry: QuotaEntryRow, patch: Partial<Pick<QuotaEntryRow, "counterparty" | "workStatus" | "result" | "comment">>) => Promise<void>;
+  onCreateManualExpense: (values: {
+    monthKey: string;
+    departmentKey: string;
+    tagName: string;
+    clientName: string;
+    counterparties: Array<{ name: string; amount: number }>;
+  }) => Promise<void>;
+  onTransfer: (entry: QuotaEntryRow, targetMonthKey: string, amount: number) => Promise<void>;
 }) {
   const tags = departments.flatMap((department) => department.tags);
   const monthEntries = month.quotaEntries ?? tags.flatMap((tag) => tag.entries ?? []);
   const monthQuota = tags.reduce((sum, tag) => sum + (tag.quota ?? 0), 0);
   const monthRemaining = tags.reduce((sum, tag) => sum + (tag.remaining ?? 0), 0);
   const monthEntryTotal = monthEntries.reduce((sum, entry) => sum + (entry.amount ?? 0), 0);
+  const [transferEntries, setTransferEntries] = useState<QuotaEntryRow[] | null>(null);
 
   return (
     <div className="space-y-4">
@@ -619,9 +1029,10 @@ function MonthQuotaWorkspace({
           );
           const requestGroups = Array.from(
             entries.reduce((groups, entry) => {
-              const group = groups.get(entry.requestId) ?? [];
+              const groupKey = entry.groupKey ?? entry.requestId ?? entry.key;
+              const group = groups.get(groupKey) ?? [];
               group.push(entry);
-              groups.set(entry.requestId, group);
+              groups.set(groupKey, group);
               return groups;
             }, new Map<string, QuotaEntryRow[]>()),
           );
@@ -686,19 +1097,37 @@ function MonthQuotaWorkspace({
                                   <div className="truncate font-semibold" title={entry.clientName || "Клиент не указан"}>
                                     {entry.clientName || "Клиент не указан"}
                                   </div>
-                                  <Link
-                                    href={`/requests/${entry.requestId}`}
-                                    className="mt-0.5 block truncate text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-                                    title={`${entry.assignmentTitle || entry.requestTitle || "Без названия"}${entry.requestCode ? ` · ${entry.requestCode}` : ""}`}
-                                  >
-                                    {entry.assignmentTitle || entry.requestTitle || "Без названия"}
-                                    {entry.requestCode ? ` · ${entry.requestCode}` : ""}
-                                  </Link>
+                                  {entry.isManual ? (
+                                    <Badge variant="outline" className="mt-0.5 font-normal text-muted-foreground">
+                                      Добавлено вручную
+                                    </Badge>
+                                  ) : (
+                                    <Link
+                                      href={`/requests/${entry.requestId}`}
+                                      className="mt-0.5 block truncate text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                                      title={`${entry.assignmentTitle || entry.requestTitle || "Без названия"}${entry.requestCode ? ` · ${entry.requestCode}` : ""}`}
+                                    >
+                                      {entry.assignmentTitle || entry.requestTitle || "Без названия"}
+                                      {entry.requestCode ? ` · ${entry.requestCode}` : ""}
+                                    </Link>
+                                  )}
                                 </div>
                                 {entry.isWelcomeBonus ? (
                                   <Badge variant="secondary" className="shrink-0 bg-amber-100 text-amber-900">
                                     Welcome-бонус
                                   </Badge>
+                                ) : null}
+                                {entryIndex === 0 && requestEntries.some((requestEntry) => requestEntry.canTransfer) ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="mt-1 h-7 px-2 text-xs"
+                                    onClick={() => setTransferEntries(requestEntries)}
+                                  >
+                                    <ArrowRightLeft className="size-3.5" />
+                                    Вынести часть затрат
+                                  </Button>
                                 ) : null}
                               </div>
                             ) : null}
@@ -709,6 +1138,11 @@ function MonthQuotaWorkspace({
                             <div className="truncate text-sm font-medium" title={entry.counterparty || "Не указан в заявке"}>
                               {entry.counterparty || "Не указан в заявке"}
                             </div>
+                            {entry.transferredFromMonthKeys?.length ? (
+                              <Badge variant="outline" className="mt-1 font-normal text-muted-foreground">
+                                Перенесено из {entry.transferredFromMonthKeys.map(formatEventMonth).join(", ")}
+                              </Badge>
+                            ) : null}
                           </div>
 
                           <div className="md:text-right">
@@ -769,23 +1203,34 @@ function MonthQuotaWorkspace({
           );
         })}
       </div>
+      <ManualExpenseForm monthKey={month.monthKey} tags={tags} onCreate={onCreateManualExpense} />
+      <TransferExpenseDialog
+        entries={transferEntries}
+        onClose={() => setTransferEntries(null)}
+        onTransfer={onTransfer}
+      />
     </div>
   );
 }
 
 export default function AdministrationQuotaClient() {
-  const [monthsCount, setMonthsCount] = useState(6);
+  const currentYear = useMemo(() => new Date().getFullYear(), []);
+  const currentMonthKey = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+  const [selectedYear, setSelectedYear] = useState(currentYear);
+  const [yearWindowStart, setYearWindowStart] = useState(currentYear);
   const [departmentFilter, setDepartmentFilter] = useState("Аккаунтинг");
   const [tagFilter, setTagFilter] = useState("all");
   const [activeTab, setActiveTab] = useState<"quotas" | "history">("quotas");
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
   const monthKeys = useMemo(() => {
-    const now = new Date();
-    return Array.from({ length: monthsCount }, (_, index) => {
-      const date = new Date(now.getFullYear(), now.getMonth() + index, 1);
-      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    });
-  }, [monthsCount]);
+    return Array.from({ length: 12 }, (_, index) =>
+      `${selectedYear}-${String(index + 1).padStart(2, "0")}`,
+    );
+  }, [selectedYear]);
+  const availableYears = Array.from({ length: 3 }, (_, index) => yearWindowStart + index);
   const queryFilters = {
     monthKeys,
     department: departmentFilter === "all" ? undefined : departmentFilter,
@@ -798,60 +1243,50 @@ export default function AdministrationQuotaClient() {
   });
   const updateQuota = useMutation(api.quotas.updateAdministrationQuota);
   const updateEntry = useMutation(api.quotas.updateAdministrationQuotaEntry);
+  const createManualExpense = useMutation(api.quotas.createAdministrationManualExpense);
+  const updateManualExpense = useMutation(api.quotas.updateAdministrationManualExpense);
+  const createQuotaTransfer = useMutation(api.quotas.createAdministrationQuotaTransfer);
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Фильтры</CardTitle>
-          <CardDescription>
-            Общая квота распределяется по цехам, а внутри цехов ее можно разложить по тегам.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label>Цех</Label>
-            <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Все цеха" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Все цеха</SelectItem>
-                {HOD_DEPARTMENTS.map((department) => (
-                  <SelectItem key={department} value={department}>
-                    {department}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Тег</Label>
-            <Select value={tagFilter} onValueChange={setTagFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Все теги" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Все теги</SelectItem>
-                <SelectItem value="none">Без тега</SelectItem>
-                {(tags ?? []).map((tag) => (
-                  <SelectItem key={tag._id} value={tag.name}>
-                    {tag.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant={activeTab === "quotas" ? "default" : "outline"} onClick={() => setActiveTab("quotas")}>
-          Квоты
-        </Button>
-        <Button type="button" variant={activeTab === "history" ? "default" : "outline"} onClick={() => setActiveTab("history")}>
-          История изменений
-        </Button>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-y py-3">
+        <div className="flex gap-2">
+          <Button type="button" variant={activeTab === "quotas" ? "default" : "outline"} onClick={() => setActiveTab("quotas")}>
+            Квоты
+          </Button>
+          <Button type="button" variant={activeTab === "history" ? "default" : "outline"} onClick={() => setActiveTab("history")}>
+            История изменений
+          </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="shrink-0">Цех</Label>
+          <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Все цеха" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все цеха</SelectItem>
+              {HOD_DEPARTMENTS.map((department) => (
+                <SelectItem key={department} value={department}>{department}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex min-w-0 items-center gap-2">
+          <Label className="shrink-0">Тег</Label>
+          <Select value={tagFilter} onValueChange={setTagFilter}>
+            <SelectTrigger className="w-[220px] max-w-[60vw]">
+              <SelectValue placeholder="Все теги" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все теги</SelectItem>
+              <SelectItem value="none">Без тега</SelectItem>
+              {(tags ?? []).map((tag) => (
+                <SelectItem key={tag._id} value={tag.name}>{tag.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {activeTab === "history" ? (
@@ -910,7 +1345,7 @@ export default function AdministrationQuotaClient() {
         </Card>
       ) : (
         rows.map((month) => {
-          const monthExpanded = expandedMonths[month.monthKey] ?? month.monthKey === monthKeys[0];
+          const monthExpanded = expandedMonths[month.monthKey] ?? month.monthKey === currentMonthKey;
           const tagQuotaTotal = month.departments.reduce(
             (sum: number, department: { tags: QuotaEditableRow[] }) =>
               sum + department.tags.reduce((tagSum: number, tag: QuotaEditableRow) => tagSum + (tag.quota ?? 0), 0),
@@ -922,7 +1357,10 @@ export default function AdministrationQuotaClient() {
             0,
           );
           return (
-            <Card key={month.monthKey}>
+            <Card
+              key={month.monthKey}
+              className={`overflow-hidden ${month.monthKey === currentMonthKey && !monthExpanded ? "border-amber-300 bg-amber-50/70" : ""}`}
+            >
               <CardHeader>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -971,6 +1409,18 @@ export default function AdministrationQuotaClient() {
                       });
                     }}
                     onSaveEntry={async (entry, patch) => {
+                      if (entry.isManual && entry.manualExpenseId) {
+                        await updateManualExpense({
+                          id: entry.manualExpenseId as any,
+                          workStatus: patch.workStatus ?? entry.workStatus,
+                          result: patch.result ?? entry.result,
+                          comment: patch.comment ?? entry.comment,
+                        });
+                        return;
+                      }
+                      if (!entry.requestId) {
+                        throw new Error("Заявка для строки квоты не найдена");
+                      }
                       await updateEntry({
                         requestId: entry.requestId as any,
                         lineKey: entry.lineKey,
@@ -983,6 +1433,29 @@ export default function AdministrationQuotaClient() {
                         comment: patch.comment ?? entry.comment,
                       });
                     }}
+                    onCreateManualExpense={async (values) => {
+                      await createManualExpense(values);
+                    }}
+                    onTransfer={async (entry, targetMonthKey, amount) => {
+                      if (!entry.lineKey) {
+                        throw new Error("Контрагент для переноса не найден");
+                      }
+                      await createQuotaTransfer({
+                        sourceType: entry.isManual ? "manual" : "request",
+                        requestId: entry.requestId as any,
+                        manualExpenseId: entry.manualExpenseId as any,
+                        lineKey: entry.lineKey,
+                        sourceMonthKey: entry.monthKey,
+                        targetMonthKey,
+                        amount,
+                      });
+                      const targetYear = Number(targetMonthKey.slice(0, 4));
+                      setSelectedYear(targetYear);
+                      setYearWindowStart((start) =>
+                        targetYear < start ? targetYear : targetYear > start + 2 ? targetYear - 2 : start,
+                      );
+                      setExpandedMonths((current) => ({ ...current, [targetMonthKey]: true }));
+                    }}
                   />
                 </CardContent>
               ) : null}
@@ -990,9 +1463,46 @@ export default function AdministrationQuotaClient() {
           );
         })
       )}
-      <Button type="button" variant="outline" onClick={() => setMonthsCount((count) => count + 6)}>
-        Показать еще 6 месяцев
-      </Button>
+      <div className="flex items-center justify-center gap-1" aria-label="Выбор года">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          title="Предыдущий год"
+          disabled={selectedYear <= FIRST_QUOTA_YEAR}
+          onClick={() => {
+            const year = Math.max(FIRST_QUOTA_YEAR, selectedYear - 1);
+            setSelectedYear(year);
+            setYearWindowStart((start) => year < start ? year : start);
+          }}
+        >
+          <ChevronLeft className="size-4" />
+        </Button>
+        {availableYears.map((year) => (
+          <Button
+            key={year}
+            type="button"
+            variant={selectedYear === year ? "default" : "ghost"}
+            className="min-w-16"
+            onClick={() => setSelectedYear(year)}
+          >
+            {year}
+          </Button>
+        ))}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          title="Следующий год"
+          onClick={() => {
+            const year = selectedYear + 1;
+            setSelectedYear(year);
+            setYearWindowStart((start) => year > start + 2 ? year - 2 : start);
+          }}
+        >
+          <ChevronRight className="size-4" />
+        </Button>
+      </div>
     </div>
   );
 }
