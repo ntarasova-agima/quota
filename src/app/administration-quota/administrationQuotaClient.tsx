@@ -89,6 +89,7 @@ type QuotaEntryRow = {
   requestRowSpan?: number;
   isWelcomeBonus?: boolean;
   isManual?: boolean;
+  hasTransfers?: boolean;
   transferredFromMonthKeys?: string[];
   canTransfer?: boolean;
   canEditEntry?: boolean;
@@ -825,17 +826,22 @@ function TransferExpenseDialog({
 }: {
   entries: QuotaEntryRow[] | null;
   onClose: () => void;
-  onTransfer: (entry: QuotaEntryRow, targetMonthKey: string, amount: number) => Promise<void>;
+  onTransfer: (
+    transfers: Array<{ entry: QuotaEntryRow; amount: number }>,
+    targetMonthKey: string,
+  ) => Promise<void>;
 }) {
   const transferableEntries = (entries ?? []).filter(
     (entry) => entry.canTransfer && entry.lineKey && entry.amount > 0,
   );
   const [lineKey, setLineKey] = useState("");
   const [targetMonthKey, setTargetMonthKey] = useState("");
-  const [movedAmount, setMovedAmount] = useState("");
+  const [movedAmounts, setMovedAmounts] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedEntry = transferableEntries.find((entry) => entry.lineKey === lineKey) ?? transferableEntries[0];
+  const selectedLineKey = selectedEntry?.lineKey ?? "";
+  const movedAmount = movedAmounts[selectedLineKey] ?? "";
   const available = selectedEntry?.amount ?? 0;
   const parsedMoved = parseMoneyInput(movedAmount);
   const remaining = parsedMoved == null ? null : Math.max(available - parsedMoved, 0);
@@ -844,7 +850,7 @@ function TransferExpenseDialog({
     const first = transferableEntries[0];
     setLineKey(first?.lineKey ?? "");
     setTargetMonthKey(first ? nextMonthKey(first.monthKey) : "");
-    setMovedAmount("");
+    setMovedAmounts({});
     setError(null);
   }, [entries]);
 
@@ -852,26 +858,46 @@ function TransferExpenseDialog({
     if (selectedEntry && targetMonthKey === selectedEntry.monthKey) {
       setTargetMonthKey(nextMonthKey(selectedEntry.monthKey));
     }
-    setMovedAmount("");
   }, [lineKey]);
+
+  function setSelectedMovedAmount(value: string) {
+    if (!selectedLineKey) return;
+    setMovedAmounts((current) => ({ ...current, [selectedLineKey]: value }));
+  }
 
   async function saveTransfer() {
     if (!selectedEntry || !targetMonthKey) {
       setError("Выберите контрагента и месяц");
       return;
     }
-    if (targetMonthKey === selectedEntry.monthKey) {
+    if (transferableEntries.some((entry) => targetMonthKey === entry.monthKey)) {
       setError("Месяц назначения должен отличаться от исходного");
       return;
     }
-    if (parsedMoved == null || parsedMoved <= 0 || parsedMoved > available) {
-      setError(`Укажите сумму от 0 до ${formatAmount(available)}`);
+    const transfers: Array<{ entry: QuotaEntryRow; amount: number }> = [];
+    for (const entry of transferableEntries) {
+      const value = movedAmounts[entry.lineKey ?? ""];
+      if (!value) continue;
+      const amount = parseMoneyInput(value);
+      if (amount == null || amount < 0 || amount > entry.amount) {
+        setLineKey(entry.lineKey ?? "");
+        setError(
+          `Для «${entry.counterparty || "Контрагент не указан"}» укажите сумму от 0 до ${formatAmount(entry.amount)}`,
+        );
+        return;
+      }
+      if (amount > 0) {
+        transfers.push({ entry, amount });
+      }
+    }
+    if (!transfers.length) {
+      setError("Укажите сумму переноса хотя бы для одного контрагента");
       return;
     }
     setIsSaving(true);
     setError(null);
     try {
-      await onTransfer(selectedEntry, targetMonthKey, parsedMoved);
+      await onTransfer(transfers, targetMonthKey);
       onClose();
     } catch (err) {
       setError(getDisplayErrorMessage(err, "Не удалось перенести затрату"));
@@ -886,7 +912,7 @@ function TransferExpenseDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Вынести часть затрат в другой месяц</AlertDialogTitle>
           <AlertDialogDescription>
-            Сумма контрагента будет разделена между месяцами без изменения общей суммы.
+            Суммы выбранных контрагентов будут разделены между месяцами без изменения общей суммы.
           </AlertDialogDescription>
         </AlertDialogHeader>
 
@@ -934,7 +960,9 @@ function TransferExpenseDialog({
                   value={remaining == null ? "" : String(remaining)}
                   onChange={(event) => {
                     const nextRemaining = parseMoneyInput(sanitizeNumericInput(event.target.value));
-                    setMovedAmount(nextRemaining == null ? "" : String(Math.max(available - nextRemaining, 0)));
+                    setSelectedMovedAmount(
+                      nextRemaining == null ? "" : String(Math.max(available - nextRemaining, 0)),
+                    );
                   }}
                 />
               </div>
@@ -946,7 +974,7 @@ function TransferExpenseDialog({
                   id="quota-transfer-amount"
                   inputMode="decimal"
                   value={movedAmount}
-                  onChange={(event) => setMovedAmount(sanitizeNumericInput(event.target.value))}
+                  onChange={(event) => setSelectedMovedAmount(sanitizeNumericInput(event.target.value))}
                   placeholder="0"
                 />
               </div>
@@ -964,7 +992,65 @@ function TransferExpenseDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isSaving}>Отмена</AlertDialogCancel>
           <Button type="button" disabled={isSaving || !selectedEntry} onClick={saveTransfer}>
-            {isSaving ? "Переносим..." : "Перенести затрату"}
+            {isSaving ? "Переносим..." : "Перенести затраты"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function DeleteManualExpenseDialog({
+  entries,
+  onClose,
+  onDelete,
+}: {
+  entries: QuotaEntryRow[] | null;
+  onClose: () => void;
+  onDelete: (manualExpenseId: string) => Promise<void>;
+}) {
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const entry = entries?.[0];
+
+  useEffect(() => {
+    setError(null);
+  }, [entries]);
+
+  async function deleteExpense() {
+    if (!entry?.manualExpenseId) {
+      setError("Ручная затрата не найдена");
+      return;
+    }
+    setIsDeleting(true);
+    setError(null);
+    try {
+      await onDelete(entry.manualExpenseId);
+      onClose();
+    } catch (err) {
+      setError(getDisplayErrorMessage(err, "Не удалось удалить затрату"));
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={Boolean(entries)} onOpenChange={(open) => !open && !isDeleting && onClose()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Удалить ручную затрату?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {entry?.clientName ? `Клиент: ${entry.clientName}. ` : ""}
+            {entry?.hasTransfers
+              ? "Затрата разделена между месяцами. Она и все перенесённые части будут удалены из квот всех месяцев."
+              : "Ручная затрата будет удалена из квоты этого месяца."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isDeleting}>Отмена</AlertDialogCancel>
+          <Button type="button" variant="destructive" disabled={isDeleting} onClick={deleteExpense}>
+            {isDeleting ? "Удаляем..." : "Удалить затрату"}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -979,6 +1065,7 @@ function MonthQuotaWorkspace({
   onSaveEntry,
   onCreateManualExpense,
   onTransfer,
+  onDeleteManualExpense,
 }: {
   month: {
     monthKey: string;
@@ -995,7 +1082,11 @@ function MonthQuotaWorkspace({
     clientName: string;
     counterparties: Array<{ name: string; amount: number }>;
   }) => Promise<void>;
-  onTransfer: (entry: QuotaEntryRow, targetMonthKey: string, amount: number) => Promise<void>;
+  onTransfer: (
+    transfers: Array<{ entry: QuotaEntryRow; amount: number }>,
+    targetMonthKey: string,
+  ) => Promise<void>;
+  onDeleteManualExpense: (manualExpenseId: string) => Promise<void>;
 }) {
   const tags = departments.flatMap((department) => department.tags);
   const monthEntries = month.quotaEntries ?? tags.flatMap((tag) => tag.entries ?? []);
@@ -1003,6 +1094,7 @@ function MonthQuotaWorkspace({
   const monthRemaining = tags.reduce((sum, tag) => sum + (tag.remaining ?? 0), 0);
   const monthEntryTotal = monthEntries.reduce((sum, entry) => sum + (entry.amount ?? 0), 0);
   const [transferEntries, setTransferEntries] = useState<QuotaEntryRow[] | null>(null);
+  const [manualExpenseToDelete, setManualExpenseToDelete] = useState<QuotaEntryRow[] | null>(null);
 
   return (
     <div className="space-y-4">
@@ -1098,9 +1190,23 @@ function MonthQuotaWorkspace({
                                     {entry.clientName || "Клиент не указан"}
                                   </div>
                                   {entry.isManual ? (
-                                    <Badge variant="outline" className="mt-0.5 font-normal text-muted-foreground">
-                                      Добавлено вручную
-                                    </Badge>
+                                    <div className="mt-0.5 flex items-center gap-1">
+                                      <Badge variant="outline" className="font-normal text-muted-foreground">
+                                        Добавлено вручную
+                                      </Badge>
+                                      {entry.canEditEntry ? (
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="icon"
+                                          className="size-7 text-muted-foreground hover:text-destructive"
+                                          title="Удалить ручную затрату"
+                                          onClick={() => setManualExpenseToDelete(requestEntries)}
+                                        >
+                                          <Trash2 className="size-3.5" />
+                                        </Button>
+                                      ) : null}
+                                    </div>
                                   ) : (
                                     <Link
                                       href={`/requests/${entry.requestId}`}
@@ -1209,6 +1315,11 @@ function MonthQuotaWorkspace({
         onClose={() => setTransferEntries(null)}
         onTransfer={onTransfer}
       />
+      <DeleteManualExpenseDialog
+        entries={manualExpenseToDelete}
+        onClose={() => setManualExpenseToDelete(null)}
+        onDelete={onDeleteManualExpense}
+      />
     </div>
   );
 }
@@ -1245,7 +1356,8 @@ export default function AdministrationQuotaClient() {
   const updateEntry = useMutation(api.quotas.updateAdministrationQuotaEntry);
   const createManualExpense = useMutation(api.quotas.createAdministrationManualExpense);
   const updateManualExpense = useMutation(api.quotas.updateAdministrationManualExpense);
-  const createQuotaTransfer = useMutation(api.quotas.createAdministrationQuotaTransfer);
+  const deleteManualExpense = useMutation(api.quotas.deleteAdministrationManualExpense);
+  const createQuotaTransfers = useMutation(api.quotas.createAdministrationQuotaTransfers);
 
   return (
     <div className="space-y-4">
@@ -1436,18 +1548,20 @@ export default function AdministrationQuotaClient() {
                     onCreateManualExpense={async (values) => {
                       await createManualExpense(values);
                     }}
-                    onTransfer={async (entry, targetMonthKey, amount) => {
-                      if (!entry.lineKey) {
+                    onTransfer={async (transfers, targetMonthKey) => {
+                      if (transfers.some(({ entry }) => !entry.lineKey)) {
                         throw new Error("Контрагент для переноса не найден");
                       }
-                      await createQuotaTransfer({
-                        sourceType: entry.isManual ? "manual" : "request",
-                        requestId: entry.requestId as any,
-                        manualExpenseId: entry.manualExpenseId as any,
-                        lineKey: entry.lineKey,
-                        sourceMonthKey: entry.monthKey,
-                        targetMonthKey,
-                        amount,
+                      await createQuotaTransfers({
+                        transfers: transfers.map(({ entry, amount }) => ({
+                          sourceType: entry.isManual ? "manual" as const : "request" as const,
+                          requestId: entry.requestId as any,
+                          manualExpenseId: entry.manualExpenseId as any,
+                          lineKey: entry.lineKey as string,
+                          sourceMonthKey: entry.monthKey,
+                          targetMonthKey,
+                          amount,
+                        })),
                       });
                       const targetYear = Number(targetMonthKey.slice(0, 4));
                       setSelectedYear(targetYear);
@@ -1455,6 +1569,9 @@ export default function AdministrationQuotaClient() {
                         targetYear < start ? targetYear : targetYear > start + 2 ? targetYear - 2 : start,
                       );
                       setExpandedMonths((current) => ({ ...current, [targetMonthKey]: true }));
+                    }}
+                    onDeleteManualExpense={async (manualExpenseId) => {
+                      await deleteManualExpense({ id: manualExpenseId as any });
                     }}
                   />
                 </CardContent>

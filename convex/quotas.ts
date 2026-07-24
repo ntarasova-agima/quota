@@ -915,14 +915,14 @@ export const listAdministrationByMonthKeys = query({
       const counterparties = expense.counterparties.length
         ? expense.counterparties
         : [{ name: "", amount: expense.amount }];
+      const expenseTransfers = quotaTransfers.filter(
+        (transfer: any) =>
+          transfer.sourceType === "manual" &&
+          String(transfer.manualExpenseId) === String(expense._id),
+      );
       counterparties.forEach((counterparty: { id?: string; name: string; amount: number }, lineIndex: number) => {
         const lineKey = counterparty.id?.trim() || `counterparty:${lineIndex}`;
-        const transfers = quotaTransfers.filter(
-          (transfer: any) =>
-            transfer.sourceType === "manual" &&
-            String(transfer.manualExpenseId) === String(expense._id) &&
-            transfer.lineKey === lineKey,
-        );
+        const transfers = expenseTransfers.filter((transfer: any) => transfer.lineKey === lineKey);
         const lineAllocations = getQuotaAllocations(expense.monthKey, counterparty.amount, transfers);
         for (const allocation of lineAllocations) {
           if (!monthSet.has(allocation.monthKey)) {
@@ -949,6 +949,7 @@ export const listAdministrationByMonthKeys = query({
             isFirstForRequest: lineIndex === 0,
             requestRowSpan: counterparties.length,
             isManual: true,
+            hasTransfers: expenseTransfers.length > 0,
             transferredFromMonthKeys: allocation.transferredFromMonthKeys,
             canTransfer: canEditAdministrationQuotaRow(roleRecord, expense.departmentKey),
             canEditEntry: canEditAdministrationQuotaRow(roleRecord, expense.departmentKey),
@@ -1543,18 +1544,45 @@ export const updateAdministrationManualExpense = mutation({
   },
 });
 
-export const createAdministrationQuotaTransfer = mutation({
+export const deleteAdministrationManualExpense = mutation({
   args: {
-    sourceType: v.union(v.literal("request"), v.literal("manual")),
-    requestId: v.optional(v.id("requests")),
-    manualExpenseId: v.optional(v.id("administrationManualExpenses")),
-    lineKey: v.string(),
-    sourceMonthKey: v.string(),
-    targetMonthKey: v.string(),
-    amount: v.number(),
+    id: v.id("administrationManualExpenses"),
   },
   handler: async (ctx, args) => {
     const access = await ensureAdministrationQuotaEditor(ctx);
+    const expense = await ctx.db.get(args.id);
+    if (!expense) {
+      throw new Error("Ручная затрата не найдена");
+    }
+    if (!canEditAdministrationQuotaRow(access.record, expense.departmentKey)) {
+      throw new Error("Недостаточно прав для удаления этой затраты");
+    }
+
+    const transfers = await ctx.db
+      .query("administrationQuotaTransfers")
+      .withIndex("by_manual_expense", (q: any) => q.eq("manualExpenseId", expense._id))
+      .collect();
+    await Promise.all(transfers.map((transfer) => ctx.db.delete(transfer._id)));
+    await ctx.db.delete(expense._id);
+    return expense._id;
+  },
+});
+
+type AdministrationQuotaTransferInput = {
+  sourceType: "request" | "manual";
+  requestId?: any;
+  manualExpenseId?: any;
+  lineKey: string;
+  sourceMonthKey: string;
+  targetMonthKey: string;
+  amount: number;
+};
+
+async function prepareAdministrationQuotaTransfer(
+  ctx: any,
+  access: any,
+  args: AdministrationQuotaTransferInput,
+) {
     const monthPattern = /^\d{4}-(0[1-9]|1[0-2])$/;
     if (!monthPattern.test(args.sourceMonthKey) || !monthPattern.test(args.targetMonthKey)) {
       throw new Error("Некорректный месяц переноса");
@@ -1639,8 +1667,7 @@ export const createAdministrationQuotaTransfer = mutation({
       throw new Error(`В выбранном месяце доступно только ${available}`);
     }
 
-    const now = Date.now();
-    return await ctx.db.insert("administrationQuotaTransfers", {
+    return {
       sourceType: args.sourceType,
       requestId: args.sourceType === "request" ? args.requestId : undefined,
       manualExpenseId: args.sourceType === "manual" ? args.manualExpenseId : undefined,
@@ -1648,11 +1675,70 @@ export const createAdministrationQuotaTransfer = mutation({
       sourceMonthKey: args.sourceMonthKey,
       targetMonthKey: args.targetMonthKey,
       amount,
+    };
+}
+
+const administrationQuotaTransferValidator = {
+  sourceType: v.union(v.literal("request"), v.literal("manual")),
+  requestId: v.optional(v.id("requests")),
+  manualExpenseId: v.optional(v.id("administrationManualExpenses")),
+  lineKey: v.string(),
+  sourceMonthKey: v.string(),
+  targetMonthKey: v.string(),
+  amount: v.number(),
+};
+
+export const createAdministrationQuotaTransfer = mutation({
+  args: administrationQuotaTransferValidator,
+  handler: async (ctx, args) => {
+    const access = await ensureAdministrationQuotaEditor(ctx);
+    const transfer = await prepareAdministrationQuotaTransfer(ctx, access, args);
+
+    const now = Date.now();
+    return await ctx.db.insert("administrationQuotaTransfers", {
+      ...transfer,
       createdByEmail: access.email,
       createdByName: access.record?.fullName?.trim() || undefined,
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+export const createAdministrationQuotaTransfers = mutation({
+  args: {
+    transfers: v.array(v.object(administrationQuotaTransferValidator)),
+  },
+  handler: async (ctx, args) => {
+    const access = await ensureAdministrationQuotaEditor(ctx);
+    if (!args.transfers.length) {
+      throw new Error("Укажите сумму хотя бы для одного контрагента");
+    }
+    const identities = args.transfers.map(
+      (transfer) =>
+        `${transfer.sourceType}:${transfer.requestId ?? transfer.manualExpenseId}:${transfer.lineKey}:${transfer.sourceMonthKey}`,
+    );
+    if (new Set(identities).size !== identities.length) {
+      throw new Error("Один контрагент указан для переноса несколько раз");
+    }
+
+    const prepared = [];
+    for (const transfer of args.transfers) {
+      prepared.push(await prepareAdministrationQuotaTransfer(ctx, access, transfer));
+    }
+
+    const now = Date.now();
+    const ids = [];
+    for (const transfer of prepared) {
+      ids.push(await ctx.db.insert("administrationQuotaTransfers", {
+        ...transfer,
+        createdByEmail: access.email,
+        createdByName: access.record?.fullName?.trim() || undefined,
+        createdAt: now,
+        updatedAt: now,
+      }));
+    }
+    return ids;
   },
 });
 
