@@ -684,7 +684,7 @@ export default function NewRequestPage() {
   }, [fundingSource, category]);
 
   useEffect(() => {
-    if (isCopySourceLoading || category) {
+    if (copyFromRequestId || isCopySourceLoading || category) {
       return;
     }
     const nextCategory = categoryOptions[0];
@@ -695,7 +695,7 @@ export default function NewRequestPage() {
     if (!fundingSource) {
       setFundingSource(getDefaultFundingSourceForCategory(nextCategory));
     }
-  }, [category, categoryOptions, fundingSource, isCopySourceLoading]);
+  }, [category, categoryOptions, copyFromRequestId, fundingSource, isCopySourceLoading]);
 
   useEffect(() => {
     if (!paymentMethod) {
