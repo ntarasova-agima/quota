@@ -990,9 +990,13 @@ export default function NewRequestPage() {
             <CardContent>
               {isCopySourceLoading ? (
                 <p className="text-sm text-muted-foreground">Копируем заявку...</p>
+              ) : copyFromRequestId && copySourceData === null ? (
+                <p className="text-sm text-destructive">
+                  Не удалось найти заявку для копирования или у вас нет доступа.
+                </p>
               ) : (
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
-                <div className="grid gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
                   <div className="space-y-2">
                     <FieldLabel required className={headerFieldLabelClass}>Цех</FieldLabel>
                     <Input

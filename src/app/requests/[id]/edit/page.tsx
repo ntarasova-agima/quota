@@ -83,6 +83,7 @@ import {
   MAX_REQUEST_ATTACHMENT_SIZE,
 } from "@/lib/requestAttachments";
 import { parseEditConfirmationFromErrorMessage } from "@/lib/editConfirmation";
+import { resolveRequestCoreFields } from "@/lib/requestCopy";
 
 type PendingEditConfirmation = {
   submit: boolean;
@@ -290,9 +291,11 @@ export default function NewRequestPage() {
       return;
     }
     const request = data.request;
-    const normalizedFundingSource = normalizeFundingSource(request.fundingSource);
-    const normalizedStoredCategory = normalizeRequestCategory(request.category);
-    const nextDepartment = (normalizeHodDepartment(request.department) ?? request.requestArea ?? "Аккаунтинг") as RequestArea;
+    const {
+      category: normalizedStoredCategory,
+      department: nextDepartment,
+      fundingSource: normalizedFundingSource,
+    } = resolveRequestCoreFields(request);
     setRequestArea(nextDepartment);
     setCategory(normalizedStoredCategory);
     setTitle(request.title ?? "");

@@ -8,6 +8,7 @@ import {
   AGIMA_QUOTAS_FUNDING_SOURCE,
   getCategoriesForDepartment,
   getDefaultFundingSourceForCategory,
+  isCategoryAllowedForDepartment,
   normalizeFundingSource,
   normalizeRequestCategory,
 } from "./requestRules";
@@ -60,7 +61,11 @@ export function resolveCopiedRequestCoreFields(request: CopyableRequestCoreField
     "Аккаунтинг"
   ) as RequestArea;
   const fallbackCategory = getCategoriesForDepartment(department)[0] ?? "Закупка";
-  const category = getCopiedRequestCategory(request) || fallbackCategory;
+  const restoredCategory = getCopiedRequestCategory(request);
+  const category =
+    restoredCategory && isCategoryAllowedForDepartment(restoredCategory, department)
+      ? restoredCategory
+      : fallbackCategory;
   const fundingSource =
     getCopiedRequestFundingSource(request) ||
     getDefaultFundingSourceForCategory(category) ||
@@ -68,3 +73,5 @@ export function resolveCopiedRequestCoreFields(request: CopyableRequestCoreField
 
   return { category, department, fundingSource };
 }
+
+export const resolveRequestCoreFields = resolveCopiedRequestCoreFields;
