@@ -246,6 +246,10 @@ export default function NewRequestPage() {
     () => Array.from(new Set([...FUNDING_SOURCES, ...(fundingSource ? [fundingSource] : [])])),
     [fundingSource],
   );
+  const displayedTagNames = useMemo(
+    () => Array.from(new Set([...(availableTags ?? []).map((tag) => tag.name), ...(cfdTag ? [cfdTag] : [])])),
+    [availableTags, cfdTag],
+  );
   const showTransitFields = fundingSource === "Отгрузки проекта";
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
   const paidByError = useMemo(
@@ -680,6 +684,20 @@ export default function NewRequestPage() {
   }, [fundingSource, category]);
 
   useEffect(() => {
+    if (isCopySourceLoading || category) {
+      return;
+    }
+    const nextCategory = categoryOptions[0];
+    if (!nextCategory) {
+      return;
+    }
+    setCategory(nextCategory);
+    if (!fundingSource) {
+      setFundingSource(getDefaultFundingSourceForCategory(nextCategory));
+    }
+  }, [category, categoryOptions, fundingSource, isCopySourceLoading]);
+
+  useEffect(() => {
     if (!paymentMethod) {
       return;
     }
@@ -983,7 +1001,7 @@ export default function NewRequestPage() {
       <div className="min-h-screen bg-background text-foreground">
         <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-12">
           <AppHeader title="Новая заявка" />
-          <Card className="mx-auto w-full max-w-3xl border-amber-400 ring-2 ring-amber-300/70 shadow-[0_10px_30px_rgba(217,119,6,0.08)]">
+          <Card className="mx-auto w-full max-w-5xl border-amber-400 ring-2 ring-amber-300/70 shadow-[0_10px_30px_rgba(217,119,6,0.08)]">
             <CardHeader>
               <CardTitle>Новая заявка</CardTitle>
             </CardHeader>
@@ -1053,9 +1071,9 @@ export default function NewRequestPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Не выбран</SelectItem>
-                        {(availableTags ?? []).map((tag) => (
-                          <SelectItem key={tag._id} value={tag.name}>
-                            {tag.name}
+                        {displayedTagNames.map((tagName) => (
+                          <SelectItem key={tagName} value={tagName}>
+                            {tagName}
                           </SelectItem>
                         ))}
                       </SelectContent>

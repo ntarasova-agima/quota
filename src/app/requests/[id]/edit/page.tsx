@@ -690,6 +690,20 @@ export default function NewRequestPage() {
   }, [fundingSource, category]);
 
   useEffect(() => {
+    if (!data?.request || category) {
+      return;
+    }
+    const nextCategory = categoryOptions[0];
+    if (!nextCategory) {
+      return;
+    }
+    setCategory(nextCategory);
+    if (!fundingSource) {
+      setFundingSource(getDefaultFundingSourceForCategory(nextCategory));
+    }
+  }, [category, categoryOptions, data?.request, fundingSource]);
+
+  useEffect(() => {
     if (!paymentMethod) {
       return;
     }
@@ -1006,7 +1020,7 @@ export default function NewRequestPage() {
       <div className="min-h-screen bg-background text-foreground">
         <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-12">
           <AppHeader title="Редактирование заявки" />
-          <Card className="mx-auto w-full max-w-3xl">
+          <Card className="mx-auto w-full max-w-5xl">
             <CardHeader>
               <CardTitle>Редактирование заявки</CardTitle>
               <CardDescription>
