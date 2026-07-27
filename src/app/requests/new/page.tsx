@@ -234,6 +234,12 @@ export default function NewRequestPage() {
   const isWelcomeBonus = category === "Welcome-бонус";
   const selectedDepartment = requestArea;
   const availableTags = useQuery(api.cfdTags.list, { department: selectedDepartment });
+  const copiedCoreFields = useMemo(() => {
+    if (!copyFromRequestId || !copySourceData) {
+      return null;
+    }
+    return resolveCopiedRequestCoreFields(copySourceData.request);
+  }, [copyFromRequestId, copySourceData]);
   const categoryOptions = useMemo(
     () => getCategoriesForDepartment(selectedDepartment),
     [selectedDepartment],
@@ -696,6 +702,21 @@ export default function NewRequestPage() {
       setFundingSource(getDefaultFundingSourceForCategory(nextCategory));
     }
   }, [category, categoryOptions, copyFromRequestId, fundingSource, isCopySourceLoading]);
+
+  useEffect(() => {
+    if (!copiedCoreFields) {
+      return;
+    }
+    if (requestArea !== copiedCoreFields.department) {
+      setRequestArea(copiedCoreFields.department);
+    }
+    if (!category) {
+      setCategory(copiedCoreFields.category);
+    }
+    if (!fundingSource) {
+      setFundingSource(copiedCoreFields.fundingSource);
+    }
+  }, [category, copiedCoreFields, fundingSource, requestArea]);
 
   useEffect(() => {
     if (!paymentMethod) {
