@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { type SyntheticEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/convex";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -90,6 +90,13 @@ type QuotaEntryRow = {
   isWelcomeBonus?: boolean;
   isManual?: boolean;
   hasTransfers?: boolean;
+  manualBaseMonthKey?: string;
+  manualCounterparties?: Array<{
+    id: string;
+    name: string;
+    amount: number;
+    hasTransfers: boolean;
+  }>;
   transferredFromMonthKeys?: string[];
   canTransfer?: boolean;
   canEditEntry?: boolean;
@@ -1058,6 +1065,228 @@ function DeleteManualExpenseDialog({
   );
 }
 
+type EditManualExpenseLine = {
+  key: string;
+  id?: string;
+  name: string;
+  amount: string;
+  hasTransfers: boolean;
+};
+
+function EditManualExpenseDialog({
+  entries,
+  tags,
+  onClose,
+  onUpdate,
+}: {
+  entries: QuotaEntryRow[] | null;
+  tags: QuotaEditableRow[];
+  onClose: () => void;
+  onUpdate: (
+    manualExpenseId: string,
+    values: {
+      tagName: string;
+      clientName: string;
+      counterparties: Array<{ id?: string; name: string; amount: number }>;
+    },
+  ) => Promise<void>;
+}) {
+  const entry = entries?.[0];
+  const editableTags = tags.filter(
+    (tag) =>
+      tag.canEdit &&
+      tag.departmentKey === entry?.departmentKey &&
+      tag.tagName &&
+      tag.tagName !== "Без тега",
+  );
+  const [tagName, setTagName] = useState("");
+  const [clientName, setClientName] = useState("");
+  const [counterparties, setCounterparties] = useState<EditManualExpenseLine[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const total = counterparties.reduce(
+    (sum, counterparty) => sum + (parseMoneyInput(counterparty.amount) ?? 0),
+    0,
+  );
+
+  useEffect(() => {
+    if (!entry) return;
+    const sourceLines = entry.manualCounterparties?.length
+      ? entry.manualCounterparties
+      : (entries ?? []).map((item) => ({
+          id: item.lineKey ?? item.key,
+          name: item.counterparty ?? "",
+          amount: item.amount,
+          hasTransfers: Boolean(item.hasTransfers),
+        }));
+    setTagName(entry.tagName ?? "");
+    setClientName(entry.clientName ?? "");
+    setCounterparties(
+      sourceLines.map((counterparty) => ({
+        key: counterparty.id,
+        id: counterparty.id,
+        name: counterparty.name,
+        amount: String(counterparty.amount),
+        hasTransfers: counterparty.hasTransfers,
+      })),
+    );
+    setError(null);
+  }, [entries, entry]);
+
+  async function saveExpense() {
+    if (!entry?.manualExpenseId) {
+      setError("Ручная затрата не найдена");
+      return;
+    }
+    if (!tagName) {
+      setError("Выберите тег");
+      return;
+    }
+    if (!clientName.trim()) {
+      setError("Укажите клиента");
+      return;
+    }
+    const lines = counterparties.map((counterparty) => ({
+      id: counterparty.id,
+      name: counterparty.name.trim(),
+      amount: parseMoneyInput(counterparty.amount),
+    }));
+    if (!lines.length || lines.some((line) => !line.name || line.amount == null || line.amount <= 0)) {
+      setError("Укажите контрагента и положительную сумму в каждой строке");
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      await onUpdate(entry.manualExpenseId, {
+        tagName,
+        clientName: clientName.trim(),
+        counterparties: lines.map((line) => ({
+          id: line.id,
+          name: line.name,
+          amount: line.amount as number,
+        })),
+      });
+      onClose();
+    } catch (err) {
+      setError(getDisplayErrorMessage(err, "Не удалось сохранить затрату"));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={Boolean(entries)} onOpenChange={(open) => !open && !isSaving && onClose()}>
+      <AlertDialogContent className="sm:max-w-2xl">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Редактировать ручную затрату</AlertDialogTitle>
+          <AlertDialogDescription>
+            Изменения применятся ко всем частям затраты в разных месяцах.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Тег</Label>
+            <Select value={tagName} onValueChange={setTagName}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Выберите тег" /></SelectTrigger>
+              <SelectContent>
+                {editableTags.map((tag) => (
+                  <SelectItem key={`${tag.departmentKey}:${tag.tagName}`} value={tag.tagName as string}>
+                    {tag.tagName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-manual-client">Клиент</Label>
+            <Input
+              id="edit-manual-client"
+              value={clientName}
+              onChange={(event) => setClientName(event.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="max-h-[45vh] space-y-2 overflow-y-auto pr-1">
+          {counterparties.map((counterparty, index) => (
+            <div key={counterparty.key} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_180px_36px] sm:items-end">
+              <div className="space-y-1.5">
+                <Label htmlFor={`edit-manual-counterparty-${counterparty.key}`}>
+                  Контрагент{counterparties.length > 1 ? ` ${index + 1}` : ""}
+                </Label>
+                <Input
+                  id={`edit-manual-counterparty-${counterparty.key}`}
+                  value={counterparty.name}
+                  onChange={(event) => setCounterparties((current) =>
+                    current.map((item) => item.key === counterparty.key
+                      ? { ...item, name: event.target.value }
+                      : item),
+                  )}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={`edit-manual-amount-${counterparty.key}`}>Сумма затраты</Label>
+                <Input
+                  id={`edit-manual-amount-${counterparty.key}`}
+                  inputMode="decimal"
+                  value={counterparty.amount}
+                  onChange={(event) => setCounterparties((current) =>
+                    current.map((item) => item.key === counterparty.key
+                      ? { ...item, amount: sanitizeNumericInput(event.target.value) }
+                      : item),
+                  )}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                title={counterparty.hasTransfers ? "Нельзя удалить: по контрагенту есть переносы" : "Удалить контрагента"}
+                disabled={counterparties.length === 1 || counterparty.hasTransfers}
+                onClick={() => setCounterparties((current) =>
+                  current.filter((item) => item.key !== counterparty.key),
+                )}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+          ))}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setCounterparties((current) => [
+              ...current,
+              {
+                key: `new-${Date.now()}-${current.length}`,
+                name: "",
+                amount: "",
+                hasTransfers: false,
+              },
+            ])}
+          >
+            <Plus className="size-4" />
+            Добавить контрагента
+          </Button>
+        </div>
+
+        <div className="text-sm">
+          Итого: <span className="font-semibold">{formatAmount(total)}</span> без НДС
+        </div>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isSaving}>Отмена</AlertDialogCancel>
+          <Button type="button" disabled={isSaving} onClick={saveExpense}>
+            {isSaving ? "Сохраняем..." : "Сохранить изменения"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function MonthQuotaWorkspace({
   month,
   departments,
@@ -1065,6 +1294,7 @@ function MonthQuotaWorkspace({
   onSaveEntry,
   onCreateManualExpense,
   onTransfer,
+  onUpdateManualExpense,
   onDeleteManualExpense,
 }: {
   month: {
@@ -1086,6 +1316,14 @@ function MonthQuotaWorkspace({
     transfers: Array<{ entry: QuotaEntryRow; amount: number }>,
     targetMonthKey: string,
   ) => Promise<void>;
+  onUpdateManualExpense: (
+    manualExpenseId: string,
+    values: {
+      tagName: string;
+      clientName: string;
+      counterparties: Array<{ id?: string; name: string; amount: number }>;
+    },
+  ) => Promise<void>;
   onDeleteManualExpense: (manualExpenseId: string) => Promise<void>;
 }) {
   const tags = departments.flatMap((department) => department.tags);
@@ -1094,6 +1332,7 @@ function MonthQuotaWorkspace({
   const monthRemaining = tags.reduce((sum, tag) => sum + (tag.remaining ?? 0), 0);
   const monthEntryTotal = monthEntries.reduce((sum, entry) => sum + (entry.amount ?? 0), 0);
   const [transferEntries, setTransferEntries] = useState<QuotaEntryRow[] | null>(null);
+  const [manualExpenseToEdit, setManualExpenseToEdit] = useState<QuotaEntryRow[] | null>(null);
   const [manualExpenseToDelete, setManualExpenseToDelete] = useState<QuotaEntryRow[] | null>(null);
 
   return (
@@ -1195,16 +1434,28 @@ function MonthQuotaWorkspace({
                                         Добавлено вручную
                                       </Badge>
                                       {entry.canEditEntry ? (
-                                        <Button
-                                          type="button"
-                                          variant="ghost"
-                                          size="icon"
-                                          className="size-7 text-muted-foreground hover:text-destructive"
-                                          title="Удалить ручную затрату"
-                                          onClick={() => setManualExpenseToDelete(requestEntries)}
-                                        >
-                                          <Trash2 className="size-3.5" />
-                                        </Button>
+                                        <>
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon"
+                                            className="size-7 text-muted-foreground hover:text-foreground"
+                                            title="Редактировать ручную затрату"
+                                            onClick={() => setManualExpenseToEdit(requestEntries)}
+                                          >
+                                            <Pencil className="size-3.5" />
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon"
+                                            className="size-7 text-muted-foreground hover:text-destructive"
+                                            title="Удалить ручную затрату"
+                                            onClick={() => setManualExpenseToDelete(requestEntries)}
+                                          >
+                                            <Trash2 className="size-3.5" />
+                                          </Button>
+                                        </>
                                       ) : null}
                                     </div>
                                   ) : (
@@ -1319,6 +1570,12 @@ function MonthQuotaWorkspace({
         entries={manualExpenseToDelete}
         onClose={() => setManualExpenseToDelete(null)}
         onDelete={onDeleteManualExpense}
+      />
+      <EditManualExpenseDialog
+        entries={manualExpenseToEdit}
+        tags={tags}
+        onClose={() => setManualExpenseToEdit(null)}
+        onUpdate={onUpdateManualExpense}
       />
     </div>
   );
@@ -1569,6 +1826,12 @@ export default function AdministrationQuotaClient() {
                         targetYear < start ? targetYear : targetYear > start + 2 ? targetYear - 2 : start,
                       );
                       setExpandedMonths((current) => ({ ...current, [targetMonthKey]: true }));
+                    }}
+                    onUpdateManualExpense={async (manualExpenseId, values) => {
+                      await updateManualExpense({
+                        id: manualExpenseId as any,
+                        ...values,
+                      });
                     }}
                     onDeleteManualExpense={async (manualExpenseId) => {
                       await deleteManualExpense({ id: manualExpenseId as any });

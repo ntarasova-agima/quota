@@ -57,3 +57,17 @@ export function getQuotaAllocationBalance(
     (allocation) => allocation.monthKey === monthKey,
   )?.amount ?? 0;
 }
+
+export function getMinimumQuotaBaseAmount(
+  baseMonthKey: string,
+  transfers: QuotaTransfer[],
+) {
+  const transferredOutOfBaseMonth = transfers.reduce(
+    (total, transfer) =>
+      total +
+      (transfer.sourceMonthKey === baseMonthKey ? transfer.amount : 0) -
+      (transfer.targetMonthKey === baseMonthKey ? transfer.amount : 0),
+    0,
+  );
+  return roundQuotaAmount(Math.max(transferredOutOfBaseMonth, 0));
+}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getMinimumQuotaBaseAmount,
   getQuotaAllocationBalance,
   getQuotaAllocations,
   roundQuotaAmount,
@@ -57,5 +58,14 @@ describe("quota transfers", () => {
   it("rounds money to two decimal places", () => {
     expect(roundQuotaAmount(10.005)).toBe(10.01);
     expect(roundQuotaAmount(10.004)).toBe(10);
+  });
+
+  it("does not allow an edited base amount below the amount already transferred out", () => {
+    expect(
+      getMinimumQuotaBaseAmount("2026-07", [
+        { sourceMonthKey: "2026-07", targetMonthKey: "2026-08", amount: 400 },
+        { sourceMonthKey: "2026-08", targetMonthKey: "2026-07", amount: 50 },
+      ]),
+    ).toBe(350);
   });
 });

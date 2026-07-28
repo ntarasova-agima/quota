@@ -19,7 +19,13 @@ import {
 import { HOD_DEPARTMENTS, normalizeHodDepartment } from "../src/lib/departments";
 import { hasAnyRole, hasFinanceApproverRole } from "../src/lib/financeRole";
 import { DEFAULT_VAT_RATE, getAmountWithVat, normalizeVatRate } from "../src/lib/vat";
-import { getQuotaAllocations, getQuotaAllocationBalance, roundQuotaAmount } from "../src/lib/quotaTransfers";
+import { prepareManualExpenseCounterparties } from "../src/lib/manualQuotaExpenses";
+import {
+  getMinimumQuotaBaseAmount,
+  getQuotaAllocations,
+  getQuotaAllocationBalance,
+  roundQuotaAmount,
+} from "../src/lib/quotaTransfers";
 
 const ADMINISTRATION_TOTAL_KEY = "__total__";
 
@@ -920,6 +926,17 @@ export const listAdministrationByMonthKeys = query({
           transfer.sourceType === "manual" &&
           String(transfer.manualExpenseId) === String(expense._id),
       );
+      const manualCounterparties = counterparties.map(
+        (counterparty: { id?: string; name: string; amount: number }, index: number) => {
+          const lineKey = counterparty.id?.trim() || `counterparty:${index}`;
+          return {
+            id: lineKey,
+            name: counterparty.name,
+            amount: counterparty.amount,
+            hasTransfers: expenseTransfers.some((transfer: any) => transfer.lineKey === lineKey),
+          };
+        },
+      );
       counterparties.forEach((counterparty: { id?: string; name: string; amount: number }, lineIndex: number) => {
         const lineKey = counterparty.id?.trim() || `counterparty:${lineIndex}`;
         const transfers = expenseTransfers.filter((transfer: any) => transfer.lineKey === lineKey);
@@ -950,6 +967,8 @@ export const listAdministrationByMonthKeys = query({
             requestRowSpan: counterparties.length,
             isManual: true,
             hasTransfers: expenseTransfers.length > 0,
+            manualBaseMonthKey: expense.monthKey,
+            manualCounterparties,
             transferredFromMonthKeys: allocation.transferredFromMonthKeys,
             canTransfer: canEditAdministrationQuotaRow(roleRecord, expense.departmentKey),
             canEditEntry: canEditAdministrationQuotaRow(roleRecord, expense.departmentKey),
@@ -1521,6 +1540,13 @@ export const createAdministrationManualExpense = mutation({
 export const updateAdministrationManualExpense = mutation({
   args: {
     id: v.id("administrationManualExpenses"),
+    tagName: v.optional(v.string()),
+    clientName: v.optional(v.string()),
+    counterparties: v.optional(v.array(v.object({
+      id: v.optional(v.string()),
+      name: v.string(),
+      amount: v.number(),
+    }))),
     workStatus: v.optional(v.string()),
     result: v.optional(v.string()),
     comment: v.optional(v.string()),
@@ -1534,12 +1560,73 @@ export const updateAdministrationManualExpense = mutation({
     if (!canEditAdministrationQuotaRow(access.record, expense.departmentKey)) {
       throw new Error("Недостаточно прав для редактирования этой затраты");
     }
-    await ctx.db.patch(expense._id, {
-      workStatus: args.workStatus?.trim() || undefined,
-      result: args.result?.trim() || undefined,
-      comment: args.comment?.trim() || undefined,
-      updatedAt: Date.now(),
-    });
+
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if (args.workStatus !== undefined) patch.workStatus = args.workStatus.trim() || undefined;
+    if (args.result !== undefined) patch.result = args.result.trim() || undefined;
+    if (args.comment !== undefined) patch.comment = args.comment.trim() || undefined;
+    if (args.tagName !== undefined) {
+      const tagName = args.tagName.trim();
+      if (!tagName || tagName === "Без тега") {
+        throw new Error("Выберите тег");
+      }
+      const matchingTag = await ctx.db
+        .query("cfdTags")
+        .filter((q: any) =>
+          q.and(
+            q.eq(q.field("department"), expense.departmentKey),
+            q.eq(q.field("name"), tagName),
+            q.eq(q.field("active"), true),
+          ),
+        )
+        .first();
+      if (!matchingTag) {
+        throw new Error("Выбранный тег больше недоступен");
+      }
+      patch.tagName = tagName;
+    }
+    if (args.clientName !== undefined) {
+      const clientName = args.clientName.trim();
+      if (!clientName) {
+        throw new Error("Укажите клиента");
+      }
+      patch.clientName = clientName;
+    }
+    if (args.counterparties !== undefined) {
+      const existingLines = expense.counterparties.map((counterparty: any, index: number) => ({
+        ...counterparty,
+        id: counterparty.id?.trim() || `counterparty:${index}`,
+      }));
+      const prepared = prepareManualExpenseCounterparties(
+        expense.counterparties,
+        args.counterparties,
+        String(Date.now()),
+      );
+      const counterparties = prepared.counterparties;
+
+      const transfers = await ctx.db
+        .query("administrationQuotaTransfers")
+        .withIndex("by_manual_expense", (q: any) => q.eq("manualExpenseId", expense._id))
+        .collect();
+      const nextById = new Map(counterparties.map((counterparty) => [counterparty.id, counterparty]));
+      for (const existingLine of existingLines) {
+        const lineTransfers = transfers.filter((transfer: any) => transfer.lineKey === existingLine.id);
+        if (!lineTransfers.length) continue;
+        const nextLine = nextById.get(existingLine.id);
+        if (!nextLine) {
+          throw new Error(`Нельзя удалить контрагента «${existingLine.name}»: по нему есть переносы`);
+        }
+        const minimumAmount = getMinimumQuotaBaseAmount(expense.monthKey, lineTransfers);
+        if (nextLine.amount < minimumAmount) {
+          throw new Error(
+            `Сумма для «${existingLine.name}» не может быть меньше ${minimumAmount}: часть уже перенесена`,
+          );
+        }
+      }
+      patch.counterparties = counterparties;
+      patch.amount = prepared.amount;
+    }
+    await ctx.db.patch(expense._id, patch);
     return expense._id;
   },
 });
