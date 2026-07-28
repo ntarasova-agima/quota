@@ -7,6 +7,10 @@ import {
 import { getCurrentEmail } from "./authHelpers";
 import { getEffectiveRequiredHodDepartments } from "./requestWorkflow";
 import { hasFinanceApproverRole } from "../src/lib/financeRole";
+import {
+  ACCOUNTING_REQUEST_AREA,
+  getRequestAreaForDepartment,
+} from "../src/lib/requestRules";
 
 export const REQUEST_WIDE_VIEW_ROLES = ["NBD", "AI-BOSS", "COO", "CFD", "BUH", "BUH Transit", "ADMIN"] as const;
 export const REQUEST_ALL_LIST_ROLES = [...REQUEST_WIDE_VIEW_ROLES, "HOD"] as const;
@@ -180,6 +184,40 @@ export function canManageViewerAccess(access: {
   roleRecord?: { roles?: string[] } | null;
 }) {
   return access.isCreator || Boolean(access.roleRecord?.roles?.includes("ADMIN"));
+}
+
+type RoleRecordForEditAccess = {
+  roles?: string[];
+} | null | undefined;
+
+type RequestForEditAccess = {
+  requestArea?: string | null;
+  department?: string | null;
+};
+
+export function hasNbdAccountingEditAccess(
+  roleRecord: RoleRecordForEditAccess,
+  request: RequestForEditAccess,
+) {
+  if (!roleRecord?.roles?.includes("NBD")) {
+    return false;
+  }
+  return (
+    request.requestArea === ACCOUNTING_REQUEST_AREA ||
+    getRequestAreaForDepartment(request.department) === ACCOUNTING_REQUEST_AREA
+  );
+}
+
+export function canEditRequest(access: {
+  isCreator: boolean;
+  roleRecord?: RoleRecordForEditAccess;
+  request: RequestForEditAccess;
+}) {
+  return (
+    access.isCreator ||
+    Boolean(access.roleRecord?.roles?.includes("ADMIN")) ||
+    hasNbdAccountingEditAccess(access.roleRecord, access.request)
+  );
 }
 
 export function canManageAttachments(access: {

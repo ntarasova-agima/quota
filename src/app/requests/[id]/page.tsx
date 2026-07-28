@@ -847,8 +847,8 @@ export default function RequestDetailPage() {
   const canSetPaid = canManagePayments;
   const canClose = useMemo(() => data?.isCreator || myRoles.includes("ADMIN"), [data?.isCreator, myRoles]);
   const canEditRequest = useMemo(
-    () => data?.isCreator || myRoles.includes("ADMIN"),
-    [data?.isCreator, myRoles],
+    () => Boolean(data?.canEditRequest),
+    [data?.canEditRequest],
   );
   const isLatePaymentPlan = useMemo(() => {
     const paymentDeadline = data?.request?.paymentDeadline ?? data?.request?.neededBy;

@@ -4,8 +4,10 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
 import {
+  canEditRequest,
   canManageViewerAccess,
   getRoleRecord,
+  hasNbdAccountingEditAccess,
   hasHistoricalApprovalAccess,
   hasHodAccessToRequest,
   hasSpecialBuhAccessToRequest,
@@ -2623,7 +2625,13 @@ export const getRequest = query({
         specialists: request.specialists,
       }).map((target) => getApprovalIdentity(target)),
     );
-    const isCreator = request.createdBy === userId || request.createdByEmail === email;
+    const isCreator =
+      request.createdBy === userId || normalizeEmail(request.createdByEmail) === normalizeEmail(email);
+    const canEdit = canEditRequest({
+      isCreator,
+      roleRecord: record,
+      request,
+    });
     return {
       request,
       approvals: approvals.map((approval) => ({
@@ -2631,6 +2639,7 @@ export const getRequest = query({
         isMandatory: mandatoryApprovalIdentities.has(getApprovalIdentity(approval)),
       })),
       isCreator,
+      canEditRequest: canEdit,
       canHodEditSpecialists: canHodView,
       canManageFiles: isCreator || canViewAll || canHodView || canViewByHistory,
       canManageViewerAccess: canManageViewerAccess({
@@ -2826,9 +2835,15 @@ export const previewEditImpact = query({
       throw new Error("Request not found");
     }
     const roleRecord = await getRoleRecord(ctx, email);
-    const isCreator = request.createdBy === userId || request.createdByEmail === email;
-    const isAdmin = roleRecord?.roles?.includes("ADMIN");
-    if (!isCreator && !isAdmin) {
+    const isCreator =
+      request.createdBy === userId || normalizeEmail(request.createdByEmail) === normalizeEmail(email);
+    if (
+      !canEditRequest({
+        isCreator,
+        roleRecord,
+        request,
+      })
+    ) {
       throw new Error("Not authorized");
     }
 
@@ -2950,9 +2965,17 @@ export const editRequest = mutation({
       throw new Error("Request not found");
     }
     const roleRecord = await getRoleRecord(ctx, email);
-    const isCreator = request.createdBy === userId || request.createdByEmail === email;
-    const isAdmin = roleRecord?.roles?.includes("ADMIN");
-    if (!isCreator && !isAdmin) {
+    const isCreator =
+      request.createdBy === userId || normalizeEmail(request.createdByEmail) === normalizeEmail(email);
+    const isNbdAccountingEdit =
+      !isCreator && hasNbdAccountingEditAccess(roleRecord, request);
+    if (
+      !canEditRequest({
+        isCreator,
+        roleRecord,
+        request,
+      })
+    ) {
       throw new Error("Not authorized");
     }
 
@@ -3237,6 +3260,13 @@ export const editRequest = mutation({
         groupId: historyGroupId,
         triggeredRepeatApproval: shouldResubmit,
         groupSummary: summarizeEditEffects(historySummaryLines),
+      });
+    }
+    if (changes.length && isNbdAccountingEdit) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendRequestEditedByNbdToAuthor, {
+        requestId: args.id,
+        actorEmail: email,
+        actorName,
       });
     }
     await logTimelineEvent(ctx, {

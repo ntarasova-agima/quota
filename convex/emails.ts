@@ -851,6 +851,40 @@ export const sendRequestUpdatedSummary = internalAction({
   },
 });
 
+export const sendRequestEditedByNbdToAuthor = internalAction({
+  args: {
+    requestId: v.id("requests"),
+    actorEmail: v.string(),
+    actorName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.emails.getRequestData, {
+      requestId: args.requestId,
+    });
+    if (!data) {
+      return;
+    }
+    const { request } = data;
+    const recipients = dedupeEmails([request.createdByEmail], [args.actorEmail]);
+    if (recipients.length === 0) {
+      return;
+    }
+    const link = `${getBaseUrl()}/requests/${request._id}`;
+    const title = request.title ?? `${request.clientName} :: ${request.category}`;
+    const actor = args.actorName?.trim() || args.actorEmail;
+    await sendEmail(ctx, {
+      requestId: args.requestId,
+      emailType: "request_edited_by_nbd",
+      to: recipients,
+      subject: `Ваша заявка отредактирована NBD: ${request.requestCode ?? "без номера"}`,
+      html: `
+        <p>Ваша заявка <strong>${title}</strong> отредактирована NBD (${actor}).</p>
+        <p>Ссылка: <a href="${link}">${link}</a></p>
+      `,
+    });
+  },
+});
+
 export const sendApprovalCanceled = internalAction({
   args: {
     requestId: v.id("requests"),

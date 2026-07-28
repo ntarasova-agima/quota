@@ -779,7 +779,7 @@ export default function NewRequestPage() {
     );
   }
 
-  if (data === null || !data.isCreator) {
+  if (data === null || !data.canEditRequest) {
     return (
       <RequireAuth>
         <div className="min-h-screen bg-background text-foreground">

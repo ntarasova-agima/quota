@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hasSpecialBuhAccessToRequest } from "../convex/requestAccessHelpers";
+import {
+  canEditRequest,
+  hasNbdAccountingEditAccess,
+  hasSpecialBuhAccessToRequest,
+} from "../convex/requestAccessHelpers";
 
 describe("requestAccessHelpers", () => {
   it("allows specialist BUH roles to open any request with specialists", () => {
@@ -35,5 +39,59 @@ describe("requestAccessHelpers", () => {
         { status: "approved", specialists: [] },
       ),
     ).toBe(false);
+  });
+
+  it("allows NBD to edit accounting requests", () => {
+    const request = {
+      requestArea: "Аккаунтинг",
+      department: "Аккаунтинг",
+    };
+
+    expect(hasNbdAccountingEditAccess({ roles: ["NBD"] }, request)).toBe(true);
+    expect(
+      canEditRequest({
+        isCreator: false,
+        roleRecord: { roles: ["NBD"] },
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not allow NBD to edit administration requests", () => {
+    const request = {
+      requestArea: "Администрация",
+      department: "Администрация",
+    };
+
+    expect(hasNbdAccountingEditAccess({ roles: ["NBD"] }, request)).toBe(false);
+    expect(
+      canEditRequest({
+        isCreator: false,
+        roleRecord: { roles: ["NBD"] },
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps creator and admin edit access", () => {
+    const request = {
+      requestArea: "Администрация",
+      department: "Администрация",
+    };
+
+    expect(
+      canEditRequest({
+        isCreator: true,
+        roleRecord: { roles: [] },
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      canEditRequest({
+        isCreator: false,
+        roleRecord: { roles: ["ADMIN"] },
+        request,
+      }),
+    ).toBe(true);
   });
 });
