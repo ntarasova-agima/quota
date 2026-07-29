@@ -273,9 +273,43 @@ export default function NewRequestPage() {
     () => (attachments ?? []).filter((item) => (item.attachmentType ?? "general") !== "contract"),
     [attachments],
   );
+  const originalApprovalDeadlineValue = useMemo(
+    () =>
+      data?.request?.approvalDeadline
+        ? new Date(data.request.approvalDeadline).toISOString().slice(0, 10)
+        : "",
+    [data?.request?.approvalDeadline],
+  );
+  const originalNeededByValue = useMemo(
+    () =>
+      data?.request?.neededBy
+        ? new Date(data.request.neededBy).toISOString().slice(0, 10)
+        : "",
+    [data?.request?.neededBy],
+  );
+  const originalPaymentDeadlineValue = useMemo(
+    () =>
+      data?.request?.paymentDeadline
+        ? new Date(data.request.paymentDeadline).toISOString().slice(0, 10)
+        : data?.request?.neededBy
+          ? new Date(data.request.neededBy).toISOString().slice(0, 10)
+          : "",
+    [data?.request?.neededBy, data?.request?.paymentDeadline],
+  );
+  const originalPrepaymentDateValue = useMemo(
+    () => (data?.request?.prepaymentDate ? timestampToDateInput(data.request.prepaymentDate) : ""),
+    [data?.request?.prepaymentDate],
+  );
+  const originalPaidByValue = useMemo(
+    () => (data?.request?.paidBy ? new Date(data.request.paidBy).toISOString().slice(0, 10) : ""),
+    [data?.request?.paidBy],
+  );
   const paidByError = useMemo(
-    () => (paidBy && !isPaidByDateAllowed(paidBy) ? "AGIMA тогда еще не было" : null),
-    [paidBy],
+    () =>
+      paidBy && paidBy !== originalPaidByValue && !isPaidByDateAllowed(paidBy)
+        ? "AGIMA тогда еще не было"
+        : null,
+    [originalPaidByValue, paidBy],
   );
   const showPaymentMethod = !isWelcomeBonus;
   const isPaymentMethodRequired =
@@ -877,7 +911,7 @@ export default function NewRequestPage() {
     }
     setSubmitting(true);
     try {
-      if (approvalDeadline) {
+      if (approvalDeadline && approvalDeadline !== originalApprovalDeadlineValue) {
         const tomorrow = new Date();
         tomorrow.setHours(0, 0, 0, 0);
         tomorrow.setDate(tomorrow.getDate() + 1);
@@ -1788,7 +1822,11 @@ export default function NewRequestPage() {
                         id="prepaymentDate"
                         type="date"
                         value={prepaymentDate}
-                        min={minNeededByDateValue}
+                        min={
+                          prepaymentDate && prepaymentDate === originalPrepaymentDateValue
+                            ? undefined
+                            : minNeededByDateValue
+                        }
                         aria-invalid={prepaymentInvalid ? true : undefined}
                         onChange={(event) => setPrepaymentDate(event.target.value)}
                       />
@@ -1855,7 +1893,11 @@ export default function NewRequestPage() {
                     value={approvalDeadline}
                     onChange={(event) => setApprovalDeadline(event.target.value)}
                     aria-invalid={approvalDeadlineInvalid ? true : undefined}
-                    min={minApprovalDateValue}
+                    min={
+                      approvalDeadline && approvalDeadline === originalApprovalDeadlineValue
+                        ? undefined
+                        : minApprovalDateValue
+                    }
                   />
                 </div>
                 {!isWelcomeBonus ? (
@@ -1870,7 +1912,11 @@ export default function NewRequestPage() {
                         value={neededBy}
                         onChange={(event) => setNeededBy(event.target.value)}
                         aria-invalid={neededByInvalid ? true : undefined}
-                        min={minNeededByDateValue}
+                        min={
+                          neededBy && neededBy === originalNeededByValue
+                            ? undefined
+                            : minNeededByDateValue
+                        }
                       />
                     </div>
                     <div className="space-y-2">
@@ -1883,7 +1929,11 @@ export default function NewRequestPage() {
                         value={paymentDeadline}
                         onChange={(event) => setPaymentDeadline(event.target.value)}
                         aria-invalid={paymentDeadlineInvalid ? true : undefined}
-                        min={minNeededByDateValue}
+                        min={
+                          paymentDeadline && paymentDeadline === originalPaymentDeadlineValue
+                            ? undefined
+                            : minNeededByDateValue
+                        }
                       />
                     </div>
                   </>

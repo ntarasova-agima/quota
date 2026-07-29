@@ -214,6 +214,13 @@ function isBeforeDate(left?: number, right?: number) {
   return startOfDate(left) < startOfDate(right);
 }
 
+function isSameDate(left?: number, right?: number) {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+  return startOfDate(left) === startOfDate(right);
+}
+
 function getEarliestAllowedExpenseExpectation(now = Date.now()) {
   const date = new Date(now);
   date.setHours(0, 0, 0, 0);
@@ -1719,7 +1726,10 @@ function getApprovalStatusFromEntries(approvals: any[]) {
   return "pending";
 }
 
-function validateRequestPayload(args: any) {
+function validateRequestPayload(args: any, existing?: {
+  approvalDeadline?: number;
+  paidBy?: number;
+}) {
   const rawCategory = typeof args.category === "string" ? args.category.trim() : "";
   if (!rawCategory) {
     throw new Error("Выберите тип заявки");
@@ -1850,7 +1860,10 @@ function validateRequestPayload(args: any) {
   if (!isFundingSourceAllowedForCategory(normalizedCategory, normalizedFundingSource)) {
     throw new Error("Так не бывает");
   }
-  if (args.approvalDeadline !== undefined) {
+  if (
+    args.approvalDeadline !== undefined &&
+    !isSameDate(args.approvalDeadline, existing?.approvalDeadline)
+  ) {
     const tomorrow = new Date();
     tomorrow.setHours(0, 0, 0, 0);
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -1858,7 +1871,11 @@ function validateRequestPayload(args: any) {
       throw new Error("Дедлайн согласования должен быть не раньше завтрашнего дня");
     }
   }
-  if (args.paidBy !== undefined && !isPaidByTimestampAllowed(args.paidBy)) {
+  if (
+    args.paidBy !== undefined &&
+    !isSameDate(args.paidBy, existing?.paidBy) &&
+    !isPaidByTimestampAllowed(args.paidBy)
+  ) {
     throw new Error("AGIMA тогда еще не было");
   }
   if (
@@ -2984,9 +3001,16 @@ export const editRequest = mutation({
       ...args,
       specialists: specialistInput,
       existingContractAttachmentCount: request.contractAttachmentCount ?? 0,
+    }, {
+      approvalDeadline: request.approvalDeadline,
+      paidBy: request.paidBy,
     });
     const normalizedCategory = normalizeRequestCategory(args.category);
-    if (normalizedCategory !== "Welcome-бонус" && !isExpenseExpectationDateAllowed(args.neededBy, Date.now())) {
+    if (
+      normalizedCategory !== "Welcome-бонус" &&
+      !isSameDate(args.neededBy, request.neededBy) &&
+      !isExpenseExpectationDateAllowed(args.neededBy, Date.now())
+    ) {
       throw new Error("Дата отгрузки может быть не раньше прошлого месяца");
     }
     if (args.prepaymentRequired && isBeforeDate(args.prepaymentDate, request.createdAt)) {
