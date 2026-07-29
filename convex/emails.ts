@@ -413,6 +413,7 @@ export const sendSpecialistBuhNotifications = internalAction({
     summaryLines: v.optional(v.array(v.string())),
     actorEmail: v.optional(v.string()),
     actorName: v.optional(v.string()),
+    excludedEmails: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const data = await ctx.runQuery(internal.emails.getRequestData, {
@@ -437,9 +438,12 @@ export const sendSpecialistBuhNotifications = internalAction({
     if (!recipientRoles.length) {
       return;
     }
-    const recipients = roles
-      .filter((role) => role.active && role.roles.some((item: string) => recipientRoles.includes(item)))
-      .map((role) => role.email);
+    const recipients = dedupeEmails(
+      roles
+        .filter((role) => role.active && role.roles.some((item: string) => recipientRoles.includes(item)))
+        .map((role) => role.email),
+      args.excludedEmails ?? [],
+    );
     if (!recipients.length) {
       return;
     }
@@ -450,7 +454,7 @@ export const sendSpecialistBuhNotifications = internalAction({
     await sendEmail(ctx, {
       requestId: args.requestId,
       emailType: isUpdate ? "specialist_buh_update_notification" : "specialist_buh_notification",
-      to: Array.from(new Set(recipients)),
+      to: recipients,
       subject: isUpdate
         ? `Изменены специалисты в заявке: ${request.requestCode ?? request.category}`
         : `В заявке есть специалисты: ${request.requestCode ?? request.category}`,

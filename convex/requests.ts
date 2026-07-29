@@ -3470,6 +3470,7 @@ export const editRequest = mutation({
             : undefined,
         actorEmail: request.status !== "draft" && specialistsChanged ? email : undefined,
         actorName: request.status !== "draft" && specialistsChanged ? actorName : undefined,
+        excludedEmails: isNbdAccountingEdit ? [request.createdByEmail] : undefined,
       });
     }
     if (request.status === "approved" && specialistsChanged) {
