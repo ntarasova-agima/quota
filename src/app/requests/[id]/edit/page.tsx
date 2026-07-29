@@ -142,6 +142,7 @@ export default function NewRequestPage() {
   const [currency, setCurrency] = useState("RUB");
   const [fundingSource, setFundingSource] = useState("Квоты AGIMA");
   const [cfdTag, setCfdTag] = useState("");
+  const [cfdTagWasChanged, setCfdTagWasChanged] = useState(false);
   const [justification, setJustification] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
@@ -198,6 +199,7 @@ export default function NewRequestPage() {
     [data?.request],
   );
   const effectiveCategory = category || loadedCoreFields?.category || "";
+  const effectiveCfdTag = cfdTag || (cfdTagWasChanged ? "" : data?.request?.cfdTag) || "";
   const presalesMonthKeys = useMemo(() => {
     const now = new Date();
     return Array.from({ length: 3 }).map((_, index) => {
@@ -267,8 +269,8 @@ export default function NewRequestPage() {
     [fundingSource],
   );
   const displayedTagNames = useMemo(
-    () => Array.from(new Set([...(availableTags ?? []).map((tag) => tag.name), ...(cfdTag ? [cfdTag] : [])])),
-    [availableTags, cfdTag],
+    () => Array.from(new Set([...(availableTags ?? []).map((tag) => tag.name), ...(effectiveCfdTag ? [effectiveCfdTag] : [])])),
+    [availableTags, effectiveCfdTag],
   );
   const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(effectiveCategory), [effectiveCategory]);
   const contractAttachments = useMemo(
@@ -350,6 +352,7 @@ export default function NewRequestPage() {
     setCurrency(request.currency);
     setFundingSource(normalizedFundingSource);
     setCfdTag(request.cfdTag ?? "");
+    setCfdTagWasChanged(false);
     setJustification([request.justification, request.details].filter(Boolean).join("\n\n"));
     setInvestmentReturn(request.investmentReturn ?? "");
     setClientName(request.clientName ?? "");
@@ -947,7 +950,7 @@ export default function NewRequestPage() {
         vatRate: resolvedAmounts.vatRate,
         currency,
         fundingSource,
-        cfdTag: cfdTag || undefined,
+        cfdTag: effectiveCfdTag || undefined,
         justification,
         investmentReturn: investmentReturn.trim() || undefined,
         clientName,
@@ -1111,7 +1114,13 @@ export default function NewRequestPage() {
                   </div>
                   <div className="space-y-2">
                     <FieldLabel className={headerFieldLabelClass}>Тег заявки (необязательно)</FieldLabel>
-                    <Select value={cfdTag || "none"} onValueChange={(value) => setCfdTag(value === "none" ? "" : value)}>
+                    <Select
+                      value={effectiveCfdTag || "none"}
+                      onValueChange={(value) => {
+                        setCfdTagWasChanged(true);
+                        setCfdTag(value === "none" ? "" : value);
+                      }}
+                    >
                       <SelectTrigger className={wrappedSelectTriggerClass}>
                         <SelectValue placeholder="Выберите тег" />
                       </SelectTrigger>
