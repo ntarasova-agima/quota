@@ -413,6 +413,7 @@ export const sendSpecialistBuhNotifications = internalAction({
     summaryLines: v.optional(v.array(v.string())),
     actorEmail: v.optional(v.string()),
     actorName: v.optional(v.string()),
+    extraRecipients: v.optional(v.array(v.string())),
     excludedEmails: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
@@ -439,9 +440,12 @@ export const sendSpecialistBuhNotifications = internalAction({
       return;
     }
     const recipients = dedupeEmails(
-      roles
-        .filter((role) => role.active && role.roles.some((item: string) => recipientRoles.includes(item)))
-        .map((role) => role.email),
+      [
+        ...roles
+          .filter((role) => role.active && role.roles.some((item: string) => recipientRoles.includes(item)))
+          .map((role) => role.email),
+        ...(args.extraRecipients ?? []),
+      ],
       args.excludedEmails ?? [],
     );
     if (!recipients.length) {

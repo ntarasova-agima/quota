@@ -3302,7 +3302,7 @@ export const editRequest = mutation({
         groupSummary: summarizeEditEffects(historySummaryLines),
       });
     }
-    if (changes.length && isNbdAccountingEdit) {
+    if (changes.length && isNbdAccountingEdit && !specialistsChanged) {
       await ctx.scheduler.runAfter(0, internal.emails.sendRequestEditedByNbdToAuthor, {
         requestId: args.id,
         actorEmail: email,
@@ -3470,7 +3470,7 @@ export const editRequest = mutation({
             : undefined,
         actorEmail: request.status !== "draft" && specialistsChanged ? email : undefined,
         actorName: request.status !== "draft" && specialistsChanged ? actorName : undefined,
-        excludedEmails: isNbdAccountingEdit ? [request.createdByEmail] : undefined,
+        extraRecipients: isNbdAccountingEdit ? [request.createdByEmail] : undefined,
       });
     }
     if (request.status === "approved" && specialistsChanged) {
