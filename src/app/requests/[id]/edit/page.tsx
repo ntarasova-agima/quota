@@ -193,6 +193,11 @@ export default function NewRequestPage() {
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
+  const loadedCoreFields = useMemo(
+    () => (data?.request ? resolveRequestCoreFields(data.request) : null),
+    [data?.request],
+  );
+  const effectiveCategory = category || loadedCoreFields?.category || "";
   const presalesMonthKeys = useMemo(() => {
     const now = new Date();
     return Array.from({ length: 3 }).map((_, index) => {
@@ -206,7 +211,7 @@ export default function NewRequestPage() {
   );
   const aiToolQuotas = useQuery(
     api.quotas.listAiToolByMonthKeys,
-    isAiBoss && fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(category)
+    isAiBoss && fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(effectiveCategory)
       ? { monthKeys: presalesMonthKeys }
       : "skip",
   );
@@ -238,15 +243,15 @@ export default function NewRequestPage() {
   const wrappedSelectTriggerClass =
     "h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left *:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:pr-6 *:data-[slot=select-value]:whitespace-normal *:data-[slot=select-value]:break-words *:data-[slot=select-value]:leading-snug";
   const headerFieldLabelClass = "items-start leading-snug";
-  const isServiceCategory = useMemo(() => isServiceRecipientCategory(category), [category]);
-  const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(category), [category]);
-  const requestSupportsSpecialists = useMemo(() => supportsRequestSpecialists(category), [category]);
+  const isServiceCategory = useMemo(() => isServiceRecipientCategory(effectiveCategory), [effectiveCategory]);
+  const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(effectiveCategory), [effectiveCategory]);
+  const requestSupportsSpecialists = useMemo(() => supportsRequestSpecialists(effectiveCategory), [effectiveCategory]);
   const requestHadSpecialists = useMemo(
     () => Boolean(data?.request?.specialists?.length),
     [data?.request?.specialists],
   );
   const canEditSpecialists = requestSupportsSpecialists || requestHadSpecialists;
-  const isWelcomeBonus = category === "Welcome-бонус";
+  const isWelcomeBonus = effectiveCategory === "Welcome-бонус";
   const selectedDepartment = requestArea;
   const availableTags = useQuery(api.cfdTags.list, { department: selectedDepartment });
   const categoryOptions = useMemo(
@@ -254,8 +259,8 @@ export default function NewRequestPage() {
     [selectedDepartment],
   );
   const displayedCategoryOptions = useMemo(
-    () => Array.from(new Set([...categoryOptions, ...(category ? [category] : [])])),
-    [category, categoryOptions],
+    () => Array.from(new Set([...categoryOptions, ...(effectiveCategory ? [effectiveCategory] : [])])),
+    [effectiveCategory, categoryOptions],
   );
   const displayedFundingSources = useMemo(
     () => Array.from(new Set([...FUNDING_SOURCES, ...(fundingSource ? [fundingSource] : [])])),
@@ -265,7 +270,7 @@ export default function NewRequestPage() {
     () => Array.from(new Set([...(availableTags ?? []).map((tag) => tag.name), ...(cfdTag ? [cfdTag] : [])])),
     [availableTags, cfdTag],
   );
-  const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(category), [category]);
+  const paymentMethodOptions = useMemo(() => getPaymentMethodOptions(effectiveCategory), [effectiveCategory]);
   const contractAttachments = useMemo(
     () => (attachments ?? []).filter((item) => item.attachmentType === "contract"),
     [attachments],
@@ -314,9 +319,9 @@ export default function NewRequestPage() {
   );
   const showPaymentMethod = !isWelcomeBonus;
   const isPaymentMethodRequired =
-    !isWelcomeBonus && category !== "Конкурсное задание";
+    !isWelcomeBonus && effectiveCategory !== "Конкурсное задание";
   const showCounterparty =
-    category !== "Конкурсное задание" &&
+    effectiveCategory !== "Конкурсное задание" &&
     !isWelcomeBonus &&
     !isServiceCategory;
   const financeLinksRequired = fundingSource === "Отгрузки проекта";
@@ -508,13 +513,13 @@ export default function NewRequestPage() {
                   .map((item) => item.department as string)
               : []),
             ...getAutoRequiredHodDepartmentsForRequest({
-              category,
+              category: effectiveCategory,
               specialists: specialistsPayload,
             }),
           ].filter((department): department is string => Boolean(department)),
         ),
       ),
-    [canEditSpecialists, category, specialistsPayload],
+    [canEditSpecialists, effectiveCategory, specialistsPayload],
   );
   const effectiveRequiredHodDepartments = useMemo(
     () =>
@@ -585,12 +590,12 @@ export default function NewRequestPage() {
   );
   const needsContract =
     (resolvedAmountsPreview.amountWithoutVat ?? 0) > 100_000 &&
-    category !== "Welcome-бонус" &&
-    category !== "Конкурсное задание";
+    effectiveCategory !== "Welcome-бонус" &&
+    effectiveCategory !== "Конкурсное задание";
   const needsDueDiligence =
     (resolvedAmountsPreview.amountWithoutVat ?? 0) > 500_000 &&
-    category !== "Welcome-бонус" &&
-    category !== "Конкурсное задание";
+    effectiveCategory !== "Welcome-бонус" &&
+    effectiveCategory !== "Конкурсное задание";
   const incomingRatioValue = useMemo(
     () =>
       formatIncomingRatio(
@@ -609,7 +614,7 @@ export default function NewRequestPage() {
     ],
   );
   const titleInvalid = showValidationErrors && !title.trim();
-  const categoryInvalid = showValidationErrors && !category;
+  const categoryInvalid = showValidationErrors && !effectiveCategory;
   const departmentInvalid = showValidationErrors && !selectedDepartment;
   const clientNameInvalid = showValidationErrors && !clientName.trim();
   const amountInvalid =
@@ -652,11 +657,11 @@ export default function NewRequestPage() {
   const hodDepartmentsInvalid =
     showValidationErrors &&
     requiredRoles.includes("HOD") &&
-    isHodSelectableCategory(category) &&
+    isHodSelectableCategory(effectiveCategory) &&
     effectiveRequiredHodDepartments.length === 0;
   const hasBlockingValidationErrors =
     !title.trim() ||
-    !category ||
+    !effectiveCategory ||
     !selectedDepartment ||
     !clientName.trim() ||
     !resolvedAmountsPreview.amountWithoutVat ||
@@ -680,7 +685,7 @@ export default function NewRequestPage() {
         resolvedPrepaymentAmountsPreview.amountWithVat <= 0 ||
         !prepaymentDate)) ||
     (requiredRoles.includes("HOD") &&
-      isHodSelectableCategory(category) &&
+      isHodSelectableCategory(effectiveCategory) &&
       effectiveRequiredHodDepartments.length === 0) ||
     !approvalDeadline ||
     (!isWelcomeBonus && !neededBy) ||
@@ -689,8 +694,8 @@ export default function NewRequestPage() {
     Boolean(paidByError);
 
   const enforcedRoles = useMemo(
-    () => getEnforcedRoleSet(category, fundingSource),
-    [category, fundingSource],
+    () => getEnforcedRoleSet(effectiveCategory, fundingSource),
+    [effectiveCategory, fundingSource],
   );
   const displayedRoleOptions = useMemo(() => {
     const roles = new Set<RoleOption>(ROLE_OPTIONS);
@@ -721,12 +726,12 @@ export default function NewRequestPage() {
   }, [data?.request?._id, enforcedRoles]);
 
   useEffect(() => {
-    if (!isFundingSourceAllowedForCategory(category, fundingSource)) {
+    if (!isFundingSourceAllowedForCategory(effectiveCategory, fundingSource)) {
       setFundingError("Так не бывает");
     } else {
       setFundingError(null);
     }
-  }, [fundingSource, category]);
+  }, [fundingSource, effectiveCategory]);
 
   useEffect(() => {
     if (!paymentMethod) {
@@ -936,7 +941,7 @@ export default function NewRequestPage() {
         requestArea,
         department: normalizeHodDepartment(selectedDepartment),
         title,
-        category,
+        category: effectiveCategory,
         amount: resolvedAmounts.amountWithoutVat,
         amountWithVat: resolvedAmounts.amountWithVat,
         vatRate: resolvedAmounts.vatRate,
@@ -947,7 +952,7 @@ export default function NewRequestPage() {
         investmentReturn: investmentReturn.trim() || undefined,
         clientName,
         counterparty:
-          category === "Конкурсное задание" ||
+          effectiveCategory === "Конкурсное задание" ||
           isWelcomeBonus ||
           isServiceCategory
             ? ""
@@ -1067,7 +1072,7 @@ export default function NewRequestPage() {
                   </div>
                   <div className="space-y-2">
                     <FieldLabel required className={headerFieldLabelClass}>Тип заявки</FieldLabel>
-                    <Select value={category} onValueChange={handleCategoryChange}>
+                    <Select value={effectiveCategory} onValueChange={handleCategoryChange}>
                       <SelectTrigger
                         className={wrappedSelectTriggerClass}
                         aria-invalid={categoryInvalid ? true : undefined}
@@ -1501,7 +1506,7 @@ export default function NewRequestPage() {
                 />
               </div>
 
-              {category === "Welcome-бонус" && (
+              {effectiveCategory === "Welcome-бонус" && (
                 <div className="space-y-2">
                   <FieldLabel htmlFor="investmentReturn" required>
                     Как будем возвращать инвестиции
@@ -1825,8 +1830,8 @@ export default function NewRequestPage() {
                   </div>
                 ) : null}
               </div>
-              {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
-                (fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(category) && isAiBoss && aiToolQuotas?.length)) ? (
+              {((fundingSource === "Квота на пресейлы" && effectiveCategory !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
+                (fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(effectiveCategory) && isAiBoss && aiToolQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
                   <div className="font-medium">Остаток квот</div>
                   <div className="mt-2 grid gap-2">
@@ -1945,7 +1950,7 @@ export default function NewRequestPage() {
                     </label>
                   ))}
                 </div>
-                {requiredRoles.includes("HOD") && isHodSelectableCategory(category) ? (
+                {requiredRoles.includes("HOD") && isHodSelectableCategory(effectiveCategory) ? (
                   <div className="space-y-2 rounded-lg border border-border p-3">
                     <Label>Какой руководитель цеха согласует заявку</Label>
                     <p className="text-xs text-muted-foreground">
