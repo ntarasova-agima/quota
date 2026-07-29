@@ -41,6 +41,65 @@ describe("buildEditImpact", () => {
     );
   });
 
+  it("notifies HOD without repeat approval when skipped specialist validation removes HOD", () => {
+    const previous = {
+      ...baseRequest,
+      category: "Конкурсное задание",
+      requiredRoles: ["NBD", "HOD"],
+      requiredHodDepartments: ["Разработка"],
+      specialists: [
+        {
+          sourceType: "internal",
+          name: "Developer",
+          department: "Разработка",
+          directCost: 100_000,
+        },
+      ],
+    };
+    const next = {
+      ...previous,
+      amount: 150_000,
+      amountWithVat: 183_000,
+      requiredRoles: ["NBD"],
+      requiredHodDepartments: [],
+      specialists: [
+        {
+          ...previous.specialists[0],
+          directCost: 150_000,
+          validationSkipped: true,
+        },
+      ],
+    };
+
+    const impact = buildEditImpact(
+      previous,
+      next,
+      [
+        {
+          role: "HOD",
+          department: "Разработка",
+          status: "approved",
+          reviewerEmail: "dev-hod@agima.ru",
+        },
+        {
+          role: "NBD",
+          status: "approved",
+          reviewerEmail: "nbd@agima.ru",
+        },
+      ],
+    );
+
+    expect(impact.triggerRepeatApproval).toBe(false);
+    expect(impact.routeChanged).toBe(false);
+    expect(impact.shouldAskForConfirmation).toBe(false);
+    expect(impact.removedRoles).toEqual([]);
+    expect(impact.rolesToReset).toEqual([]);
+    expect(impact.notifyApprovedEmails).toEqual(["dev-hod@agima.ru"]);
+    expect(impact.infoLines).toContain(
+      "Изменение суммы уведомит руководителя цеха без повторного согласования.",
+    );
+  });
+
   it("does not reset approvals for category change but notifies approved reviewers", () => {
     const impact = buildEditImpact(
       baseRequest,

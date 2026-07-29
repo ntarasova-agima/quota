@@ -538,6 +538,7 @@ export default function NewRequestPage() {
       ),
     [autoRequiredHodDepartments, requiredHodDepartments, requiredRoles],
   );
+  const isHodRoleAutoRequired = autoRequiredHodDepartments.length > 0;
   const effectiveAmountWithoutVatInput = useMemo(
     () =>
       requestHasSpecialists
@@ -825,7 +826,7 @@ export default function NewRequestPage() {
   }
 
   function toggleRole(role: RoleOption) {
-    if (enforcedRoles.has(role)) {
+    if (enforcedRoles.has(role) || (role === "HOD" && isHodRoleAutoRequired)) {
       return;
     }
     setRequiredRoles((current) => {
@@ -1951,9 +1952,9 @@ export default function NewRequestPage() {
                   {displayedRoleOptions.map((role) => (
                     <label key={role} className="flex items-center gap-2 text-sm">
                       <Checkbox
-                        checked={requiredRoles.includes(role)}
+                        checked={requiredRoles.includes(role) || (role === "HOD" && isHodRoleAutoRequired)}
                         onCheckedChange={() => toggleRole(role)}
-                        disabled={enforcedRoles.has(role)}
+                        disabled={enforcedRoles.has(role) || (role === "HOD" && isHodRoleAutoRequired)}
                       />
                       <span>{getRoleLabel(role)}</span>
                     </label>

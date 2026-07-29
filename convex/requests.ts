@@ -1617,8 +1617,20 @@ function summarizeEditEffects(lines: string[]) {
 
 export function buildEditImpact(previous: any, next: any, approvals: any[]) {
   const approvedReviewerEmails = getApprovedReviewerEmails(approvals);
+  const approvedHodReviewerEmails = getApprovedReviewerEmailsByRoles(approvals, ["HOD"]);
   const removedRoles = previous.requiredRoles.filter((role: string) => !next.requiredRoles.includes(role));
   const addedRoles = next.requiredRoles.filter((role: string) => !previous.requiredRoles.includes(role));
+  const previousSpecialistHodDepartments = getRequiredSpecialistHodDepartments(previous.specialists ?? []);
+  const nextSpecialistHodDepartments = getRequiredSpecialistHodDepartments(next.specialists ?? []);
+  const skippedSpecialistHodValidationRemoved =
+    previousSpecialistHodDepartments.length > 0 &&
+    nextSpecialistHodDepartments.length === 0;
+  const rolesRemovedBySkippedSpecialistValidation = skippedSpecialistHodValidationRemoved
+    ? removedRoles.filter((role: string) => role === "HOD")
+    : [];
+  const routeRemovedRoles = removedRoles.filter(
+    (role: string) => !rolesRemovedBySkippedSpecialistValidation.includes(role),
+  );
   const oldFundingOwners = getFundingOwnerRoles(previous.fundingSource);
   const newFundingOwners = getFundingOwnerRoles(next.fundingSource);
   const oldMonthKey = getMonthKey(previous.approvalDeadline);
@@ -1639,7 +1651,10 @@ export function buildEditImpact(previous: any, next: any, approvals: any[]) {
   const infoLines: string[] = [];
   let triggerRepeatApproval = false;
 
-  if (amountChanged && hadApprovalProgress) {
+  if (amountChanged && hadApprovalProgress && skippedSpecialistHodValidationRemoved) {
+    approvedHodReviewerEmails.forEach((email) => notifyApprovedEmails.add(email));
+    infoLines.push("Изменение суммы уведомит руководителя цеха без повторного согласования.");
+  } else if (amountChanged && hadApprovalProgress) {
     next.requiredRoles.forEach((role: string) => rolesToReset.add(role));
     triggerRepeatApproval = true;
     lines.push("Изменение суммы отправит заявку на повторное согласование.");
@@ -1672,9 +1687,9 @@ export function buildEditImpact(previous: any, next: any, approvals: any[]) {
     lines.push(`Новые согласующие: ${addedRoles.join(", ")}.`);
   }
 
-  if (removedRoles.length > 0) {
+  if (routeRemovedRoles.length > 0) {
     triggerRepeatApproval = true;
-    lines.push(`Из маршрута будут убраны роли: ${removedRoles.join(", ")}.`);
+    lines.push(`Из маршрута будут убраны роли: ${routeRemovedRoles.join(", ")}.`);
   }
 
   if (categoryChanged && !fundingChanged) {
@@ -1692,8 +1707,8 @@ export function buildEditImpact(previous: any, next: any, approvals: any[]) {
   }
 
   const shouldAskForConfirmation =
-    rolesToReset.size > 0 || removedRoles.length > 0 || addedRoles.length > 0;
-  const routeChanged = rolesToReset.size > 0 || removedRoles.length > 0 || addedRoles.length > 0;
+    rolesToReset.size > 0 || routeRemovedRoles.length > 0 || addedRoles.length > 0;
+  const routeChanged = rolesToReset.size > 0 || routeRemovedRoles.length > 0 || addedRoles.length > 0;
 
   return {
     amountChanged,
@@ -1701,8 +1716,9 @@ export function buildEditImpact(previous: any, next: any, approvals: any[]) {
     categoryChanged,
     counterpartyChanged,
     monthChanged,
-    removedRoles,
+    removedRoles: routeRemovedRoles,
     addedRoles,
+    skippedSpecialistHodValidationRemoved,
     rolesToReset: Array.from(rolesToReset),
     notifyApprovedEmails: Array.from(notifyApprovedEmails),
     triggerRepeatApproval,
@@ -3135,7 +3151,7 @@ export const editRequest = mutation({
     const previousHodDepartments = normalizeDepartmentList(request.requiredHodDepartments ?? []);
     const hodDepartmentsChanged =
       JSON.stringify(previousHodDepartments) !== JSON.stringify(effectiveRequiredHodDepartments);
-    if (hodDepartmentsChanged) {
+    if (hodDepartmentsChanged && !editImpact.skippedSpecialistHodValidationRemoved) {
       editImpact.triggerRepeatApproval = true;
       editImpact.routeChanged = true;
       editImpact.shouldAskForConfirmation = true;
@@ -3165,7 +3181,7 @@ export const editRequest = mutation({
 
     if (submitDraft || request.status !== "draft") {
       const shouldRecreateApprovals =
-        submitDraft || shouldResubmit || hodDepartmentsChanged || request.status !== "draft";
+        submitDraft || shouldResubmit || (hodDepartmentsChanged && !editImpact.skippedSpecialistHodValidationRemoved);
       if (shouldRecreateApprovals) {
         for (const approval of approvals) {
           await ctx.db.delete(approval._id);
