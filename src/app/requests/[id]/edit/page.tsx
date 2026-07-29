@@ -133,7 +133,7 @@ export default function NewRequestPage() {
   }, [today]);
 
   const [requestArea, setRequestArea] = useState<RequestArea>("Аккаунтинг");
-  const [category, setCategory] = useState("Welcome-бонус");
+  const [category, setCategory] = useState("");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [amountWithVat, setAmountWithVat] = useState("");
@@ -189,6 +189,7 @@ export default function NewRequestPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const contractFileInputRef = useRef<HTMLInputElement | null>(null);
   const previousEnforcedRolesRef = useRef<Set<RoleOption>>(new Set());
+  const loadedRequestIdRef = useRef<string | null>(null);
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
   const isAiBoss = useMemo(() => myRoles?.includes("AI-BOSS"), [myRoles]);
@@ -324,6 +325,10 @@ export default function NewRequestPage() {
     if (!data?.request) {
       return;
     }
+    if (loadedRequestIdRef.current === data.request._id) {
+      return;
+    }
+    loadedRequestIdRef.current = data.request._id;
     const request = data.request;
     const {
       category: normalizedStoredCategory,
@@ -722,20 +727,6 @@ export default function NewRequestPage() {
       setFundingError(null);
     }
   }, [fundingSource, category]);
-
-  useEffect(() => {
-    if (!data?.request || category) {
-      return;
-    }
-    const nextCategory = categoryOptions[0];
-    if (!nextCategory) {
-      return;
-    }
-    setCategory(nextCategory);
-    if (!fundingSource) {
-      setFundingSource(getDefaultFundingSourceForCategory(nextCategory));
-    }
-  }, [category, categoryOptions, data?.request, fundingSource]);
 
   useEffect(() => {
     if (!paymentMethod) {
