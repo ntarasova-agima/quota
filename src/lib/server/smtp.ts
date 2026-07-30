@@ -13,7 +13,7 @@ export function getSmtpConfig() {
   const secure = parseBoolean(process.env.SMTP_SECURE, false);
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM ?? "Aurum <no-reply@aurum.agima.ru>";
+  const from = process.env.SMTP_FROM ?? "Aurum <aurum@agima.ru>";
   const servername = process.env.SMTP_SERVERNAME ?? process.env.SMTP_DOMAIN ?? "agima.ru";
 
   return {

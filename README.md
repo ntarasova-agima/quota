@@ -170,7 +170,7 @@ EMAIL_API_KEY=dev-email-key
 SMTP_HOST=...
 SMTP_PORT=...
 SMTP_SERVERNAME=agima.ru
-SMTP_FROM="Aurum <no-reply@aurum.agima.ru>"
+SMTP_FROM="Aurum <aurum@agima.ru>"
 SMTP_USER=
 SMTP_PASS=
 
