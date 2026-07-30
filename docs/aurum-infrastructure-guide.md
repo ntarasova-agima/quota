@@ -32,13 +32,20 @@ Aurum — внутренний сервис AGIMA для создания, со�
 
 ### Production
 
-- frontend: `https://aurum.agima.ru`
+- frontend: `https://aurum.agima.tech`
 - Convex deployment: `https://cloud.aurum.agima.ru`
 
 ### Stage
 
-- frontend: `https://stage.aurum.agima.ru`
+- frontend: `https://stage.aurum.agima.tech`
 - Convex deployment: `https://cloud.stage.aurum.agima.ru`
+
+Важно:
+- корпоративная почта остается на `agima.ru`;
+- вход в Aurum по-прежнему разрешен для `@agima.ru`;
+- роли и согласующие остаются привязаны к email `@agima.ru`;
+- SMTP relay и `SMTP_SERVERNAME=agima.ru` не меняются из-за переезда web-доменов.
+- Convex cloud/site-домены пока остаются на `agima.ru`; переключать `NEXT_PUBLIC_CONVEX_URL` и `CONVEX_SITE_URL` на `agima.tech` можно только после отдельной проверки `cloud.*.aurum.agima.tech` / `site.*.aurum.agima.tech`.
 
 ## 4. Текущее размещение
 
@@ -80,8 +87,8 @@ Aurum — внутренний сервис AGIMA для создания, со�
 6. Выполнить `docker service update --image ... --force ...` для нужного сервиса.
 7. Проверить:
    - `docker service ls`
-   - `https://aurum.agima.ru`
-   - `https://stage.aurum.agima.ru`
+   - `https://aurum.agima.tech`
+   - `https://stage.aurum.agima.tech`
 
 Важно:
 - секреты, API keys и SSH private keys не должны храниться в репозитории;
@@ -185,8 +192,8 @@ Aurum — внутренний сервис AGIMA для создания, со�
 
 Минимум, который должен мониториться:
 
-- доступность `https://aurum.agima.ru`
-- доступность `https://stage.aurum.agima.ru`
+- доступность `https://aurum.agima.tech`
+- доступность `https://stage.aurum.agima.tech`
 - работоспособность `NEXT_PUBLIC_CONVEX_URL`
 - отправка писем через `/api/email/send`
 - статус docker services на `AURUM`
