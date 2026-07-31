@@ -109,9 +109,7 @@ export default function NewRequestPage() {
   const data = useQuery(api.requests.getRequest, { id: requestId });
   const today = useMemo(() => new Date(), []);
   const minApprovalDateValue = useMemo(() => {
-    const next = new Date(today);
-    next.setDate(next.getDate() + 1);
-    return next.toISOString().slice(0, 10);
+    return timestampToDateInput(today.getTime());
   }, [today]);
   const minNeededByDateValue = useMemo(() => {
     const date = new Date(today);
@@ -129,7 +127,7 @@ export default function NewRequestPage() {
         added += 1;
       }
     }
-    return date.toISOString().slice(0, 10);
+    return timestampToDateInput(date.getTime());
   }, [today]);
 
   const [requestArea, setRequestArea] = useState<RequestArea>("Аккаунтинг");
@@ -912,11 +910,10 @@ export default function NewRequestPage() {
     setSubmitting(true);
     try {
       if (approvalDeadline && approvalDeadline !== originalApprovalDeadlineValue) {
-        const tomorrow = new Date();
-        tomorrow.setHours(0, 0, 0, 0);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        if (new Date(approvalDeadline) < tomorrow) {
-          throw new Error("Дедлайн согласования должен быть не раньше завтрашнего дня");
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        if (new Date(`${approvalDeadline}T00:00:00`) < todayStart) {
+          throw new Error("Дедлайн согласования должен быть не раньше сегодняшнего дня");
         }
       }
       if (isWelcomeBonus && !investmentReturn.trim()) {
