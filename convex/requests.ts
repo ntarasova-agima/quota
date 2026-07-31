@@ -1880,11 +1880,10 @@ function validateRequestPayload(args: any, existing?: {
     args.approvalDeadline !== undefined &&
     !isSameDate(args.approvalDeadline, existing?.approvalDeadline)
   ) {
-    const tomorrow = new Date();
-    tomorrow.setHours(0, 0, 0, 0);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    if (args.approvalDeadline < tomorrow.getTime()) {
-      throw new Error("Дедлайн согласования должен быть не раньше завтрашнего дня");
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (args.approvalDeadline < today.getTime()) {
+      throw new Error("Дедлайн согласования должен быть не раньше сегодняшнего дня");
     }
   }
   if (
