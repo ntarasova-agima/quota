@@ -57,12 +57,14 @@ function hasFinplanEntryMark(request: { finplanEntered?: boolean; finplanEntryId
 function shouldShowFinplanMissingHint(request: {
   status: string;
   isCanceled?: boolean;
+  category?: string;
   finplanEntered?: boolean;
   finplanEntryIds?: string[];
   finplanCostIds?: string[];
 }) {
   return (
     !request.isCanceled &&
+    request.category !== "Welcome-бонус" &&
     ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status) &&
     !hasFinplanEntryMark(request)
   );

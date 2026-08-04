@@ -381,7 +381,37 @@ describe("updatePaymentStatus workflow", () => {
     expect(getRequest(db)?.previousClosedStatus).toBe("paid");
   });
 
-  it("backfills old fully completed paid requests without closing pending FOT requests", async () => {
+  it("auto-closes when FOT is recorded and no contractor payment is needed", async () => {
+    const { ctx, db } = createFotCtx({
+      createdBy: USER_ID,
+      createdByEmail: "finance@agima.ru",
+      category: "Конкурсное задание",
+      fundingSource: "Квоты AGIMA",
+      cfdTag: "Тендер",
+      status: "approved",
+      amount: 100_000,
+      currency: "RUB",
+      paymentDeadline: new Date("2030-05-20").getTime(),
+      specialists: [
+        { id: "internal-1", name: "Штатник", sourceType: "internal", directCost: 100_000, fotRecorded: false },
+        { id: "contractor-1", name: "Подрядчик без оплаты", sourceType: "contractor" },
+      ],
+      isCanceled: false,
+      createdAt: new Date("2030-04-01").getTime(),
+      updatedAt: new Date("2030-04-01").getTime(),
+    });
+
+    await runUpdateSpecialistFot(ctx, {
+      specialistId: "internal-1",
+      fotRecorded: true,
+      fotMonth: "2030-05",
+    });
+
+    expect(getRequest(db)?.status).toBe("closed");
+    expect(getRequest(db)?.previousClosedStatus).toBe("approved");
+  });
+
+  it("backfills old fully completed requests without closing pending FOT requests", async () => {
     const { ctx, db } = createAdminCtx([
       {
         _id: "ready",
@@ -390,6 +420,24 @@ describe("updatePaymentStatus workflow", () => {
         isCanceled: false,
         category: "Закупка",
         paidAt: new Date("2030-05-12").getTime(),
+      },
+      {
+        _id: "approved_ready",
+        requestCode: "APPROVED_READY",
+        status: "approved",
+        isCanceled: false,
+        category: "Конкурсное задание",
+        specialists: [
+          { id: "internal-1", sourceType: "internal", directCost: 10_000, fotRecorded: true },
+          { id: "contractor-1", sourceType: "contractor" },
+        ],
+      },
+      {
+        _id: "welcome_ready",
+        requestCode: "WELCOME_READY",
+        status: "approved",
+        isCanceled: false,
+        category: "Welcome-бонус",
       },
       {
         _id: "pending_fot",
@@ -414,22 +462,28 @@ describe("updatePaymentStatus workflow", () => {
       runBackfillCompletedRequestClosures(ctx, { dryRun: true }),
     ).resolves.toMatchObject({
       dryRun: true,
-      candidates: 1,
+      candidates: 3,
       closed: 0,
-      requestCodes: ["READY"],
+      requestCodes: ["APPROVED_READY", "WELCOME_READY", "READY"],
     });
     expect(db.tables.requests.get("ready")?.status).toBe("paid");
+    expect(db.tables.requests.get("approved_ready")?.status).toBe("approved");
+    expect(db.tables.requests.get("welcome_ready")?.status).toBe("approved");
 
     await expect(
       runBackfillCompletedRequestClosures(ctx, { dryRun: false }),
     ).resolves.toMatchObject({
       dryRun: false,
-      candidates: 1,
-      closed: 1,
-      requestCodes: ["READY"],
+      candidates: 3,
+      closed: 3,
+      requestCodes: ["APPROVED_READY", "WELCOME_READY", "READY"],
     });
     expect(db.tables.requests.get("ready")?.status).toBe("closed");
     expect(db.tables.requests.get("ready")?.previousClosedStatus).toBe("paid");
+    expect(db.tables.requests.get("approved_ready")?.status).toBe("closed");
+    expect(db.tables.requests.get("approved_ready")?.previousClosedStatus).toBe("approved");
+    expect(db.tables.requests.get("welcome_ready")?.status).toBe("closed");
+    expect(db.tables.requests.get("welcome_ready")?.previousClosedStatus).toBe("approved");
     expect(db.tables.requests.get("pending_fot")?.status).toBe("paid");
     expect(db.tables.requests.get("already_closed")?.status).toBe("closed");
   });
@@ -624,6 +678,29 @@ describe("updatePaymentStatus workflow", () => {
       currency: "RUB",
       specialists: [
         { id: "internal-1", sourceType: "internal", directCost: 10_000, fotRecorded: true },
+      ],
+      isCanceled: false,
+      createdAt: new Date("2030-04-01").getTime(),
+      updatedAt: new Date("2030-04-01").getTime(),
+    });
+
+    await runUpdatePaymentStatus(ctx, { status: "closed" });
+    expect(getRequest(db)?.status).toBe("closed");
+  });
+
+  it("allows a request with only zero-amount contractor payment to close after FOT is recorded", async () => {
+    const { ctx, db } = createPaymentCtx({
+      createdBy: USER_ID,
+      createdByEmail: "finance@agima.ru",
+      category: "Конкурсное задание",
+      fundingSource: "Квоты AGIMA",
+      cfdTag: "Тендер",
+      status: "approved",
+      amount: 10_000,
+      currency: "RUB",
+      specialists: [
+        { id: "internal-1", sourceType: "internal", directCost: 10_000, fotRecorded: true },
+        { id: "contractor-1", sourceType: "contractor", fotRecorded: true },
       ],
       isCanceled: false,
       createdAt: new Date("2030-04-01").getTime(),

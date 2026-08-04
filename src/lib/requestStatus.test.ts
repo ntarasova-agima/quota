@@ -146,7 +146,27 @@ describe("requestStatus", () => {
       isOpenPaymentTask({
         status: "approved",
         paymentDeadline: 1000,
+        specialists: [
+          { sourceType: "internal" },
+          { sourceType: "contractor", directCost: 1000 },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isOpenPaymentTask({
+        status: "approved",
+        paymentDeadline: 1000,
         specialists: [{ sourceType: "internal" }, { sourceType: "contractor" }],
+      }),
+    ).toBe(false);
+    expect(
+      isOpenPaymentTask({
+        status: "approved",
+        paymentDeadline: 1000,
+        specialists: [
+          { sourceType: "internal", directCost: 1000 },
+          { sourceType: "contractor", directCost: 1000 },
+        ],
       }),
     ).toBe(true);
     expect(isOpenPaymentTask({ status: "approved" })).toBe(true);
