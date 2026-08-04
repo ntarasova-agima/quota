@@ -1093,10 +1093,26 @@ function canAutoCloseCompletedRequest(request: {
   category?: string;
   specialists?: Array<{
     sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
     fotRecorded?: boolean;
   }>;
 }) {
-  return request.status === "paid" && !request.isCanceled && !hasPendingFotTask(request);
+  if (request.isCanceled || hasPendingFotTask(request)) {
+    return false;
+  }
+  if (request.status === "paid") {
+    return true;
+  }
+  if (request.status === "approved" && request.category === "Welcome-бонус") {
+    return true;
+  }
+  return (
+    request.status === "approved" &&
+    Boolean(request.specialists?.length) &&
+    !isOpenPaymentTask(request)
+  );
 }
 
 function isWelcomeBonusPaymentStatus(status: string) {
@@ -1141,6 +1157,9 @@ async function autoCloseCompletedRequestIfReady(
     category?: string;
     specialists?: Array<{
       sourceType?: string;
+      directCost?: number;
+      taxAmount?: number;
+      amountIncludesTaxes?: boolean;
       fotRecorded?: boolean;
     }>;
   },
@@ -1155,7 +1174,7 @@ async function autoCloseCompletedRequestIfReady(
   }
   await ctx.db.patch(request._id, {
     status: "closed",
-    previousClosedStatus: "paid",
+    previousClosedStatus: request.status === "paid" ? "paid" : "approved",
     closeReminderSentAt: undefined,
     updatedAt: params.now,
   });
@@ -1163,7 +1182,10 @@ async function autoCloseCompletedRequestIfReady(
     requestId: request._id,
     type: "request_closed",
     title: "Заявка закрыта автоматически",
-    description: "Оплата завершена, открытых задач по ФОТ нет",
+    description:
+      request.status === "paid"
+        ? "Оплата завершена, открытых задач по ФОТ нет"
+        : "Открытых задач по оплате и ФОТ нет",
     actorEmail: params.actorEmail,
     actorName: params.actorName,
   });
@@ -1272,6 +1294,7 @@ const requestPayloadValidator = {
   pendingContractFileCount: v.optional(v.number()),
   dueDiligenceChecked: v.optional(v.boolean()),
   dueDiligenceJiraLink: v.optional(v.string()),
+  accountingJiraLink: v.optional(v.string()),
   prepaymentRequired: v.optional(v.boolean()),
   prepaymentAmount: v.optional(v.number()),
   prepaymentAmountWithVat: v.optional(v.number()),
@@ -1317,6 +1340,7 @@ const requestFieldLabels: Record<string, string> = {
   contractLink: "Ссылка на договор",
   dueDiligenceChecked: "Проведена должная осмотрительность",
   dueDiligenceJiraLink: "Ссылка на задачу в Jira",
+  accountingJiraLink: "Ссылка на тикет в Jira",
   prepaymentRequired: "Требуется предоплата",
   prepaymentAmount: "Предоплата без НДС",
   prepaymentAmountWithVat: "Предоплата с НДС",
@@ -1461,6 +1485,7 @@ function diffRequestFields(previous: any, next: any) {
     "contractLink",
     "dueDiligenceChecked",
     "dueDiligenceJiraLink",
+    "accountingJiraLink",
     "prepaymentRequired",
     "prepaymentAmount",
     "prepaymentAmountWithVat",
@@ -1963,6 +1988,9 @@ function validateRequestPayload(args: any, existing?: {
   }
   if (usesServiceRecipientLabel(args.category) && (!args.clientName || !args.clientName.trim())) {
     throw new Error("Укажите получателя сервиса");
+  }
+  if (requestArea === ACCOUNTING_REQUEST_AREA && !args.accountingJiraLink?.trim()) {
+    throw new Error("Укажите ссылку на тикет в Jira");
   }
   if (
     effectiveAmount > 100_000 &&
@@ -2936,6 +2964,7 @@ export const previewEditImpact = query({
       contractLink: args.contractLink?.trim() || undefined,
       dueDiligenceChecked: args.dueDiligenceChecked ?? false,
       dueDiligenceJiraLink: args.dueDiligenceJiraLink?.trim() || undefined,
+      accountingJiraLink: args.accountingJiraLink?.trim() || undefined,
       prepaymentRequired: args.prepaymentRequired ?? false,
       prepaymentAmount: args.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
       prepaymentAmountWithVat: args.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
@@ -3108,6 +3137,7 @@ export const editRequest = mutation({
       contractLink: args.contractLink?.trim() || undefined,
       dueDiligenceChecked: args.dueDiligenceChecked ?? false,
       dueDiligenceJiraLink: args.dueDiligenceJiraLink?.trim() || undefined,
+      accountingJiraLink: args.accountingJiraLink?.trim() || undefined,
       prepaymentRequired: args.prepaymentRequired ?? false,
       prepaymentAmount: args.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
       prepaymentAmountWithVat: args.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
@@ -3620,6 +3650,7 @@ export const createRequest = mutation({
       lastContractAttachmentName: undefined,
       dueDiligenceChecked: payloadArgs.dueDiligenceChecked ?? false,
       dueDiligenceJiraLink: payloadArgs.dueDiligenceJiraLink?.trim() || undefined,
+      accountingJiraLink: payloadArgs.accountingJiraLink?.trim() || undefined,
       prepaymentRequired: payloadArgs.prepaymentRequired ?? false,
       prepaymentAmount: payloadArgs.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
       prepaymentAmountWithVat: payloadArgs.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
@@ -4176,11 +4207,17 @@ export const adminBackfillCompletedRequestClosures = mutation({
       throw new Error("Not authorized");
     }
     const dryRun = args.dryRun ?? true;
-    const paidRequests = await ctx.db
-      .query("requests")
-      .withIndex("by_status", (q: any) => q.eq("status", "paid"))
-      .collect();
-    const candidates = paidRequests.filter(canAutoCloseCompletedRequest);
+    const completedRequests = (
+      await Promise.all(
+        ["approved", "paid"].map((status) =>
+          ctx.db
+            .query("requests")
+            .withIndex("by_status", (q: any) => q.eq("status", status))
+            .collect(),
+        ),
+      )
+    ).flat();
+    const candidates = completedRequests.filter(canAutoCloseCompletedRequest);
     if (dryRun) {
       return {
         dryRun,
@@ -4738,7 +4775,7 @@ export const updatePaymentStatus = mutation({
     if (
       args.status === "closed" &&
       request.status === "approved" &&
-      getContractorSpecialistPaymentAmounts(request.specialists).hasContractors
+      getContractorSpecialistPaymentAmounts(request.specialists).amountWithoutVat > PAYMENT_EPSILON
     ) {
       throw new Error("Сначала отметьте оплату подрядчиков");
     }

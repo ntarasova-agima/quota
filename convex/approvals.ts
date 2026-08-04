@@ -125,6 +125,35 @@ async function sendPaymentPlanningRequestedAndScheduleReminders(
   }
 }
 
+async function autoCloseWelcomeBonusIfApproved(
+  ctx: any,
+  request: { _id: any; category?: string; status?: string; isCanceled?: boolean },
+  params: {
+    now: number;
+    actorEmail?: string;
+    actorName?: string;
+  },
+) {
+  if (request.category !== "Welcome-бонус" || request.status !== "approved" || request.isCanceled) {
+    return false;
+  }
+  await ctx.db.patch(request._id, {
+    status: "closed",
+    previousClosedStatus: "approved",
+    closeReminderSentAt: undefined,
+    updatedAt: params.now,
+  });
+  await logTimelineEvent(ctx, {
+    requestId: request._id,
+    type: "request_closed",
+    title: "Заявка закрыта автоматически",
+    description: "Welcome-бонус не передается в оплату",
+    actorEmail: params.actorEmail,
+    actorName: params.actorName,
+  });
+  return true;
+}
+
 export const listPendingForMe = query({
   args: {},
   handler: async (ctx) => {
@@ -578,6 +607,18 @@ export const decide = mutation({
       });
     }
     if (args.decision === "approved" && status === "approved") {
+      const autoClosed = await autoCloseWelcomeBonusIfApproved(
+        ctx,
+        { ...request, status },
+        {
+          now: decidedAt,
+          actorEmail: email,
+          actorName: roleRecord.fullName ?? undefined,
+        },
+      );
+      if (autoClosed) {
+        return { status: "closed" };
+      }
       await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
     }
 
@@ -681,6 +722,18 @@ export const skipOptionalApproval = mutation({
       },
     });
     if (status === "approved") {
+      const autoClosed = await autoCloseWelcomeBonusIfApproved(
+        ctx,
+        { ...request, status },
+        {
+          now,
+          actorEmail: email,
+          actorName: roleRecord.fullName ?? undefined,
+        },
+      );
+      if (autoClosed) {
+        return { status: "closed", skipped: true };
+      }
       await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
     }
     return { status, skipped: true };
@@ -826,6 +879,18 @@ export const adminApproveAsRole = mutation({
       requestStatus: status,
     });
     if (status === "approved") {
+      const autoClosed = await autoCloseWelcomeBonusIfApproved(
+        ctx,
+        { ...request, status },
+        {
+          now,
+          actorEmail: email,
+          actorName: roleRecord.fullName ?? undefined,
+        },
+      );
+      if (autoClosed) {
+        return { status: "closed" };
+      }
       await sendPaymentPlanningRequestedAndScheduleReminders(ctx, request);
     }
     return { status };

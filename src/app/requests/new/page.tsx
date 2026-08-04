@@ -45,6 +45,7 @@ import {
   timestampToDateInput,
 } from "@/lib/requestFields";
 import {
+  ACCOUNTING_REQUEST_AREA,
   AI_TOOLS_FUNDING_SOURCE,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
@@ -133,6 +134,7 @@ export default function NewRequestPage() {
   const [justification, setJustification] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
+  const [accountingJiraLink, setAccountingJiraLink] = useState("");
   const [counterparty, setCounterparty] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [contractLink, setContractLink] = useState("");
@@ -230,6 +232,8 @@ export default function NewRequestPage() {
   const usesServiceRecipient = useMemo(() => usesServiceRecipientLabel(category), [category]);
   const requestSupportsSpecialists = useMemo(() => supportsRequestSpecialists(category), [category]);
   const isWelcomeBonus = category === "Welcome-бонус";
+  const showGeneralAttachments = !isWelcomeBonus;
+  const effectivePrepaymentRequired = !isWelcomeBonus && prepaymentRequired;
   const selectedDepartment = requestArea;
   const availableTags = useQuery(api.cfdTags.list, { department: selectedDepartment });
   const copiedCoreFields = useMemo(() => {
@@ -344,6 +348,7 @@ export default function NewRequestPage() {
     setJustification([request.justification, request.details].filter(Boolean).join("\n\n"));
     setInvestmentReturn(request.investmentReturn ?? "");
     setClientName(request.clientName ?? "");
+    setAccountingJiraLink(request.accountingJiraLink ?? "");
     setCounterparty(request.counterparty ?? "");
     setPaymentMethod(request.paymentMethod ?? "");
     setContractLink(request.contractLink ?? "");
@@ -584,6 +589,9 @@ export default function NewRequestPage() {
   const categoryInvalid = showValidationErrors && !category;
   const departmentInvalid = showValidationErrors && !selectedDepartment;
   const clientNameInvalid = showValidationErrors && !clientName.trim();
+  const needsAccountingJiraLink = selectedDepartment === ACCOUNTING_REQUEST_AREA;
+  const accountingJiraLinkInvalid =
+    showValidationErrors && needsAccountingJiraLink && !accountingJiraLink.trim();
   const amountInvalid =
     showValidationErrors &&
     (!resolvedAmountsPreview.amountWithoutVat ||
@@ -612,7 +620,7 @@ export default function NewRequestPage() {
     (!dueDiligenceChecked || !dueDiligenceJiraLink.trim());
   const prepaymentInvalid =
     showValidationErrors &&
-    prepaymentRequired &&
+    effectivePrepaymentRequired &&
     (!resolvedPrepaymentAmountsPreview.amountWithoutVat ||
       !resolvedPrepaymentAmountsPreview.amountWithVat ||
       resolvedPrepaymentAmountsPreview.amountWithoutVat <= 0 ||
@@ -631,6 +639,7 @@ export default function NewRequestPage() {
     !category ||
     !selectedDepartment ||
     !clientName.trim() ||
+    (needsAccountingJiraLink && !accountingJiraLink.trim()) ||
     !resolvedAmountsPreview.amountWithoutVat ||
     !resolvedAmountsPreview.amountWithVat ||
     resolvedAmountsPreview.amountWithoutVat <= 0 ||
@@ -645,7 +654,7 @@ export default function NewRequestPage() {
         !resolvedIncomingAmountsPreview.amountWithVat)) ||
     (needsContract && !contractLink.trim() && selectedContractFiles.length === 0) ||
     (needsDueDiligence && (!dueDiligenceChecked || !dueDiligenceJiraLink.trim())) ||
-    (prepaymentRequired &&
+    (effectivePrepaymentRequired &&
       (!resolvedPrepaymentAmountsPreview.amountWithoutVat ||
         !resolvedPrepaymentAmountsPreview.amountWithVat ||
         resolvedPrepaymentAmountsPreview.amountWithoutVat <= 0 ||
@@ -835,7 +844,9 @@ export default function NewRequestPage() {
 
   async function uploadQueuedFiles(requestId: any) {
     const filesToUpload = [
-      ...selectedFiles.map((file) => ({ file, attachmentType: "general" as const })),
+      ...(showGeneralAttachments
+        ? selectedFiles.map((file) => ({ file, attachmentType: "general" as const }))
+        : []),
       ...selectedContractFiles.map((file) => ({ file, attachmentType: "contract" as const })),
     ];
     if (!filesToUpload.length) {
@@ -930,6 +941,7 @@ export default function NewRequestPage() {
         justification,
         investmentReturn: investmentReturn.trim() || undefined,
         clientName,
+        accountingJiraLink: needsAccountingJiraLink ? accountingJiraLink.trim() : undefined,
         counterparty:
           category === "Конкурсное задание" ||
           isWelcomeBonus ||
@@ -944,17 +956,17 @@ export default function NewRequestPage() {
         pendingContractFileCount: selectedContractFiles.length,
         dueDiligenceChecked,
         dueDiligenceJiraLink: dueDiligenceJiraLink.trim() || undefined,
-        prepaymentRequired,
+        prepaymentRequired: effectivePrepaymentRequired,
         prepaymentAmount:
-          prepaymentRequired && resolvedPrepaymentAmounts.amountWithoutVat !== undefined
+          effectivePrepaymentRequired && resolvedPrepaymentAmounts.amountWithoutVat !== undefined
             ? resolvedPrepaymentAmounts.amountWithoutVat
             : undefined,
         prepaymentAmountWithVat:
-          prepaymentRequired && resolvedPrepaymentAmounts.amountWithVat !== undefined
+          effectivePrepaymentRequired && resolvedPrepaymentAmounts.amountWithVat !== undefined
             ? resolvedPrepaymentAmounts.amountWithVat
             : undefined,
         prepaymentDate:
-          prepaymentRequired && prepaymentDate
+          effectivePrepaymentRequired && prepaymentDate
             ? new Date(`${prepaymentDate}T00:00:00`).getTime()
             : undefined,
         contacts: [],
@@ -1032,7 +1044,7 @@ export default function NewRequestPage() {
                 </p>
               ) : (
               <form className="space-y-6" onSubmit={handleSubmit} noValidate>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="space-y-2">
                     <FieldLabel required className={headerFieldLabelClass}>Цех</FieldLabel>
                     <Input
@@ -1127,6 +1139,20 @@ export default function NewRequestPage() {
                     aria-invalid={clientNameInvalid ? true : undefined}
                   />
                 </div>
+                {needsAccountingJiraLink ? (
+                  <div className="space-y-2 sm:col-span-3">
+                    <FieldLabel htmlFor="accountingJiraLink" required>
+                      Ссылка на тикет в Jira
+                    </FieldLabel>
+                    <Input
+                      id="accountingJiraLink"
+                      value={accountingJiraLink}
+                      onChange={(event) => setAccountingJiraLink(event.target.value)}
+                      aria-invalid={accountingJiraLinkInvalid ? true : undefined}
+                      placeholder="https://jira..."
+                    />
+                  </div>
+                ) : null}
               </div>
 
               {requestSupportsSpecialists ? (
@@ -1428,7 +1454,6 @@ export default function NewRequestPage() {
                   </div>
                 ) : null}
               </div>
-
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <FieldLabel htmlFor="justification" required>
@@ -1576,7 +1601,7 @@ export default function NewRequestPage() {
                   </div>
                 </div>
               ) : null}
-
+              {showGeneralAttachments ? (
               <div className="space-y-2">
                 <FieldLabel htmlFor="requestFiles">Прикрепить файлы</FieldLabel>
                 <p className="text-xs text-muted-foreground">
@@ -1655,6 +1680,8 @@ export default function NewRequestPage() {
                 ) : null}
                 {fileActionError ? <p className="text-sm text-destructive">{fileActionError}</p> : null}
               </div>
+              ) : null}
+              {!isWelcomeBonus ? (
               <div className={`space-y-3 rounded-lg border p-4 ${prepaymentInvalid ? "border-destructive bg-destructive/5" : "border-border"}`}>
                 <label className="flex items-center gap-2 text-sm font-medium">
                   <Checkbox
@@ -1730,6 +1757,7 @@ export default function NewRequestPage() {
                   </div>
                 ) : null}
               </div>
+              ) : null}
               {((fundingSource === "Квота на пресейлы" && category !== "Welcome-бонус" && isNbd && presalesQuotas?.length) ||
                 (fundingSource === AI_TOOLS_FUNDING_SOURCE && isAiToolsRequestCategory(category) && isAiBoss && aiToolQuotas?.length)) ? (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">

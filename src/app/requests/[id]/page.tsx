@@ -559,12 +559,14 @@ function hasFinplanEntryMark(request: {
 function shouldShowFinplanMissingHint(request: {
   status: string;
   isCanceled?: boolean;
+  category?: string;
   finplanEntered?: boolean;
   finplanEntryIds?: string[];
   finplanCostIds?: string[];
 }) {
   return (
     !request.isCanceled &&
+    request.category !== "Welcome-бонус" &&
     ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"].includes(request.status) &&
     !hasFinplanEntryMark(request)
   );
@@ -1160,7 +1162,8 @@ export default function RequestDetailPage() {
   const canDeleteRequest = isCreator || isAdmin;
   const requestSupportsSpecialists = supportsRequestSpecialists(request.category);
   const hasPendingHodValidation = Boolean(
-    request.status === "hod_pending" &&
+    !request.isCanceled &&
+      request.status === "hod_pending" &&
       myRoles.includes("HOD") &&
       (request.specialists ?? []).some(
         (item) =>
@@ -1192,15 +1195,17 @@ export default function RequestDetailPage() {
       ),
   );
   const canManageOperationalFields =
-    isAdmin ||
-    isFinanceApprover ||
-    myRoles.some((role) => ["BUH", "BUH Payment", "BUH Transit"].includes(role)) ||
-    (myRoles.includes("BUH Outsource") && hasOutsourceSpecialists);
+    request.category !== "Welcome-бонус" &&
+    (isAdmin ||
+      isFinanceApprover ||
+      myRoles.some((role) => ["BUH", "BUH Payment", "BUH Transit"].includes(role)) ||
+      (myRoles.includes("BUH Outsource") && hasOutsourceSpecialists));
   const canSendPaymentReminder =
     canSendPaymentReminderForStatus(request.status) &&
     (isCreator || isAdmin || canManagePayments);
   const canManageSpecialistFot =
     (isAdmin || myRoles.includes("BUH Inside")) &&
+    !request.isCanceled &&
     !["draft", "hod_pending", "pending", "rejected"].includes(request.status);
   const requestHasPendingFot = hasPendingFotTask(request);
   const fotActionHint = canManageSpecialistFot ? getFotActionHint(request) : null;
@@ -1305,25 +1310,27 @@ export default function RequestDetailPage() {
     !baseStatusSummary.label.startsWith("Частично согласовано")
       ? getPendingStatusPresentation()
       : baseStatusSummary;
-  const contextualHint = hasPendingHodValidation
-    ? "Провалидируйте часы и прямые затраты по специалистам вашего цеха"
-    : isActionableForViewer
-      ? "Ждет вашего решения"
-      : fotActionHint
-        ? fotActionHint.label
-      : finplanMissingHint
-        ? finplanMissingHint
-      : canSetPaymentPlanned &&
-          ["payment_planned", "partially_paid"].includes(request.status) &&
-          hasUnallocatedPayment
-        ? "Есть нераспределенный платеж"
-      : canSetPaymentPlanned && isOpenPaymentTask(request)
-        ? "Нужно запланировать или оплатить"
-        : isCreator && canCompleteRequest
-          ? "Закройте заявку до конца следующего рабочего дня"
-          : groupedChangeHistory.some((group) => group.triggeredRepeatApproval)
-            ? "Заявка изменена и отправлена на повторное согласование"
-            : null;
+  const contextualHint = request.isCanceled
+    ? null
+    : hasPendingHodValidation
+      ? "Провалидируйте часы и прямые затраты по специалистам вашего цеха"
+      : isActionableForViewer
+        ? "Ждет вашего решения"
+        : fotActionHint
+          ? fotActionHint.label
+        : finplanMissingHint
+          ? finplanMissingHint
+        : canSetPaymentPlanned &&
+            ["payment_planned", "partially_paid"].includes(request.status) &&
+            hasUnallocatedPayment
+          ? "Есть нераспределенный платеж"
+        : canSetPaymentPlanned && isOpenPaymentTask(request)
+          ? "Нужно запланировать или оплатить"
+          : isCreator && canCompleteRequest
+            ? "Закройте заявку до конца следующего рабочего дня"
+            : groupedChangeHistory.some((group) => group.triggeredRepeatApproval)
+              ? "Заявка изменена и отправлена на повторное согласование"
+              : null;
   const requestTitle = request.title || `${request.clientName} :: ${normalizedRequestCategory ?? request.category}`;
   const pendingApprovalsCount = approvals.filter((approval) => approval.status === "pending").length;
   const approvedApprovalsCount = approvals.filter((approval) => approval.status === "approved").length;
@@ -3074,6 +3081,12 @@ export default function RequestDetailPage() {
                   <div className="text-muted-foreground">Цех</div>
                   <p className="mt-1">{request.department ?? request.requestArea ?? "Не указан"}</p>
                 </div>
+                {request.accountingJiraLink ? (
+                  <div>
+                    <div className="text-muted-foreground">Ссылка на тикет в Jira</div>
+                    <p className="mt-1 break-all">{request.accountingJiraLink}</p>
+                  </div>
+                ) : null}
               </div>
               {(request.contractLink || request.contractAttachmentCount) ? (
                 <div>
@@ -3960,15 +3973,19 @@ export default function RequestDetailPage() {
                             </div>
                             <span
                               className={`rounded-full border px-3 py-1 text-xs ${
-                                approval.status === "pending"
-                                  ? "border-amber-200 bg-amber-50 text-amber-700"
-                                  : getApprovalStatusClass(approval.status)
+                                request.isCanceled && approval.status === "pending"
+                                  ? "border-zinc-200 bg-zinc-100 text-zinc-600"
+                                  : approval.status === "pending"
+                                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                                    : getApprovalStatusClass(approval.status)
                               }`}
                             >
-                              {approval.status === "approved"
-                                ? "Согласовано"
-                                : approval.status === "rejected"
-                                  ? "Не согласовано"
+                              {request.isCanceled && approval.status === "pending"
+                                ? "Не актуально"
+                                : approval.status === "approved"
+                                  ? "Согласовано"
+                                  : approval.status === "rejected"
+	                                  ? "Не согласовано"
                                   : "Ожидает согласования"}
                             </span>
                           </div>

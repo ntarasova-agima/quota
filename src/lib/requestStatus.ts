@@ -1,4 +1,5 @@
 import { resolveVatAmounts } from "./vat";
+import { getContractorSpecialistPaymentAmounts } from "./requestFields";
 
 type RequestLike = {
   status:
@@ -33,6 +34,9 @@ type RequestLike = {
   category?: string;
   specialists?: Array<{
     sourceType?: string;
+    directCost?: number;
+    taxAmount?: number;
+    amountIncludesTaxes?: boolean;
     fotRecorded?: boolean;
   }>;
 };
@@ -108,11 +112,11 @@ export function isOpenPaymentTask(
     | "specialists"
   >,
 ) {
+  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(request.specialists);
   return (
     !request.isCanceled &&
     !isWelcomeBonusRequest(request) &&
-    (!(request.specialists?.length) ||
-      request.specialists.some((item) => item.sourceType === "contractor")) &&
+    (!(request.specialists?.length) || contractorPaymentAmounts.amountWithoutVat > 0) &&
     OPEN_PAYMENT_TASK_STATUSES.includes(request.status as (typeof OPEN_PAYMENT_TASK_STATUSES)[number])
   );
 }
