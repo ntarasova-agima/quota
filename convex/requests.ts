@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { getCurrentEmail } from "./authHelpers";
@@ -84,6 +84,7 @@ import {
   normalizeVatRate,
   resolveVatAmounts,
 } from "../src/lib/vat";
+import { extractFirstAurumRequestCode } from "../src/lib/finplanCommentMatch";
 
 const roleEnum = v.union(
   v.literal("AD"),
@@ -1309,6 +1310,7 @@ const requestPayloadValidator = {
   financePlanLinks: v.optional(v.array(v.string())),
   finplanEntered: v.optional(v.boolean()),
   finplanEntryIds: v.optional(v.array(v.string())),
+  finplanVerifiedCostIds: v.optional(v.array(v.string())),
   incomingAmount: v.optional(v.number()),
   incomingAmountWithVat: v.optional(v.number()),
   shipmentDate: v.optional(v.number()),
@@ -1354,6 +1356,7 @@ const requestFieldLabels: Record<string, string> = {
   financePlanLinks: "ID отгрузки в Финплане",
   finplanEntered: "Занесено в финплан",
   finplanEntryIds: "ID затрат в Финплане",
+  finplanVerifiedCostIds: "Проверенные ID затрат в Финплане",
   incomingAmount: "Сумма отгрузки без НДС",
   incomingAmountWithVat: "Сумма отгрузки с НДС",
   incomingRatio: "Коэффициент транзита",
@@ -1499,6 +1502,7 @@ function diffRequestFields(previous: any, next: any) {
     "financePlanLinks",
     "finplanEntered",
     "finplanEntryIds",
+    "finplanVerifiedCostIds",
     "incomingAmount",
     "incomingAmountWithVat",
     "incomingRatio",
@@ -4619,8 +4623,12 @@ export const updateOperationalFields = mutation({
     }
     if (args.finplanEntryIds !== undefined) {
       const values = normalizeFinplanIds(args.finplanEntryIds);
+      const verifiedValues = normalizeFinplanIds(request.finplanVerifiedCostIds ?? []).filter((item) =>
+        values.includes(item),
+      );
       patch.finplanEntryIds = values.length ? values : undefined;
       patch.finplanCostIds = undefined;
+      patch.finplanVerifiedCostIds = verifiedValues.length ? verifiedValues : undefined;
       if (values.length) {
         patch.finplanEntered = true;
       }
@@ -4661,6 +4669,216 @@ export const updateOperationalFields = mutation({
       });
     }
     return { updated: true };
+  },
+});
+
+export const prepareFinplanRequestSync = mutation({
+  args: {
+    id: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const record = await getRoleRecord(ctx, email);
+    const roles = record?.roles ?? [];
+    const canSync =
+      roles.some((role: string) =>
+        ["BUH", "ADMIN", "BUH Payment", "BUH Transit"].includes(role),
+      ) || hasFinanceApproverRole(record);
+    if (!canSync) {
+      throw new Error("Not authorized");
+    }
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    if (!request.requestCode) {
+      throw new Error("У заявки нет номера");
+    }
+    if (request.category === "Welcome-бонус") {
+      throw new Error("Для Welcome-бонуса затраты в Финплане не подтягиваются");
+    }
+    return {
+      requestId: request._id,
+      requestCode: request.requestCode,
+      createdAt: request.createdAt,
+      actorEmail: email,
+      actorName: record?.fullName ?? undefined,
+    };
+  },
+});
+
+export const getFinplanSyncRequest = internalQuery({
+  args: {
+    id: v.id("requests"),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      return null;
+    }
+    return {
+      _id: request._id,
+      requestCode: request.requestCode,
+      createdAt: request.createdAt,
+      category: request.category,
+      status: request.status,
+      isCanceled: request.isCanceled,
+    };
+  },
+});
+
+export const listDailyFinplanSyncRequests = internalQuery({
+  args: {
+    createdAfter: v.number(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const statuses = ["approved", "awaiting_payment", "payment_planned", "partially_paid", "paid"] as const;
+    const candidates = [];
+    for (const status of statuses) {
+      const rows = await ctx.db
+        .query("requests")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .collect();
+      for (const request of rows) {
+        if (candidates.length >= args.limit) {
+          return candidates;
+        }
+        if (
+          request.isCanceled ||
+          request.category === "Welcome-бонус" ||
+          !request.requestCode ||
+          request.createdAt < args.createdAfter
+        ) {
+          continue;
+        }
+        const costIds = getUnifiedFinplanCostIds(request);
+        const verifiedCostIds = normalizeFinplanIds(request.finplanVerifiedCostIds ?? []);
+        const hasUnverifiedIds = costIds.some((item) => !verifiedCostIds.includes(item));
+        if (!costIds.length || hasUnverifiedIds) {
+          candidates.push({
+            _id: request._id,
+            requestCode: request.requestCode,
+            createdAt: request.createdAt,
+          });
+        }
+      }
+    }
+    return candidates;
+  },
+});
+
+export const applyFinplanCostCommentMatches = internalMutation({
+  args: {
+    costs: v.array(
+      v.object({
+        id: v.string(),
+        comment: v.optional(v.string()),
+      }),
+    ),
+    actorEmail: v.string(),
+    actorName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (args.costs.length > 500) {
+      throw new Error("За один синк можно обработать не больше 500 строк затрат");
+    }
+
+    const costIdsByRequestCode = new Map<string, string[]>();
+    let ignoredRows = 0;
+    for (const cost of args.costs) {
+      const costId = cost.id.trim();
+      const requestCode = extractFirstAurumRequestCode(cost.comment);
+      if (!costId || !requestCode) {
+        ignoredRows += 1;
+        continue;
+      }
+      costIdsByRequestCode.set(
+        requestCode,
+        normalizeFinplanIds([...(costIdsByRequestCode.get(requestCode) ?? []), costId]),
+      );
+    }
+
+    const unmatchedRequestCodes: string[] = [];
+    const updatedRequests: Array<{ requestCode: string; finplanCostIds: string[] }> = [];
+    const now = Date.now();
+
+    for (const [requestCode, costIds] of costIdsByRequestCode) {
+      const request = await ctx.db
+        .query("requests")
+        .withIndex("by_requestCode", (q) => q.eq("requestCode", requestCode))
+        .first();
+      if (!request) {
+        unmatchedRequestCodes.push(requestCode);
+        continue;
+      }
+
+      const nextFinplanCostIds = normalizeFinplanIds([
+        ...getUnifiedFinplanCostIds(request),
+        ...costIds,
+      ]);
+      const nextVerifiedCostIds = normalizeFinplanIds([
+        ...(request.finplanVerifiedCostIds ?? []),
+        ...costIds,
+      ]).filter((item) => nextFinplanCostIds.includes(item));
+      const previousFinplanCostIds = getUnifiedFinplanCostIds(request);
+      const previousVerifiedCostIds = normalizeFinplanIds(request.finplanVerifiedCostIds ?? []);
+      const isSameCosts =
+        previousFinplanCostIds.length === nextFinplanCostIds.length &&
+        previousFinplanCostIds.every((item, index) => item === nextFinplanCostIds[index]);
+      const isSameVerified =
+        previousVerifiedCostIds.length === nextVerifiedCostIds.length &&
+        previousVerifiedCostIds.every((item, index) => item === nextVerifiedCostIds[index]);
+      if (isSameCosts && isSameVerified && request.finplanEntered) {
+        continue;
+      }
+
+      const patch = {
+        finplanEntered: true,
+        finplanEntryIds: nextFinplanCostIds,
+        finplanCostIds: undefined,
+        finplanVerifiedCostIds: nextVerifiedCostIds.length ? nextVerifiedCostIds : undefined,
+        updatedAt: now,
+      };
+      const previousForDiff = { ...request };
+      const nextForDiff = { ...request, ...patch };
+      const changes = diffRequestFields(previousForDiff, nextForDiff);
+      await ctx.db.patch(request._id, patch);
+      if (changes.length) {
+        await recordRequestChanges(
+          ctx,
+          request._id,
+          args.actorEmail,
+          args.actorName,
+          changes,
+        );
+      }
+      await logTimelineEvent(ctx, {
+        requestId: request._id,
+        type: "finplan_cost_comments_synced",
+        title: "ID затрат подтянуты из комментариев Финплана",
+        description: nextFinplanCostIds.join(", "),
+        actorEmail: args.actorEmail,
+        actorName: args.actorName,
+        metadata: {
+          requestCode,
+          finplanCostIds: nextFinplanCostIds,
+          finplanVerifiedCostIds: nextVerifiedCostIds,
+        },
+      });
+      updatedRequests.push({ requestCode, finplanCostIds: nextFinplanCostIds });
+    }
+
+    return {
+      scannedRows: args.costs.length,
+      ignoredRows,
+      matchedRequestCodes: costIdsByRequestCode.size,
+      unmatchedRequestCodes,
+      updatedRequests,
+    };
   },
 });
 
@@ -4795,9 +5013,13 @@ export const updatePaymentStatus = mutation({
       rawFinplanIds !== undefined
         ? parseFinplanIdsInput(rawFinplanIds)
         : getUnifiedFinplanCostIds(request);
+    const verifiedFinplanCostIds = normalizeFinplanIds(request.finplanVerifiedCostIds ?? []).filter((item) =>
+      finplanCostIds.includes(item),
+    );
     const requestFinplanCostPatch = {
       finplanEntryIds: finplanCostIds.length ? finplanCostIds : undefined,
       finplanCostIds: undefined,
+      finplanVerifiedCostIds: verifiedFinplanCostIds.length ? verifiedFinplanCostIds : undefined,
       ...(finplanCostIds.length ? { finplanEntered: true } : {}),
     };
     const requestPaymentTagPatch = nextCfdTag !== request.cfdTag ? { cfdTag: nextCfdTag } : {};

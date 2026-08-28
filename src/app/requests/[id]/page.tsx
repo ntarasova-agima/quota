@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import RequireAuth from "@/components/RequireAuth";
 import AppHeader from "@/components/AppHeader";
 import RequestMetaSummary from "@/components/request-meta-summary";
+import CopyableRequestCode from "@/components/copyable-request-code";
 import {
   getFotActionHint,
   getApprovalStatusClass,
@@ -59,7 +60,8 @@ import {
   resolveVatAmounts,
   sanitizeNumericInput,
 } from "@/lib/vat";
-import { CheckCircle2, Copy } from "lucide-react";
+import { getFinplanCostUrl } from "@/lib/finplanCommentMatch";
+import { CheckCircle2, Copy, PencilLine, RefreshCw } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
 
 type SpecialistView = {
@@ -289,6 +291,10 @@ function renderCommentBody(body: string, mentions: MentionEntry[] = []): ReactNo
     cursor = nextMatch.index + nextMatch.token.length;
   }
   return nodes;
+}
+
+function copyTextSilently(text: string) {
+  void navigator.clipboard?.writeText(text).catch(() => undefined);
 }
 
 function getMonthKeyFromTimestamp(timestamp: number) {
@@ -548,6 +554,10 @@ function getUnifiedFinplanCostIds(request: {
   ]);
 }
 
+function getVerifiedFinplanCostIds(request: { finplanVerifiedCostIds?: string[] }) {
+  return new Set(normalizeFinplanIds(request.finplanVerifiedCostIds ?? []));
+}
+
 function hasFinplanEntryMark(request: {
   finplanEntered?: boolean;
   finplanEntryIds?: string[];
@@ -666,6 +676,7 @@ export default function RequestDetailPage() {
   const deleteRequest = useMutation(api.requests.deleteRequest);
   const assignCfdTag = useMutation(api.requests.assignCfdTag);
   const updateOperationalFields = useMutation(api.requests.updateOperationalFields);
+  const syncRequestFromFinplan = useAction(api.finplanSync.syncRequestFromFinplan);
   const updatePaymentStatus = useMutation(api.requests.updatePaymentStatus);
   const cancelPaymentEntry = useMutation(api.requests.cancelPaymentEntry);
   const updateContestSpecialist = useMutation(api.requests.updateContestSpecialist);
@@ -710,6 +721,9 @@ export default function RequestDetailPage() {
   const [activeTab, setActiveTab] = useState<"details" | "changes" | "timeline">("details");
   const [finplanEntered, setFinplanEntered] = useState(false);
   const [finplanEntryIdsRaw, setFinplanEntryIdsRaw] = useState("");
+  const [isManualFinplanEditorOpen, setIsManualFinplanEditorOpen] = useState(false);
+  const [syncingFinplanCosts, setSyncingFinplanCosts] = useState(false);
+  const [finplanSyncResult, setFinplanSyncResult] = useState<string | null>(null);
   const [savingOperationalFields, setSavingOperationalFields] = useState(false);
   const [operationalFieldsSavedAt, setOperationalFieldsSavedAt] = useState<number | null>(null);
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
@@ -738,6 +752,7 @@ export default function RequestDetailPage() {
   const specialistsBlockRef = useRef<HTMLDivElement | null>(null);
   const approvalsBlockRef = useRef<HTMLDivElement | null>(null);
   const operationalFieldsBlockRef = useRef<HTMLDivElement | null>(null);
+  const finplanEntryIdsTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const todayDate = useMemo(() => formatDateInputFromTimestamp(Date.now()), []);
 
   const financeApproverRecord = useMemo(
@@ -836,6 +851,36 @@ export default function RequestDetailPage() {
   );
   const markOperationalFieldsDirty = () => {
     setOperationalFieldsSavedAt(null);
+    setFinplanSyncResult(null);
+  };
+  const handleSyncFinplanCosts = async () => {
+    setError(null);
+    setFinplanSyncResult(null);
+    setSyncingFinplanCosts(true);
+    try {
+      const result = await syncRequestFromFinplan({
+        id: requestId,
+      });
+      if (!result.ok) {
+        setFinplanSyncResult(result.error);
+        return;
+      }
+      const currentUpdate = result.currentRequestUpdates[0];
+      if (currentUpdate?.finplanCostIds.length) {
+        setFinplanSyncResult(
+          `Проверено ${result.scannedRows} строк за период ${result.period.from}-${result.period.to}. Найдены ID: ${currentUpdate.finplanCostIds.join(", ")}.`,
+        );
+      } else {
+        setFinplanSyncResult(
+          `Проверено ${result.scannedRows} строк за период ${result.period.from}-${result.period.to}. Новых ID для этой заявки не найдено.`,
+        );
+      }
+      router.refresh();
+    } catch (err) {
+      setError(getDisplayErrorMessage(err, "Не удалось обновить затраты из Финплана"));
+    } finally {
+      setSyncingFinplanCosts(false);
+    }
   };
   const canManagePayments = useMemo(
     () =>
@@ -1001,6 +1046,7 @@ export default function RequestDetailPage() {
       setCustomTagName("");
       setFinplanEntered(data.request.finplanEntered ?? false);
       setFinplanEntryIdsRaw(getUnifiedFinplanCostIds(data.request).join("\n"));
+      setIsManualFinplanEditorOpen(false);
       setPaymentPlannedDate(
         data.request.paymentPlannedAt
           ? formatDateInputFromTimestamp(data.request.paymentPlannedAt)
@@ -1134,6 +1180,35 @@ export default function RequestDetailPage() {
   const isRubRequest = request.currency === "RUB";
   const parsedPaymentCurrencyRate = isRubRequest ? undefined : parseMoneyInput(paymentCurrencyRate);
   const unifiedFinplanCostIds = getUnifiedFinplanCostIds(request);
+  const verifiedFinplanCostIds = getVerifiedFinplanCostIds(request);
+  const finplanCostIdLinks = unifiedFinplanCostIds.length ? (
+    <div className="flex flex-wrap gap-x-3 gap-y-1">
+      {unifiedFinplanCostIds.map((item) => {
+        const isVerified = verifiedFinplanCostIds.has(item);
+        return (
+          <a
+            key={item}
+            href={getFinplanCostUrl(item)}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => copyTextSilently(item)}
+            title={
+              isVerified
+                ? "Открыть Финплан и скопировать ID"
+                : "номер не проверен в финплане; ID скопируется при клике"
+            }
+            className={`inline-flex items-center text-sm font-medium leading-6 underline decoration-1 underline-offset-2 transition-colors ${
+              isVerified
+                ? "decoration-emerald-300 text-emerald-700 hover:decoration-emerald-600"
+                : "decoration-red-300 text-red-700 hover:decoration-red-600"
+            }`}
+          >
+            {item}
+          </a>
+        );
+      })}
+    </div>
+  ) : null;
   const isServiceCategory = isServiceRecipientCategory(request.category);
   const remainingPaymentAmounts = getPaymentRemainingAmounts(request);
   const paymentTimelineRows = buildPaymentTimelineRows(request);
@@ -2086,9 +2161,12 @@ export default function RequestDetailPage() {
                 <span className={`rounded-full border px-3 py-1 text-xs font-medium ${statusSummary.className}`}>
                   {statusSummary.label}
                 </span>
-                <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700">
-                  {request.requestCode}
-                </span>
+                {request.requestCode ? (
+                  <CopyableRequestCode
+                    code={request.requestCode}
+                    className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700"
+                  />
+                ) : null}
                 <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700">
                   Финансирование: {normalizeFundingSource(request.fundingSource)}
                 </span>
@@ -2107,6 +2185,7 @@ export default function RequestDetailPage() {
                 </h1>
                 <RequestMetaSummary
                   requestCode={request.requestCode}
+                  copyableRequestCode
                   clientName={request.clientName}
                   category={request.category}
                   amount={request.amount}
@@ -2538,21 +2617,42 @@ export default function RequestDetailPage() {
                         />
                         Затраты занесены в финплан
                       </label>
-                      <div className="space-y-2">
-                        <Label>ID затрат в Финплане</Label>
-                        <Textarea
-                          value={finplanEntryIdsRaw}
-                          onChange={(event) => {
-                            markOperationalFieldsDirty();
-                            setFinplanEntryIdsRaw(event.target.value);
-                          }}
-                          placeholder="ID затрат или ссылки на строки, по одной в строке"
-                          rows={2}
-                        />
+                      <div className="space-y-1">
+                        <div className="text-sm text-muted-foreground">Текущие ID затрат в Финплане</div>
+                        {finplanCostIdLinks ?? (
+                          <p className="text-sm text-muted-foreground">ID пока не указаны</p>
+                        )}
                       </div>
+                      {isManualFinplanEditorOpen ? (
+                        <div className="space-y-2">
+                          <Label>ID затрат в Финплане</Label>
+                          <Textarea
+                            ref={finplanEntryIdsTextareaRef}
+                            value={finplanEntryIdsRaw}
+                            onChange={(event) => {
+                              markOperationalFieldsDirty();
+                              setFinplanEntryIdsRaw(event.target.value);
+                            }}
+                            placeholder="ID затрат или ссылки на строки, по одной в строке"
+                            rows={2}
+                          />
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-2"
+                      onClick={() => {
+                        setIsManualFinplanEditorOpen((current) => !current);
+                        setTimeout(() => finplanEntryIdsTextareaRef.current?.focus(), 0);
+                      }}
+                    >
+                      <PencilLine className="h-4 w-4" />
+                      {isManualFinplanEditorOpen ? "Скрыть ручной ввод" : "Изменить вручную"}
+                    </Button>
                     <Button
                       type="button"
                       disabled={savingOperationalFields}
@@ -2587,6 +2687,16 @@ export default function RequestDetailPage() {
                     >
                       {savingOperationalFields ? "Сохраняем..." : "Сохранить отметки"}
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-2 border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100 hover:text-sky-900"
+                      disabled={syncingFinplanCosts}
+                      onClick={handleSyncFinplanCosts}
+                    >
+                      <RefreshCw className={`h-4 w-4 ${syncingFinplanCosts ? "animate-spin" : ""}`} />
+                      {syncingFinplanCosts ? "Проверяем..." : "Обновить из Финплана"}
+                    </Button>
                     {operationalFieldsSavedAt ? (
                       <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
                         <CheckCircle2 className="h-4 w-4" />
@@ -2594,6 +2704,9 @@ export default function RequestDetailPage() {
                       </span>
                     ) : null}
                   </div>
+                  {finplanSyncResult ? (
+                    <p className="text-sm text-muted-foreground">{finplanSyncResult}</p>
+                  ) : null}
                 </div>
               )}
               {((canSetPaymentPlanned || canSetPaid) && isOpenPaymentTask(request)) ||
@@ -3169,7 +3282,7 @@ export default function RequestDetailPage() {
                   </>
                 ) : null}
               </div>
-              {(request.finplanEntered || unifiedFinplanCostIds.length) ? (
+              {(request.finplanEntered || unifiedFinplanCostIds.length) && !canManageOperationalFields ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <div className="text-muted-foreground">Занесено в финплан</div>
@@ -3178,11 +3291,7 @@ export default function RequestDetailPage() {
                   {unifiedFinplanCostIds.length ? (
                     <div className="sm:col-span-2">
                       <div className="text-muted-foreground">ID затрат в Финплане</div>
-                      <ul className="mt-1 list-disc pl-5">
-                        {unifiedFinplanCostIds.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
+                      <div className="mt-1">{finplanCostIdLinks}</div>
                     </div>
                   ) : null}
                 </div>

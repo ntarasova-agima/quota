@@ -1,12 +1,14 @@
 "use client";
 
 import { HoverHint } from "@/components/ui/hover-hint";
+import CopyableRequestCode from "@/components/copyable-request-code";
 import { normalizeRequestCategory, usesServiceRecipientLabel } from "@/lib/requestRules";
 import { formatAmountWithoutVat } from "@/lib/vat";
 import { cn } from "@/lib/utils";
 
 type RequestMetaSummaryProps = {
   requestCode?: string;
+  copyableRequestCode?: boolean;
   clientName: string;
   category: string;
   amount?: number;
@@ -18,6 +20,7 @@ type RequestMetaSummaryProps = {
 
 export default function RequestMetaSummary({
   requestCode,
+  copyableRequestCode = false,
   clientName,
   category,
   amount,
@@ -33,9 +36,13 @@ export default function RequestMetaSummary({
     <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground", className)}>
       {requestCode ? (
         <>
-          <HoverHint label="Номер заявки">
-            <span>{requestCode}</span>
-          </HoverHint>
+          {copyableRequestCode ? (
+            <CopyableRequestCode code={requestCode} />
+          ) : (
+            <HoverHint label="Номер заявки">
+              <span>{requestCode}</span>
+            </HoverHint>
+          )}
           <span aria-hidden="true">·</span>
         </>
       ) : null}

@@ -177,6 +177,7 @@ const schema = defineSchema({
     paidBy: v.optional(v.number()),
     finplanEntered: v.optional(v.boolean()),
     finplanEntryIds: v.optional(v.array(v.string())),
+    finplanVerifiedCostIds: v.optional(v.array(v.string())),
     fotAllSpecialistsRecorded: v.optional(v.boolean()),
     fotRecordingRequestedAt: v.optional(v.number()),
     fotReminderLastDateKey: v.optional(v.string()),
@@ -209,6 +210,7 @@ const schema = defineSchema({
   })
     .index("by_createdBy", ["createdBy"])
     .index("by_createdByEmail", ["createdByEmail"])
+    .index("by_requestCode", ["requestCode"])
     .index("by_status", ["status"]),
   approvals: defineTable({
     requestId: v.id("requests"),
