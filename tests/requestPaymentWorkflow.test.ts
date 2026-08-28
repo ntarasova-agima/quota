@@ -637,6 +637,49 @@ describe("updatePaymentStatus workflow", () => {
     ).rejects.toThrow("Применить данные Финплана может админ или BUH-роль");
   });
 
+  it.each(["BUH Inside", "BUH Outsource"])(
+    "allows %s to apply Finplan preview",
+    async (role) => {
+      const { ctx, db } = createPaymentCtx(
+        {
+          createdBy: "author",
+          createdByEmail: "author@agima.ru",
+          category: "Закупка",
+          fundingSource: "Квоты AGIMA",
+          cfdTag: "Офис",
+          status: "approved",
+          amount: 100_000,
+          amountWithVat: 122_000,
+          vatRate: 22,
+          currency: "RUB",
+          isCanceled: false,
+          createdAt: new Date("2030-04-01").getTime(),
+          updatedAt: new Date("2030-04-01").getTime(),
+        },
+        [role],
+      );
+
+      await runApplyFinplanPaymentPreview(ctx, {
+        rows: [
+          {
+            id: "100",
+            costSumNet: 100_000,
+            costSum: 122_000,
+            effectivePaymentDate: "10.05.2030",
+            paymentState: "planned",
+            warnings: [],
+          },
+        ],
+      });
+
+      expect(getRequest(db)).toMatchObject({
+        status: "payment_planned",
+        finplanEntered: true,
+        finplanEntryIds: ["100"],
+      });
+    },
+  );
+
   it("saves an empty Finplan preview as awaiting payment and clears the Finplan mark for open requests", async () => {
     const { ctx, db } = createPaymentCtx({
       createdBy: "author",

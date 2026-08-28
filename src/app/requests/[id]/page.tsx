@@ -1400,7 +1400,9 @@ export default function RequestDetailPage() {
     request.category !== "Welcome-бонус" &&
     (isAdmin ||
       isFinanceApprover ||
-      myRoles.some((role) => ["BUH", "BUH Payment", "BUH Transit"].includes(role)));
+      myRoles.some((role) =>
+        ["BUH", "BUH Payment", "BUH Transit", "BUH Inside", "BUH Outsource"].includes(role),
+      ));
   const canSendPaymentReminder =
     canSendPaymentReminderForStatus(request.status) &&
     (isCreator || isAdmin || canManagePayments);

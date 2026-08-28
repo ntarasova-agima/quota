@@ -4695,7 +4695,7 @@ export const prepareFinplanRequestSync = mutation({
     const canSync =
       isCreator ||
       roles.some((role: string) =>
-        ["BUH", "ADMIN", "BUH Payment", "BUH Transit"].includes(role),
+        ["BUH", "ADMIN", "BUH Payment", "BUH Transit", "BUH Inside", "BUH Outsource"].includes(role),
       ) || hasFinanceApproverRole(record);
     if (!canSync) {
       throw new Error("Not authorized");
@@ -4990,7 +4990,7 @@ export const applyFinplanPaymentPreview = mutation({
     }
     const canManagePayments =
       record.roles.some((role: string) =>
-        ["BUH", "BUH Payment", "BUH Transit"].includes(role),
+        ["BUH", "BUH Payment", "BUH Transit", "BUH Inside", "BUH Outsource"].includes(role),
       ) || hasFinanceApproverRole(record);
     if (!record.roles.includes("ADMIN") && !canManagePayments) {
       throw new Error("Применить данные Финплана может админ или BUH-роль");
