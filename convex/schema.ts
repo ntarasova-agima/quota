@@ -178,6 +178,7 @@ const schema = defineSchema({
     finplanEntered: v.optional(v.boolean()),
     finplanEntryIds: v.optional(v.array(v.string())),
     finplanVerifiedCostIds: v.optional(v.array(v.string())),
+    finplanAutoSyncClosedEnabled: v.optional(v.boolean()),
     fotAllSpecialistsRecorded: v.optional(v.boolean()),
     fotRecordingRequestedAt: v.optional(v.number()),
     fotReminderLastDateKey: v.optional(v.string()),

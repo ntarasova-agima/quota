@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   adminBackfillCompletedRequestClosures,
   adminBackfillWelcomeBonusPaymentState,
+  applyFinplanPaymentPreview,
   updatePaymentStatus,
   updateSpecialistFot,
 } from "../convex/requests";
@@ -188,6 +189,14 @@ function getRequest(db: FakeDb) {
 async function runUpdatePaymentStatus(ctx: any, args: Record<string, any>) {
   return await (updatePaymentStatus as any)._handler(ctx, {
     id: REQUEST_ID,
+    ...args,
+  });
+}
+
+async function runApplyFinplanPaymentPreview(ctx: any, args: Record<string, any>) {
+  return await (applyFinplanPaymentPreview as any)._handler(ctx, {
+    id: REQUEST_ID,
+    decision: "apply_matching",
     ...args,
   });
 }
@@ -592,6 +601,196 @@ describe("updatePaymentStatus workflow", () => {
     expect(getRequest(db)?.status).toBe("payment_planned");
     expect(getRequest(db)?.cfdTag).toBe("Офис");
     expect(getRequest(db)?.plannedPaymentAmount).toBe(40_000);
+  });
+
+  it("does not allow request authors without finance roles to apply Finplan preview", async () => {
+    const { ctx } = createPaymentCtx(
+      {
+        createdBy: USER_ID,
+        createdByEmail: "finance@agima.ru",
+        category: "Закупка",
+        fundingSource: "Квоты AGIMA",
+        cfdTag: "Офис",
+        status: "approved",
+        amount: 100_000,
+        amountWithVat: 122_000,
+        vatRate: 22,
+        currency: "RUB",
+        isCanceled: false,
+        createdAt: new Date("2030-04-01").getTime(),
+        updatedAt: new Date("2030-04-01").getTime(),
+      },
+      [],
+    );
+
+    await expect(
+      runApplyFinplanPaymentPreview(ctx, {
+        rows: [
+          {
+            id: "100",
+            costSumNet: 100_000,
+            paymentState: "planned",
+            warnings: [],
+          },
+        ],
+      }),
+    ).rejects.toThrow("Применить данные Финплана может админ или BUH-роль");
+  });
+
+  it("saves an empty Finplan preview as awaiting payment and clears the Finplan mark for open requests", async () => {
+    const { ctx, db } = createPaymentCtx({
+      createdBy: "author",
+      createdByEmail: "author@agima.ru",
+      category: "Закупка",
+      fundingSource: "Квоты AGIMA",
+      cfdTag: "Офис",
+      status: "paid",
+      amount: 100_000,
+      amountWithVat: 122_000,
+      vatRate: 22,
+      currency: "RUB",
+      isCanceled: false,
+      finplanEntered: true,
+      finplanEntryIds: ["manual-1", "checked-1"],
+      finplanVerifiedCostIds: ["checked-1"],
+      paymentSplits: [{ splitNumber: 1, amountWithoutVat: 100_000, paidAt: new Date("2030-05-10").getTime() }],
+      actualPaidAmount: 100_000,
+      paidAt: new Date("2030-05-10").getTime(),
+      createdAt: new Date("2030-04-01").getTime(),
+      updatedAt: new Date("2030-04-01").getTime(),
+    });
+
+    await expect(runApplyFinplanPaymentPreview(ctx, { rows: [] })).resolves.toEqual({
+      status: "awaiting_payment",
+    });
+
+    expect(getRequest(db)).toMatchObject({
+      status: "awaiting_payment",
+      finplanEntered: false,
+      finplanEntryIds: ["manual-1"],
+    });
+    expect(getRequest(db)?.finplanVerifiedCostIds).toBeUndefined();
+    expect(getRequest(db)?.paymentSplits).toBeUndefined();
+    expect(getRequest(db)?.actualPaidAmount).toBeUndefined();
+  });
+
+  it("clears the Finplan mark when an empty Finplan preview is saved for a closed request", async () => {
+    const { ctx, db } = createPaymentCtx({
+      createdBy: "author",
+      createdByEmail: "author@agima.ru",
+      category: "Закупка",
+      fundingSource: "Квоты AGIMA",
+      cfdTag: "Офис",
+      status: "closed",
+      previousClosedStatus: "paid",
+      amount: 100_000,
+      amountWithVat: 122_000,
+      vatRate: 22,
+      currency: "RUB",
+      isCanceled: false,
+      finplanEntered: true,
+      finplanEntryIds: ["manual-1", "checked-1"],
+      finplanVerifiedCostIds: ["checked-1"],
+      paymentSplits: [{ splitNumber: 1, amountWithoutVat: 100_000, paidAt: new Date("2030-05-10").getTime() }],
+      actualPaidAmount: 100_000,
+      paidAt: new Date("2030-05-10").getTime(),
+      createdAt: new Date("2030-04-01").getTime(),
+      updatedAt: new Date("2030-04-01").getTime(),
+    });
+
+    await runApplyFinplanPaymentPreview(ctx, { rows: [] });
+
+    expect(getRequest(db)).toMatchObject({
+      status: "awaiting_payment",
+      finplanEntered: false,
+      finplanEntryIds: ["manual-1"],
+      finplanAutoSyncClosedEnabled: true,
+    });
+  });
+
+  it("applies positive Finplan rows even when another matched row has no amount", async () => {
+    const { ctx, db } = createPaymentCtx({
+      createdBy: "author",
+      createdByEmail: "author@agima.ru",
+      category: "Закупка",
+      fundingSource: "Квоты AGIMA",
+      cfdTag: "Офис",
+      status: "approved",
+      amount: 100_000,
+      amountWithVat: 122_000,
+      vatRate: 22,
+      currency: "RUB",
+      isCanceled: false,
+      createdAt: new Date("2030-04-01").getTime(),
+      updatedAt: new Date("2030-04-01").getTime(),
+    });
+
+    await runApplyFinplanPaymentPreview(ctx, {
+      rows: [
+        {
+          id: "positive",
+          costSumNet: 40_000,
+          costSum: 48_800,
+          effectivePaymentDate: "10.05.2030",
+          paymentState: "planned",
+          warnings: [],
+        },
+        {
+          id: "missing",
+          effectivePaymentDate: "15.05.2030",
+          paymentState: "needs_planning",
+          warnings: ["В строке нет суммы без НДС: затраты требуют планирования"],
+        },
+      ],
+    });
+
+    expect(getRequest(db)).toMatchObject({
+      status: "payment_planned",
+      finplanEntered: true,
+      finplanEntryIds: ["positive", "missing"],
+      finplanVerifiedCostIds: ["positive", "missing"],
+      plannedPaymentAmount: 40_000,
+      paymentResidualAmount: 100_000,
+    });
+  });
+
+  it("does not apply negative Finplan rows to Aurum payments or verified IDs", async () => {
+    const { ctx, db } = createPaymentCtx({
+      createdBy: "author",
+      createdByEmail: "author@agima.ru",
+      category: "Закупка",
+      fundingSource: "Квоты AGIMA",
+      cfdTag: "Офис",
+      status: "approved",
+      amount: 100_000,
+      amountWithVat: 122_000,
+      vatRate: 22,
+      currency: "RUB",
+      isCanceled: false,
+      createdAt: new Date("2030-04-01").getTime(),
+      updatedAt: new Date("2030-04-01").getTime(),
+    });
+
+    await runApplyFinplanPaymentPreview(ctx, {
+      rows: [
+        {
+          id: "negative",
+          costSumNet: -1000,
+          costSum: -1220,
+          effectivePaymentDate: "10.05.2030",
+          paymentState: "planned",
+          warnings: ["В строке отрицательная сумма без НДС: строка не будет обновлять Aurum"],
+        },
+      ],
+    });
+
+    expect(getRequest(db)).toMatchObject({
+      status: "awaiting_payment",
+      finplanEntered: false,
+    });
+    expect(getRequest(db)?.finplanEntryIds).toBeUndefined();
+    expect(getRequest(db)?.finplanVerifiedCostIds).toBeUndefined();
+    expect(getRequest(db)?.plannedPaymentAmount).toBeUndefined();
   });
 
   it("rejects payment actions for canceled requests", async () => {

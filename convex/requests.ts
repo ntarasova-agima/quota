@@ -4677,22 +4677,28 @@ export const prepareFinplanRequestSync = mutation({
     id: v.id("requests"),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
     const email = await getCurrentEmail(ctx);
     if (!email) {
       throw new Error("Missing user email");
     }
     const record = await getRoleRecord(ctx, email);
     const roles = record?.roles ?? [];
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    const isCreator = request.createdBy === userId || request.createdByEmail === email;
     const canSync =
+      isCreator ||
       roles.some((role: string) =>
         ["BUH", "ADMIN", "BUH Payment", "BUH Transit"].includes(role),
       ) || hasFinanceApproverRole(record);
     if (!canSync) {
       throw new Error("Not authorized");
-    }
-    const request = await ctx.db.get(args.id);
-    if (!request) {
-      throw new Error("Request not found");
     }
     if (!request.requestCode) {
       throw new Error("У заявки нет номера");
@@ -4704,6 +4710,18 @@ export const prepareFinplanRequestSync = mutation({
       requestId: request._id,
       requestCode: request.requestCode,
       createdAt: request.createdAt,
+      status: request.status,
+      isCanceled: request.isCanceled,
+      category: request.category,
+      amount: request.amount,
+      amountWithVat: request.amountWithVat,
+      currency: request.currency,
+      paymentDeadline: request.paymentDeadline,
+      neededBy: request.neededBy,
+      paymentSplits: request.paymentSplits,
+      plannedPaymentSplits: request.plannedPaymentSplits,
+      paymentPlannedAt: request.paymentPlannedAt,
+      actualPaidAmount: request.actualPaidAmount,
       actorEmail: email,
       actorName: record?.fullName ?? undefined,
     };
@@ -4781,6 +4799,7 @@ export const applyFinplanCostCommentMatches = internalMutation({
     ),
     actorEmail: v.string(),
     actorName: v.optional(v.string()),
+    dryRun: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     if (args.costs.length > 500) {
@@ -4835,6 +4854,10 @@ export const applyFinplanCostCommentMatches = internalMutation({
       if (isSameCosts && isSameVerified && request.finplanEntered) {
         continue;
       }
+      if (args.dryRun) {
+        updatedRequests.push({ requestCode, finplanCostIds: nextFinplanCostIds });
+        continue;
+      }
 
       const patch = {
         finplanEntered: true,
@@ -4879,6 +4902,368 @@ export const applyFinplanCostCommentMatches = internalMutation({
       unmatchedRequestCodes,
       updatedRequests,
     };
+  },
+});
+
+const finplanPaymentPreviewRowValidator = v.object({
+  id: v.string(),
+  comment: v.optional(v.string()),
+  costDate: v.optional(v.string()),
+  paymentDeadline: v.optional(v.string()),
+  paymentDate: v.optional(v.string()),
+  effectivePaymentDate: v.optional(v.string()),
+  costSum: v.optional(v.number()),
+  costSumNet: v.optional(v.number()),
+  payedCostSum: v.optional(v.number()),
+  billStatus: v.optional(v.string()),
+  costStatus: v.optional(v.string()),
+  paymentState: v.union(
+    v.literal("paid"),
+    v.literal("planned"),
+    v.literal("needs_planning"),
+  ),
+  warnings: v.array(v.string()),
+  currencyRate: v.optional(v.number()),
+});
+
+function parseFinplanPaymentDate(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+  const match = value.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!match) {
+    return undefined;
+  }
+  const [, day, month, year] = match;
+  const timestamp = new Date(`${year}-${month}-${day}T00:00:00+03:00`).getTime();
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function sumFinplanPreviewRows(
+  rows: Array<{ costSumNet?: number; costSum?: number }>,
+) {
+  return rows.reduce(
+    (total, row) => ({
+      amountWithoutVat: total.amountWithoutVat + (row.costSumNet ?? 0),
+      amountWithVat: total.amountWithVat + (row.costSum ?? 0),
+    }),
+    { amountWithoutVat: 0, amountWithVat: 0 },
+  );
+}
+
+function getManualUnverifiedFinplanIds(request: {
+  finplanEntryIds?: string[];
+  finplanCostIds?: string[];
+  finplanVerifiedCostIds?: string[];
+}) {
+  const verified = normalizeFinplanIds(request.finplanVerifiedCostIds ?? []);
+  return getUnifiedFinplanCostIds(request).filter((item) => !verified.includes(item));
+}
+
+export const applyFinplanPaymentPreview = mutation({
+  args: {
+    id: v.id("requests"),
+    rows: v.array(finplanPaymentPreviewRowValidator),
+    decision: v.union(
+      v.literal("apply_matching"),
+      v.literal("apply_and_update_amount"),
+      v.literal("apply_with_unallocated"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const email = await getCurrentEmail(ctx);
+    if (!email) {
+      throw new Error("Missing user email");
+    }
+    const record = await getRoleRecord(ctx, email);
+    if (!record) {
+      throw new Error("Not authorized");
+    }
+    const request = await ctx.db.get(args.id);
+    if (!request) {
+      throw new Error("Request not found");
+    }
+    const canManagePayments =
+      record.roles.some((role: string) =>
+        ["BUH", "BUH Payment", "BUH Transit"].includes(role),
+      ) || hasFinanceApproverRole(record);
+    if (!record.roles.includes("ADMIN") && !canManagePayments) {
+      throw new Error("Применить данные Финплана может админ или BUH-роль");
+    }
+    if (
+      request.isCanceled ||
+      ["draft", "hod_pending", "pending", "rejected"].includes(request.status)
+    ) {
+      throw new Error("Платежные действия доступны только по согласованной заявке");
+    }
+    if (request.category === "Welcome-бонус") {
+      throw new Error("Welcome-бонус не передается в оплату");
+    }
+    if (args.rows.length > 500) {
+      throw new Error("За один раз можно применить не больше 500 строк Финплана");
+    }
+
+    const normalizedRows = args.rows
+      .map((row) => ({ ...row, id: row.id.trim() }))
+      .filter((row) => row.id);
+    const manualUnverifiedFinplanIds = getManualUnverifiedFinplanIds(request);
+    if (!normalizedRows.length) {
+      const now = Date.now();
+      const actorName = record.fullName?.trim() || undefined;
+      const wasClosed = request.status === "closed";
+      const patch: Record<string, any> = {
+        status: "awaiting_payment",
+        finplanEntered: false,
+        finplanEntryIds: manualUnverifiedFinplanIds.length ? manualUnverifiedFinplanIds : undefined,
+        finplanCostIds: undefined,
+        finplanVerifiedCostIds: undefined,
+        paymentSplits: undefined,
+        plannedPaymentSplits: undefined,
+        paymentPlannedAt: undefined,
+        paymentPlannedByEmail: undefined,
+        paymentPlannedByName: undefined,
+        plannedPaymentAmount: undefined,
+        plannedPaymentAmountWithVat: undefined,
+        actualPaidAmount: undefined,
+        actualPaidAmountWithVat: undefined,
+        paidAt: undefined,
+        paidByEmail: undefined,
+        paidByName: undefined,
+        paymentResidualAmount: undefined,
+        paymentResidualAmountWithVat: undefined,
+        closeReminderSentAt: undefined,
+        paymentReminderSentAt: undefined,
+        paymentDeadlineReminderLastDateKey: undefined,
+        ...(wasClosed ? { finplanAutoSyncClosedEnabled: true } : {}),
+        updatedAt: now,
+      };
+      const changes = diffRequestFields(request, { ...request, ...patch });
+      await ctx.db.patch(request._id, patch);
+      if (changes.length) {
+        await recordRequestChanges(ctx, request._id, email, actorName, changes);
+      }
+      await logTimelineEvent(ctx, {
+        requestId: request._id,
+        type: "payment_status_updated",
+        title: "Затраты Финплана не найдены",
+        description: wasClosed
+          ? "Закрытая заявка снова открыта в статусе «Требуется оплата», отметка Финплана снята"
+          : "Заявка возвращена в статус «Требуется оплата», отметка Финплана снята",
+        actorEmail: email,
+        actorName,
+        metadata: {
+          finplanCostIds: [],
+          decision: args.decision,
+          status: "awaiting_payment",
+        },
+      });
+      return { status: "awaiting_payment" };
+    }
+
+    const applicableRows = normalizedRows.filter(
+      (row) => row.costSumNet === undefined || row.costSumNet >= 0,
+    );
+    const negativeRows = normalizedRows.filter((row) => row.costSumNet !== undefined && row.costSumNet < 0);
+    const finplanCostIds = normalizeFinplanIds([
+      ...manualUnverifiedFinplanIds,
+      ...applicableRows.map((row) => row.id),
+    ]);
+    const verifiedFinplanCostIds = normalizeFinplanIds(applicableRows.map((row) => row.id));
+    const rowsWithAmounts = normalizedRows.filter(
+      (row) => row.costSumNet !== undefined && row.costSumNet > PAYMENT_EPSILON,
+    );
+    const hasRowsRequiringPlanning = normalizedRows.some(
+      (row) => row.costSumNet === undefined || row.costSumNet <= PAYMENT_EPSILON,
+    );
+    const totals = sumFinplanPreviewRows(rowsWithAmounts);
+    const previousTargetAmounts = getRequestPaymentTargetAmounts(request);
+    const amountMatches = isSamePaymentAmount(totals.amountWithoutVat, previousTargetAmounts.amountWithoutVat);
+    if (
+      args.decision === "apply_matching" &&
+      !amountMatches &&
+      rowsWithAmounts.length > 0 &&
+      !hasRowsRequiringPlanning
+    ) {
+      throw new Error("Сумма Финплана отличается от заявки. Выберите, как сохранить расхождение");
+    }
+    if (
+      args.decision === "apply_with_unallocated" &&
+      rowsWithAmounts.length > 0 &&
+      totals.amountWithoutVat > (previousTargetAmounts.amountWithoutVat ?? 0) + PAYMENT_EPSILON
+    ) {
+      throw new Error("Нельзя сохранить превышение как нераспределенный остаток");
+    }
+
+    const now = Date.now();
+    const actorName = record.fullName?.trim() || undefined;
+    const nextTargetAmount =
+      args.decision === "apply_and_update_amount" && rowsWithAmounts.length > 0
+        ? totals.amountWithoutVat
+        : previousTargetAmounts.amountWithoutVat ?? request.amount;
+    const nextTargetAmountWithVat =
+      args.decision === "apply_and_update_amount" && rowsWithAmounts.length > 0
+        ? totals.amountWithVat || undefined
+        : previousTargetAmounts.amountWithVat ?? request.amountWithVat;
+
+    const paidRows = rowsWithAmounts
+      .filter((row) => row.paymentState === "paid")
+      .sort((left, right) => (parseFinplanPaymentDate(left.effectivePaymentDate) ?? 0) - (parseFinplanPaymentDate(right.effectivePaymentDate) ?? 0));
+    const plannedRows = rowsWithAmounts
+      .filter((row) => row.paymentState === "planned")
+      .sort((left, right) => (parseFinplanPaymentDate(left.effectivePaymentDate) ?? 0) - (parseFinplanPaymentDate(right.effectivePaymentDate) ?? 0));
+
+    const paymentSplits = paidRows.map((row, index) => {
+      const paidAt = parseFinplanPaymentDate(row.effectivePaymentDate) ?? now;
+      const cumulativePaid = sumFinplanPreviewRows(paidRows.slice(0, index + 1)).amountWithoutVat;
+      return {
+        splitNumber: index + 1,
+        amountWithoutVat: row.costSumNet!,
+        amountWithVat: row.costSum,
+        vatRate: request.vatRate,
+        currencyRate: row.currencyRate,
+        paidAt,
+        remainingAmountWithoutVat: Math.max(nextTargetAmount - cumulativePaid, 0),
+        finplanCostIds: [row.id],
+        actorEmail: "finplan-data@aurum.local",
+        actorName: "Данные финплана",
+        createdAt: now,
+      };
+    });
+    const paidTotals = sumFinplanPreviewRows(paidRows);
+    const remainingAfterPaid = Math.max(nextTargetAmount - paidTotals.amountWithoutVat, 0);
+    const plannedTotal = sumFinplanPreviewRows(plannedRows);
+    const firstPlanned = plannedRows[0];
+    const queuedPlannedRows = plannedRows.slice(1);
+    const plannedPaymentSplits = queuedPlannedRows.map((row, index) => ({
+      splitNumber: paidRows.length + index + 2,
+      amountWithoutVat: row.costSumNet!,
+      amountWithVat: row.costSum,
+      vatRate: request.vatRate,
+      currencyRate: row.currencyRate,
+      plannedAt: parseFinplanPaymentDate(row.effectivePaymentDate) ?? now,
+      finplanCostIds: [row.id],
+      actorEmail: "finplan-data@aurum.local",
+      actorName: "Данные финплана",
+      createdAt: now,
+    }));
+
+    const allCovered =
+      rowsWithAmounts.length > 0 &&
+      totals.amountWithoutVat >= nextTargetAmount - PAYMENT_EPSILON;
+    const nextStatus =
+      rowsWithAmounts.length === 0
+        ? "awaiting_payment"
+        : allCovered && paidTotals.amountWithoutVat >= nextTargetAmount - PAYMENT_EPSILON
+          ? "paid"
+          : paidTotals.amountWithoutVat > PAYMENT_EPSILON
+            ? "partially_paid"
+            : "payment_planned";
+
+    const patch: Record<string, any> = {
+      status: nextStatus,
+      finplanEntered: rowsWithAmounts.length > 0,
+      finplanEntryIds: finplanCostIds.length ? finplanCostIds : undefined,
+      finplanCostIds: undefined,
+      finplanVerifiedCostIds: verifiedFinplanCostIds.length ? verifiedFinplanCostIds : undefined,
+      paymentSplits: paymentSplits.length ? paymentSplits : undefined,
+      plannedPaymentSplits: plannedPaymentSplits.length ? plannedPaymentSplits : undefined,
+      paymentPlannedAt:
+        firstPlanned && nextStatus !== "paid"
+          ? parseFinplanPaymentDate(firstPlanned.effectivePaymentDate)
+          : undefined,
+      paymentPlannedByEmail:
+        firstPlanned && nextStatus !== "paid" ? "finplan-data@aurum.local" : undefined,
+      paymentPlannedByName:
+        firstPlanned && nextStatus !== "paid" ? "Данные финплана" : undefined,
+      plannedPaymentAmount:
+        firstPlanned && nextStatus !== "paid" ? firstPlanned.costSumNet : nextStatus === "paid" ? nextTargetAmount : undefined,
+      plannedPaymentAmountWithVat:
+        firstPlanned && nextStatus !== "paid" ? firstPlanned.costSum : nextStatus === "paid" ? nextTargetAmountWithVat : undefined,
+      actualPaidAmount: paidTotals.amountWithoutVat > PAYMENT_EPSILON ? paidTotals.amountWithoutVat : undefined,
+      actualPaidAmountWithVat: paidTotals.amountWithVat > PAYMENT_EPSILON ? paidTotals.amountWithVat : undefined,
+      paidAt: nextStatus === "paid" ? paymentSplits.at(-1)?.paidAt ?? now : undefined,
+      paidByEmail: nextStatus === "paid" ? "finplan-data@aurum.local" : undefined,
+      paidByName: nextStatus === "paid" ? "Данные финплана" : undefined,
+      paymentResidualAmount: nextStatus === "paid" ? undefined : remainingAfterPaid,
+      paymentResidualAmountWithVat:
+        nextStatus === "paid" || nextTargetAmountWithVat === undefined
+          ? undefined
+          : Math.max(nextTargetAmountWithVat - paidTotals.amountWithVat, 0),
+      closeReminderSentAt: undefined,
+      paymentReminderSentAt: undefined,
+      paymentDeadlineReminderLastDateKey: undefined,
+      ...(request.status === "closed" ? { finplanAutoSyncClosedEnabled: true } : {}),
+      updatedAt: now,
+    };
+
+    if (args.decision === "apply_and_update_amount" && rowsWithAmounts.length > 0) {
+      patch.amount = totals.amountWithoutVat;
+      patch.amountWithVat = totals.amountWithVat || undefined;
+    }
+
+    const previousForDiff = { ...request };
+    const nextForDiff = { ...request, ...patch };
+    const changes = diffRequestFields(previousForDiff, nextForDiff);
+    await ctx.db.patch(request._id, patch);
+    if (changes.length) {
+      await recordRequestChanges(ctx, request._id, email, actorName, changes);
+    }
+    await logTimelineEvent(ctx, {
+      requestId: request._id,
+      type: "payment_status_updated",
+      title: "Данные оплаты применены из Финплана",
+      description: `ID затрат: ${finplanCostIds.join(", ")}`,
+      actorEmail: email,
+      actorName,
+      metadata: {
+        finplanCostIds,
+        ignoredNegativeFinplanCostIds: negativeRows.map((row) => row.id),
+        decision: args.decision,
+        status: nextStatus,
+      },
+    });
+    const autoClosed =
+      nextStatus === "paid"
+        ? await autoCloseCompletedRequestIfReady(
+            ctx,
+            { ...request, ...patch, status: "paid" },
+            {
+              now,
+              actorEmail: email,
+              actorName,
+            },
+          )
+        : false;
+    if (
+      args.decision === "apply_and_update_amount" &&
+      hasPaymentAmountDifference(previousTargetAmounts, {
+        amountWithoutVat: totals.amountWithoutVat,
+        amountWithVat: totals.amountWithVat || undefined,
+      })
+    ) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentAmountChanged, {
+        requestId: request._id,
+        previousAmount: previousTargetAmounts.amountWithoutVat,
+        previousAmountWithVat: previousTargetAmounts.amountWithVat,
+        nextAmount: totals.amountWithoutVat,
+        nextAmountWithVat: totals.amountWithVat || undefined,
+        actorEmail: email,
+        actorName,
+        changedAt: now,
+      });
+    }
+    if (plannedTotal.amountWithoutVat > PAYMENT_EPSILON && firstPlanned) {
+      const plannedAt = parseFinplanPaymentDate(firstPlanned.effectivePaymentDate);
+      if (plannedAt) {
+        await schedulePaymentDueReminders(ctx, request._id, plannedAt);
+        await schedulePlannedPaymentReminder(ctx, request._id, plannedAt);
+      }
+    }
+    return { status: autoClosed ? "closed" : nextStatus };
   },
 });
 

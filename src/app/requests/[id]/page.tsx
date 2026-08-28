@@ -60,8 +60,7 @@ import {
   resolveVatAmounts,
   sanitizeNumericInput,
 } from "@/lib/vat";
-import { getFinplanCostUrl } from "@/lib/finplanCommentMatch";
-import { CheckCircle2, Copy, PencilLine, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Copy, PencilLine, RefreshCw } from "lucide-react";
 import { HoverHint } from "@/components/ui/hover-hint";
 
 type SpecialistView = {
@@ -122,6 +121,47 @@ type MentionCandidate = {
   token: string;
   creatorTitle?: string | null;
   isManual?: boolean;
+};
+
+type FinplanPaymentPreviewRow = {
+  id: string;
+  comment?: string;
+  costDate?: string;
+  paymentDeadline?: string;
+  paymentDate?: string;
+  effectivePaymentDate?: string;
+  costSum?: number;
+  costSumNet?: number;
+  payedCostSum?: number;
+  billStatus?: string;
+  costStatus?: string;
+  paymentState: "paid" | "planned" | "needs_planning";
+  warnings: string[];
+  currencyRate?: number;
+};
+
+type FinplanPaymentPreview = {
+  matchedRows: FinplanPaymentPreviewRow[];
+  finplanCostIds: string[];
+  totals: {
+    amountWithoutVat: number;
+    amountWithVat: number;
+    paidWithoutVat: number;
+    plannedWithoutVat: number;
+  };
+  comparison: {
+    requestAmountWithoutVat?: number;
+    requestAmountWithVat?: number;
+    differenceWithoutVat?: number;
+    amountMatches: boolean;
+    isOverRequestAmount: boolean;
+    hasExistingPaymentConflict: boolean;
+  };
+  suggestedStatus: "awaiting_payment" | "payment_planned" | "partially_paid" | "paid";
+  canApply: boolean;
+  needsAmountDecision: boolean;
+  hasMissingAmounts: boolean;
+  warnings: string[];
 };
 
 const ADDITIONAL_APPROVAL_ROLES = ["NBD", "AI-BOSS", "COO", "HOD"] as const;
@@ -586,6 +626,44 @@ function formatAmountWithoutVatLabel(amount?: number, currency?: string) {
   return formatAmountWithoutVat({ amountWithoutVat: amount, currency });
 }
 
+function getFinplanPaymentStateLabel(state: FinplanPaymentPreviewRow["paymentState"]) {
+  if (state === "paid") {
+    return "Оплачено";
+  }
+  if (state === "planned") {
+    return "План";
+  }
+  return "Требует планирования";
+}
+
+function getFinplanSuggestedStatusLabel(status: FinplanPaymentPreview["suggestedStatus"]) {
+  if (status === "paid") {
+    return "Оплачено";
+  }
+  if (status === "partially_paid") {
+    return "Частично оплачено";
+  }
+  if (status === "payment_planned") {
+    return "Запланирована оплата";
+  }
+  return "Требуется оплата";
+}
+
+function getFinplanPreviewSummary(preview: FinplanPaymentPreview, currency?: string) {
+  if (!preview.matchedRows.length) {
+    return "Строки Финплана с этим номером заявки не найдены.";
+  }
+  const rowsLabel = `${preview.matchedRows.length} ${preview.matchedRows.length === 1 ? "строка" : "строк"}`;
+  const amountLabel = formatAmountWithoutVatLabel(preview.totals.amountWithoutVat, currency);
+  if (preview.hasMissingAmounts) {
+    return `Найдено: ${rowsLabel}. В строках не хватает суммы без НДС, поэтому затраты требуют планирования.`;
+  }
+  if (!preview.comparison.amountMatches) {
+    return `Найдено: ${rowsLabel}. Сумма Финплана ${amountLabel} не совпадает с суммой заявки. Проверьте предпросмотр и выберите, как сохранить расхождение.`;
+  }
+  return `Найдено: ${rowsLabel}. Сумма Финплана ${amountLabel} совпадает с заявкой. Проверьте предпросмотр перед сохранением.`;
+}
+
 function buildPaymentTimelineRows(request: {
   paymentSplits?: Array<any>;
   plannedPaymentSplits?: Array<any>;
@@ -678,6 +756,7 @@ export default function RequestDetailPage() {
   const updateOperationalFields = useMutation(api.requests.updateOperationalFields);
   const syncRequestFromFinplan = useAction(api.finplanSync.syncRequestFromFinplan);
   const updatePaymentStatus = useMutation(api.requests.updatePaymentStatus);
+  const applyFinplanPaymentPreview = useMutation(api.requests.applyFinplanPaymentPreview);
   const cancelPaymentEntry = useMutation(api.requests.cancelPaymentEntry);
   const updateContestSpecialist = useMutation(api.requests.updateContestSpecialist);
   const updateSpecialistFot = useMutation(api.requests.updateSpecialistFot);
@@ -724,6 +803,9 @@ export default function RequestDetailPage() {
   const [isManualFinplanEditorOpen, setIsManualFinplanEditorOpen] = useState(false);
   const [syncingFinplanCosts, setSyncingFinplanCosts] = useState(false);
   const [finplanSyncResult, setFinplanSyncResult] = useState<string | null>(null);
+  const [finplanSyncResultTone, setFinplanSyncResultTone] = useState<"info" | "error">("info");
+  const [finplanPaymentPreview, setFinplanPaymentPreview] = useState<FinplanPaymentPreview | null>(null);
+  const [applyingFinplanPreview, setApplyingFinplanPreview] = useState<string | null>(null);
   const [savingOperationalFields, setSavingOperationalFields] = useState(false);
   const [operationalFieldsSavedAt, setOperationalFieldsSavedAt] = useState<number | null>(null);
   const [paymentPlannedDate, setPaymentPlannedDate] = useState("");
@@ -852,10 +934,14 @@ export default function RequestDetailPage() {
   const markOperationalFieldsDirty = () => {
     setOperationalFieldsSavedAt(null);
     setFinplanSyncResult(null);
+    setFinplanSyncResultTone("info");
+    setFinplanPaymentPreview(null);
   };
   const handleSyncFinplanCosts = async () => {
     setError(null);
     setFinplanSyncResult(null);
+    setFinplanSyncResultTone("info");
+    setFinplanPaymentPreview(null);
     setSyncingFinplanCosts(true);
     try {
       const result = await syncRequestFromFinplan({
@@ -863,23 +949,59 @@ export default function RequestDetailPage() {
       });
       if (!result.ok) {
         setFinplanSyncResult(result.error);
+        setFinplanSyncResultTone("error");
         return;
       }
       const currentUpdate = result.currentRequestUpdates[0];
-      if (currentUpdate?.finplanCostIds.length) {
+      if (result.preview.matchedRows.length) {
         setFinplanSyncResult(
-          `Проверено ${result.scannedRows} строк за период ${result.period.from}-${result.period.to}. Найдены ID: ${currentUpdate.finplanCostIds.join(", ")}.`,
+          `Проверено ${result.scannedRows} строк за период ${result.period.from}-${result.period.to}. ${getFinplanPreviewSummary(result.preview, data?.request?.currency)}`,
+        );
+      } else if (currentUpdate?.finplanCostIds.length) {
+        setFinplanSyncResult(
+          `Проверено ${result.scannedRows} строк за период ${result.period.from}-${result.period.to}. Найдены ID: ${currentUpdate.finplanCostIds.join(", ")}, но платежные данные для предпросмотра не сформировались.`,
         );
       } else {
         setFinplanSyncResult(
           `Проверено ${result.scannedRows} строк за период ${result.period.from}-${result.period.to}. Новых ID для этой заявки не найдено.`,
         );
       }
-      router.refresh();
+      setFinplanPaymentPreview(result.preview);
     } catch (err) {
-      setError(getDisplayErrorMessage(err, "Не удалось обновить затраты из Финплана"));
+      const message = getDisplayErrorMessage(err, "Не удалось обновить затраты из Финплана");
+      setFinplanSyncResult(message);
+      setFinplanSyncResultTone("error");
     } finally {
       setSyncingFinplanCosts(false);
+    }
+  };
+  const handleApplyFinplanPreview = async (
+    decision: "apply_matching" | "apply_and_update_amount" | "apply_with_unallocated",
+  ) => {
+    if (!finplanPaymentPreview) {
+      return;
+    }
+    setError(null);
+    setPaymentActionError(null);
+    setApplyingFinplanPreview(decision);
+    try {
+      await applyFinplanPaymentPreview({
+        id: requestId,
+        rows: finplanPaymentPreview.matchedRows,
+        decision,
+      });
+      setFinplanPaymentPreview(null);
+      setFinplanSyncResult(
+        finplanPaymentPreview.matchedRows.length
+          ? "Данные Финплана применены к заявке."
+          : "Затраты Финплана не найдены: отметка Финплана снята, заявка возвращена в оплату.",
+      );
+      setFinplanSyncResultTone("info");
+      router.refresh();
+    } catch (err) {
+      setError(getDisplayErrorMessage(err, "Не удалось применить данные Финплана"));
+    } finally {
+      setApplyingFinplanPreview(null);
     }
   };
   const canManagePayments = useMemo(
@@ -1186,17 +1308,15 @@ export default function RequestDetailPage() {
       {unifiedFinplanCostIds.map((item) => {
         const isVerified = verifiedFinplanCostIds.has(item);
         return (
-          <a
+          <button
             key={item}
-            href={getFinplanCostUrl(item)}
-            target="_blank"
-            rel="noreferrer"
             onClick={() => copyTextSilently(item)}
             title={
               isVerified
-                ? "Открыть Финплан и скопировать ID"
+                ? "Скопировать ID"
                 : "номер не проверен в финплане; ID скопируется при клике"
             }
+            type="button"
             className={`inline-flex items-center text-sm font-medium leading-6 underline decoration-1 underline-offset-2 transition-colors ${
               isVerified
                 ? "decoration-emerald-300 text-emerald-700 hover:decoration-emerald-600"
@@ -1204,7 +1324,7 @@ export default function RequestDetailPage() {
             }`}
           >
             {item}
-          </a>
+          </button>
         );
       })}
     </div>
@@ -1271,10 +1391,16 @@ export default function RequestDetailPage() {
   );
   const canManageOperationalFields =
     request.category !== "Welcome-бонус" &&
-    (isAdmin ||
+    (isCreator ||
+      isAdmin ||
       isFinanceApprover ||
       myRoles.some((role) => ["BUH", "BUH Payment", "BUH Transit"].includes(role)) ||
       (myRoles.includes("BUH Outsource") && hasOutsourceSpecialists));
+  const canApplyFinplanPaymentPreview =
+    request.category !== "Welcome-бонус" &&
+    (isAdmin ||
+      isFinanceApprover ||
+      myRoles.some((role) => ["BUH", "BUH Payment", "BUH Transit"].includes(role)));
   const canSendPaymentReminder =
     canSendPaymentReminderForStatus(request.status) &&
     (isCreator || isAdmin || canManagePayments);
@@ -2218,96 +2344,8 @@ export default function RequestDetailPage() {
                   </div>
                 </div>
               </div>
-            </div>
-
-            <aside className="flex flex-col justify-between gap-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-              <div className="space-y-2">
-                <div className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Активные действия
-                </div>
-                <div className="text-lg font-semibold text-zinc-950">{nextOperationalAction}</div>
-                {contextualHint && !canJumpToPaymentBlock ? (
-                  <p className="text-sm text-muted-foreground">
-                    Откройте нужный блок ниже: согласования, платежи или валидацию затрат.
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex flex-col gap-2">
-                {canJumpToApprovalBlock ? (
-                  <Button
-                    type="button"
-                    className="justify-start"
-                    onClick={scrollToApprovalsBlock}
-                  >
-                    Перейти к согласованию
-                  </Button>
-                ) : null}
-                {canJumpToPaymentBlock ? (
-                  <Button
-                    type="button"
-                    className="justify-start"
-                    onClick={scrollToPaymentBlock}
-                  >
-                    Запланировать или оплатить
-                  </Button>
-                ) : null}
-                {fotActionHint ? (
-                  <Button
-                    type="button"
-                    className="justify-start"
-                    onClick={scrollToSpecialistsBlock}
-                  >
-                    Перейти к выносу ФОТ
-                  </Button>
-                ) : null}
-                {finplanMissingHint ? (
-                  <Button
-                    type="button"
-                    className="justify-start"
-                    onClick={scrollToOperationalFieldsBlock}
-                  >
-                    Перейти к затратам
-                  </Button>
-                ) : null}
-                <Button asChild variant="outline" className="justify-start bg-white">
-                  <Link href={`/requests/new?copyFrom=${request._id}`}>
-                    <Copy className="h-4 w-4" />
-                    Копировать заявку
-                  </Link>
-                </Button>
-                {canEditRequest ? (
-                  <Button asChild variant="outline" className="justify-start bg-white">
-                    <Link href={`/requests/${requestId}/edit`}>Редактировать заявку</Link>
-                  </Button>
-                ) : null}
-                {isAdmin && request.status === "pending" && !request.isCanceled ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="justify-start bg-white"
-                    disabled={approvalReminderSent}
-                    onClick={async () => {
-                      setError(null);
-                      try {
-                        await remindApproval({ requestId: request._id });
-                        setApprovalReminderSent(true);
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "Не удалось отправить напоминание");
-                      }
-                    }}
-                  >
-                    {approvalReminderSent ? "✓ Напоминание отправлено!" : "Напомнить о согласовании"}
-                  </Button>
-                ) : null}
-              </div>
-            </aside>
-          </section>
-
-          <div className={activeTab === "details" ? "flex flex-col gap-6" : "hidden"}>
-          <Card>
-            <CardContent className="space-y-4 text-sm">
-              {(canClose || canCancel || canDeleteRequest) && (
-                <div className="flex flex-wrap gap-2">
+              {(canClose || canCancel || canDeleteRequest) ? (
+                <div className="flex flex-wrap gap-2 border-t border-zinc-100 pt-4">
                   {canClose && request.status === "closed" ? (
                     <HoverHint label="Вернуть заявку в предыдущий статус">
                       <Button
@@ -2405,37 +2443,127 @@ export default function RequestDetailPage() {
                     </Button>
                   ) : null}
                 </div>
-              )}
-              {request.paidByEmail ? (
-                <div>
-                  <div className="text-muted-foreground">Оплатил</div>
-                  <p className="mt-1">
-                    {request.paidByName ? `${request.paidByName} · ` : ""}
-                    {request.paidByEmail}
-                    {request.paidAt ? ` · ${new Date(request.paidAt).toLocaleString("ru-RU")}` : ""}
+              ) : null}
+            </div>
+
+            <aside className="flex flex-col justify-between gap-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+              <div className="space-y-2">
+                <div className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  Активные действия
+                </div>
+                <div className="text-lg font-semibold text-zinc-950">{nextOperationalAction}</div>
+                {contextualHint && !canJumpToPaymentBlock ? (
+                  <p className="text-sm text-muted-foreground">
+                    Откройте нужный блок ниже: согласования, платежи или валидацию затрат.
                   </p>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-2">
+                {canJumpToApprovalBlock ? (
+                  <Button
+                    type="button"
+                    className="justify-start"
+                    onClick={scrollToApprovalsBlock}
+                  >
+                    Перейти к согласованию
+                  </Button>
+                ) : null}
+                {canJumpToPaymentBlock ? (
+                  <Button
+                    type="button"
+                    className="justify-start"
+                    onClick={scrollToPaymentBlock}
+                  >
+                    Запланировать или оплатить
+                  </Button>
+                ) : null}
+                {fotActionHint ? (
+                  <Button
+                    type="button"
+                    className="justify-start"
+                    onClick={scrollToSpecialistsBlock}
+                  >
+                    Перейти к выносу ФОТ
+                  </Button>
+                ) : null}
+                {finplanMissingHint ? (
+                  <Button
+                    type="button"
+                    className="justify-start"
+                    onClick={scrollToOperationalFieldsBlock}
+                  >
+                    Перейти к затратам
+                  </Button>
+                ) : null}
+                <Button asChild variant="outline" className="justify-start bg-white">
+                  <Link href={`/requests/new?copyFrom=${request._id}`}>
+                    <Copy className="h-4 w-4" />
+                    Копировать заявку
+                  </Link>
+                </Button>
+                {canEditRequest ? (
+                  <Button asChild variant="outline" className="justify-start bg-white">
+                    <Link href={`/requests/${requestId}/edit`}>Редактировать заявку</Link>
+                  </Button>
+                ) : null}
+                {isAdmin && request.status === "pending" && !request.isCanceled ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="justify-start bg-white"
+                    disabled={approvalReminderSent}
+                    onClick={async () => {
+                      setError(null);
+                      try {
+                        await remindApproval({ requestId: request._id });
+                        setApprovalReminderSent(true);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Не удалось отправить напоминание");
+                      }
+                    }}
+                  >
+                    {approvalReminderSent ? "✓ Напоминание отправлено!" : "Напомнить о согласовании"}
+                  </Button>
+                ) : null}
+              </div>
+            </aside>
+          </section>
+
+          <div className={activeTab === "details" ? "flex flex-col gap-6" : "hidden"}>
+          <Card>
+            <CardContent className="space-y-4 text-sm">
+              {request.paidAt ? (
+                <div>
+                  <div className="text-muted-foreground">Дата последней оплаты</div>
+                  <p className="mt-1">{new Date(request.paidAt).toLocaleString("ru-RU")}</p>
                 </div>
               ) : null}
-              {request.actualPaidAmount !== undefined ? (
-                <div>
-                  <div className="text-muted-foreground">Сумма оплаты без НДС</div>
-                  <p className="mt-1">
-                    {formatAmountWithoutVatLabel(request.actualPaidAmount, request.currency)}
-                  </p>
-                </div>
-              ) : null}
-              {request.paymentResidualAmount !== undefined ? (
-                <div>
-                  <div className="text-muted-foreground">Остаток к оплате</div>
-                  <p className="mt-1">
-                    {formatAmountWithoutVatLabel(request.paymentResidualAmount, request.currency)}
-                  </p>
-                </div>
-              ) : null}
-              {request.paymentCurrencyRate !== undefined && !isRubRequest ? (
-                <div>
-                  <div className="text-muted-foreground">Курс валюты</div>
-                  <p className="mt-1">{request.paymentCurrencyRate}</p>
+              {request.actualPaidAmount !== undefined ||
+              request.paymentResidualAmount !== undefined ||
+              (request.paymentCurrencyRate !== undefined && !isRubRequest) ? (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {request.actualPaidAmount !== undefined ? (
+                    <div>
+                      <div className="text-muted-foreground">Сумма оплаты без НДС</div>
+                      <p className="mt-1">
+                        {formatAmountWithoutVatLabel(request.actualPaidAmount, request.currency)}
+                      </p>
+                    </div>
+                  ) : null}
+                  {request.paymentResidualAmount !== undefined ? (
+                    <div>
+                      <div className="text-muted-foreground">Остаток к оплате</div>
+                      <p className="mt-1">
+                        {formatAmountWithoutVatLabel(request.paymentResidualAmount, request.currency)}
+                      </p>
+                    </div>
+                  ) : null}
+                  {request.paymentCurrencyRate !== undefined && !isRubRequest ? (
+                    <div>
+                      <div className="text-muted-foreground">Курс валюты</div>
+                      <p className="mt-1">{request.paymentCurrencyRate}</p>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               {request.paymentPlannedByEmail ? (
@@ -2601,9 +2729,6 @@ export default function RequestDetailPage() {
                 >
                   <div>
                     <div className="text-lg font-semibold">Затраты в финплане</div>
-                    <p className="text-sm text-muted-foreground">
-                      BUH отмечает, что затраты занесены, и указывает ID затрат.
-                    </p>
                   </div>
                   <div className="grid gap-4">
                     <div className="space-y-4">
@@ -2705,7 +2830,212 @@ export default function RequestDetailPage() {
                     ) : null}
                   </div>
                   {finplanSyncResult ? (
-                    <p className="text-sm text-muted-foreground">{finplanSyncResult}</p>
+                    <div
+                      className={`rounded-md border px-3 py-2 text-sm ${
+                        finplanSyncResultTone === "error"
+                          ? "border-destructive/30 bg-destructive/10 text-destructive"
+                          : "border-sky-200 bg-sky-50 text-sky-900"
+                      }`}
+                    >
+                      {finplanSyncResult}
+                    </div>
+                  ) : null}
+                  {finplanPaymentPreview ? (
+                    <div
+                      className={`space-y-4 rounded-lg border p-4 ${
+                        finplanPaymentPreview.comparison.amountMatches &&
+                        !finplanPaymentPreview.hasMissingAmounts
+                          ? "border-sky-200 bg-sky-50/60"
+                          : "border-amber-200 bg-amber-50/70"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-sky-950">
+                            Предпросмотр данных Финплана
+                          </div>
+                          <p className="text-sm text-sky-900">
+                            {getFinplanPreviewSummary(finplanPaymentPreview, request.currency)}
+                          </p>
+                        </div>
+                        <span className="rounded-md bg-white px-2 py-1 text-xs font-medium text-sky-900">
+                          {getFinplanSuggestedStatusLabel(finplanPaymentPreview.suggestedStatus)}
+                        </span>
+                      </div>
+                      <div className="grid gap-2 text-sm sm:grid-cols-3">
+                        <div>
+                          <div className="text-muted-foreground">Сумма заявки без НДС</div>
+                          <div className="font-medium">
+                            {formatAmountWithoutVatLabel(
+                              finplanPaymentPreview.comparison.requestAmountWithoutVat,
+                              request.currency,
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">Сумма ФП без НДС</div>
+                          <div className="font-medium">
+                            {formatAmountWithoutVatLabel(
+                              finplanPaymentPreview.totals.amountWithoutVat,
+                              request.currency,
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">Разница</div>
+                          <div
+                            className={`font-medium ${
+                              finplanPaymentPreview.comparison.amountMatches
+                                ? "text-emerald-700"
+                                : "text-amber-700"
+                            }`}
+                          >
+                            {formatAmountWithoutVatLabel(
+                              finplanPaymentPreview.comparison.differenceWithoutVat,
+                              request.currency,
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      {finplanPaymentPreview.warnings.length ? (
+                        <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                          {finplanPaymentPreview.warnings.map((warning) => (
+                            <div key={warning} className="flex gap-2">
+                              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                              <span>{warning}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {finplanPaymentPreview.matchedRows.length ? (
+                        <div className="overflow-x-auto rounded-md border border-border bg-white">
+                          <table className="min-w-full divide-y divide-border text-sm">
+                            <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
+                              <tr>
+                                <th className="px-3 py-2 font-medium">ID</th>
+                                <th className="px-3 py-2 font-medium">Без НДС</th>
+                                <th className="px-3 py-2 font-medium">С НДС</th>
+                                <th className="px-3 py-2 font-medium">Дедлайн</th>
+                                <th className="px-3 py-2 font-medium">Дата оплаты</th>
+                                <th className="px-3 py-2 font-medium">Счет</th>
+                                <th className="px-3 py-2 font-medium">Итог</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {finplanPaymentPreview.matchedRows.map((row) => (
+                                <tr key={row.id}>
+                                  <td className="px-3 py-2 font-medium">
+                                    <button
+                                      type="button"
+                                      onClick={() => copyTextSilently(row.id)}
+                                      title="Скопировать ID"
+                                      className="font-medium underline underline-offset-2"
+                                    >
+                                      {row.id}
+                                    </button>
+                                    {row.costStatus ? (
+                                      <div className="text-xs text-muted-foreground">{row.costStatus}</div>
+                                    ) : null}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    {row.costSumNet !== undefined
+                                      ? formatAmountWithoutVatLabel(row.costSumNet, request.currency)
+                                      : "Нет суммы"}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    {row.costSum !== undefined
+                                      ? `${formatAmount(row.costSum)} ${request.currency}`
+                                      : "—"}
+                                  </td>
+                                  <td className="px-3 py-2">{row.paymentDeadline ?? "Дедлайн автора"}</td>
+                                  <td className="px-3 py-2">{row.paymentDate ?? "Не оплачено"}</td>
+                                  <td className="px-3 py-2">{row.billStatus ?? "—"}</td>
+                                  <td className="px-3 py-2">
+                                    <div className="font-medium">{getFinplanPaymentStateLabel(row.paymentState)}</div>
+                                    {row.currencyRate ? (
+                                      <div className="text-xs text-muted-foreground">
+                                        Курс ЦБ: {row.currencyRate.toFixed(4)}
+                                      </div>
+                                    ) : null}
+                                    {row.warnings.length ? (
+                                      <div className="mt-1 space-y-1 text-xs text-amber-700">
+                                        {row.warnings.map((warning) => (
+                                          <div key={warning}>{warning}</div>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+                      {canApplyFinplanPaymentPreview ? (
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={Boolean(applyingFinplanPreview)}
+                            onClick={() => setFinplanPaymentPreview(null)}
+                          >
+                            Не сохранять
+                          </Button>
+                          <Button
+                            type="button"
+                            disabled={
+                              Boolean(applyingFinplanPreview) ||
+                              (finplanPaymentPreview.matchedRows.length > 0 &&
+                                finplanPaymentPreview.needsAmountDecision &&
+                                !finplanPaymentPreview.hasMissingAmounts)
+                            }
+                            onClick={() => handleApplyFinplanPreview("apply_matching")}
+                          >
+                            {applyingFinplanPreview === "apply_matching"
+                              ? "Сохраняем..."
+                              : finplanPaymentPreview.matchedRows.length
+                                ? "Сохранить данные ФП"
+                                : "Сохранить: в ФП не занесено"}
+                          </Button>
+                          {finplanPaymentPreview.matchedRows.length &&
+                          finplanPaymentPreview.needsAmountDecision ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              disabled={Boolean(applyingFinplanPreview)}
+                              onClick={() => handleApplyFinplanPreview("apply_and_update_amount")}
+                            >
+                              {applyingFinplanPreview === "apply_and_update_amount"
+                                ? "Сохраняем..."
+                                : "Сохранить и обновить сумму заявки"}
+                            </Button>
+                          ) : null}
+                          {finplanPaymentPreview.matchedRows.length &&
+                          finplanPaymentPreview.needsAmountDecision &&
+                          !finplanPaymentPreview.comparison.isOverRequestAmount ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              disabled={Boolean(applyingFinplanPreview)}
+                              onClick={() => handleApplyFinplanPreview("apply_with_unallocated")}
+                            >
+                              {applyingFinplanPreview === "apply_with_unallocated"
+                                ? "Сохраняем..."
+                                : "Сохранить с нераспределенным остатком"}
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Сохранить данные Финплана может админ или BUH-роль.
+                        </p>
+                      )}
+                      {request.status === "closed" ? (
+                        <p className="text-xs text-muted-foreground">
+                          После сохранения закрытая заявка будет разрешена для будущего автообновления из Финплана.
+                        </p>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               )}
@@ -3902,14 +4232,17 @@ export default function RequestDetailPage() {
           ) : null}
 
           {viewerAccessEntries.length || canManageViewerAccess ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Доступ к заявке</CardTitle>
-                <CardDescription>
+            <details className="group rounded-xl border border-border bg-card text-card-foreground shadow-sm" open={viewerAccessEntries.length > 0}>
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4">
+                <span className="font-semibold leading-none tracking-normal">
+                  Дополнительный доступ к заявке
+                </span>
+                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="space-y-3 px-6 pb-6">
+                <p className="text-sm text-muted-foreground">
                   Эти люди могут открыть заявку по ссылке и комментировать ее, но не могут редактировать или согласовывать.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
+                </p>
                 {viewerAccessEntries.length ? (
                   <div className="space-y-2">
                     {viewerAccessEntries
@@ -3918,19 +4251,11 @@ export default function RequestDetailPage() {
                       .map((item) => (
                         <div
                           key={`${item.email}-${item.source}`}
-                          className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm"
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm"
                         >
-                          <div>
-                            <div className="font-medium">
-                              {item.fullName ? `${item.fullName} · ` : ""}
-                              {item.email}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              {item.source === "mention" ? "Доступ через @" : "Доступ выдан вручную"}
-                              {item.grantedByName || item.grantedByEmail
-                                ? ` · ${item.grantedByName ? `${item.grantedByName} · ` : ""}${item.grantedByEmail}`
-                                : ""}
-                            </div>
+                          <div className="font-medium">
+                            {item.fullName ? `${item.fullName} · ` : ""}
+                            {item.email}
                           </div>
                           {canManageViewerAccess ? (
                             <Button
@@ -3947,9 +4272,7 @@ export default function RequestDetailPage() {
                         </div>
                       ))}
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">Пока никому дополнительно не выдали доступ.</p>
-                )}
+                ) : null}
                 {canManageViewerAccess ? (
                   <div className="space-y-2 rounded-lg border border-border p-3">
                     <Label htmlFor="viewer-access">Кому дать доступ</Label>
@@ -4005,8 +4328,8 @@ export default function RequestDetailPage() {
                     ) : null}
                   </div>
                 ) : null}
-              </CardContent>
-            </Card>
+              </div>
+            </details>
           ) : null}
 
           <Card ref={approvalsBlockRef} className="scroll-mt-6">
