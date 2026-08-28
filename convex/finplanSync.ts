@@ -5,6 +5,7 @@ import {
   extractFirstAurumRequestCode,
   getFinplanCostSyncWindow,
 } from "../src/lib/finplanCommentMatch";
+import { getContractorSpecialistPaymentAmounts } from "../src/lib/requestFields";
 
 type FinplanCostRow = {
   ID?: string | number;
@@ -374,7 +375,7 @@ async function fetchFinplanCosts(params: { createdAt: number }) {
   };
 }
 
-async function buildFinplanPaymentPreview(params: {
+export async function buildFinplanPaymentPreview(params: {
   costs: NormalizedFinplanCost[];
   request: {
     requestCode: string;
@@ -388,6 +389,12 @@ async function buildFinplanPaymentPreview(params: {
     plannedPaymentSplits?: unknown[];
     paymentPlannedAt?: number;
     actualPaidAmount?: number;
+    specialists?: Array<{
+      sourceType?: string;
+      directCost?: number;
+      taxAmount?: number;
+      amountIncludesTaxes?: boolean;
+    }>;
   };
 }) {
   const todayStart = new Date();
@@ -463,7 +470,13 @@ async function buildFinplanPaymentPreview(params: {
     },
     { amountWithoutVat: 0, amountWithVat: 0, paidWithoutVat: 0, plannedWithoutVat: 0 },
   );
-  const requestAmountWithoutVat = params.request.amount;
+  const contractorPaymentAmounts = getContractorSpecialistPaymentAmounts(params.request.specialists);
+  const requestAmountWithoutVat = contractorPaymentAmounts.hasSpecialists
+    ? contractorPaymentAmounts.amountWithoutVat
+    : params.request.amount;
+  const requestAmountWithVat = contractorPaymentAmounts.hasSpecialists
+    ? contractorPaymentAmounts.amountWithVat
+    : params.request.amountWithVat;
   const differenceWithoutVat = Number((totals.amountWithoutVat - requestAmountWithoutVat).toFixed(2));
   const amountMatches = Math.abs(differenceWithoutVat) < 0.005;
   const hasExistingPayments = Boolean(
@@ -500,7 +513,7 @@ async function buildFinplanPaymentPreview(params: {
     totals,
     comparison: {
       requestAmountWithoutVat,
-      requestAmountWithVat: params.request.amountWithVat,
+      requestAmountWithVat,
       differenceWithoutVat,
       amountMatches,
       isOverRequestAmount: totals.amountWithoutVat > requestAmountWithoutVat,

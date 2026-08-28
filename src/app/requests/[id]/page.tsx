@@ -2864,7 +2864,7 @@ export default function RequestDetailPage() {
                       </div>
                       <div className="grid gap-2 text-sm sm:grid-cols-3">
                         <div>
-                          <div className="text-muted-foreground">Сумма заявки без НДС</div>
+                          <div className="text-muted-foreground">Сумма к оплате без НДС</div>
                           <div className="font-medium">
                             {formatAmountWithoutVatLabel(
                               finplanPaymentPreview.comparison.requestAmountWithoutVat,

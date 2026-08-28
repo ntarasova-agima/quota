@@ -4722,6 +4722,7 @@ export const prepareFinplanRequestSync = mutation({
       plannedPaymentSplits: request.plannedPaymentSplits,
       paymentPlannedAt: request.paymentPlannedAt,
       actualPaidAmount: request.actualPaidAmount,
+      specialists: request.specialists,
       actorEmail: email,
       actorName: record?.fullName ?? undefined,
     };
