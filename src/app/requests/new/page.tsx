@@ -40,6 +40,7 @@ import {
   formatIncomingRatio,
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
+  isGoogleSheetsLink,
   isPaidByDateAllowed,
   normalizeContestSpecialistSource,
   timestampToDateInput,
@@ -137,6 +138,7 @@ export default function NewRequestPage() {
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
   const [accountingJiraLink, setAccountingJiraLink] = useState("");
+  const [estimateLink, setEstimateLink] = useState("");
   const [counterparty, setCounterparty] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [contractLink, setContractLink] = useState("");
@@ -359,6 +361,7 @@ export default function NewRequestPage() {
     setInvestmentReturn(request.investmentReturn ?? "");
     setClientName(request.clientName ?? "");
     setAccountingJiraLink(request.accountingJiraLink ?? "");
+    setEstimateLink(request.estimateLink ?? "");
     setCounterparty(request.counterparty ?? "");
     setPaymentMethod(request.paymentMethod ?? "");
     setContractLink(request.contractLink ?? "");
@@ -602,6 +605,10 @@ export default function NewRequestPage() {
   const needsAccountingJiraLink = selectedDepartment === ACCOUNTING_REQUEST_AREA;
   const accountingJiraLinkInvalid =
     showValidationErrors && needsAccountingJiraLink && !accountingJiraLink.trim();
+  const estimateLinkInvalid =
+    showValidationErrors &&
+    isWelcomeBonus &&
+    (!estimateLink.trim() || !isGoogleSheetsLink(estimateLink));
   const amountInvalid =
     showValidationErrors &&
     (!resolvedAmountsPreview.amountWithoutVat ||
@@ -651,6 +658,7 @@ export default function NewRequestPage() {
     !selectedDepartment ||
     !clientName.trim() ||
     (needsAccountingJiraLink && !accountingJiraLink.trim()) ||
+    (isWelcomeBonus && (!estimateLink.trim() || !isGoogleSheetsLink(estimateLink))) ||
     !resolvedAmountsPreview.amountWithoutVat ||
     !resolvedAmountsPreview.amountWithVat ||
     resolvedAmountsPreview.amountWithoutVat <= 0 ||
@@ -954,6 +962,7 @@ export default function NewRequestPage() {
         investmentReturn: investmentReturn.trim() || undefined,
         clientName,
         accountingJiraLink: needsAccountingJiraLink ? accountingJiraLink.trim() : undefined,
+        estimateLink: isWelcomeBonus ? estimateLink.trim() : undefined,
         counterparty:
           category === "Конкурсное задание" ||
           isWelcomeBonus ||
@@ -1170,6 +1179,20 @@ export default function NewRequestPage() {
                       onChange={(event) => setAccountingJiraLink(event.target.value)}
                       aria-invalid={accountingJiraLinkInvalid ? true : undefined}
                       placeholder="https://jira..."
+                    />
+                  </div>
+                ) : null}
+                {isWelcomeBonus ? (
+                  <div className="space-y-2 sm:col-span-3">
+                    <FieldLabel htmlFor="estimateLink" required>
+                      Ссылка на смету
+                    </FieldLabel>
+                    <Input
+                      id="estimateLink"
+                      value={estimateLink}
+                      onChange={(event) => setEstimateLink(event.target.value)}
+                      aria-invalid={estimateLinkInvalid ? true : undefined}
+                      placeholder="https://docs.google.com/spreadsheets/..."
                     />
                   </div>
                 ) : null}

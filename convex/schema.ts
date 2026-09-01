@@ -106,6 +106,7 @@ const schema = defineSchema({
     dueDiligenceChecked: v.optional(v.boolean()),
     dueDiligenceJiraLink: v.optional(v.string()),
     accountingJiraLink: v.optional(v.string()),
+    estimateLink: v.optional(v.string()),
     prepaymentRequired: v.optional(v.boolean()),
     prepaymentAmount: v.optional(v.number()),
     prepaymentAmountWithVat: v.optional(v.number()),

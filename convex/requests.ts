@@ -66,6 +66,7 @@ import {
   getContractorSpecialistPaymentAmounts,
   getPaymentMethodOptions,
   getSpecialistEffectiveCost,
+  isGoogleSheetsLink,
   isPaidByDateAllowed,
   isContestSpecialistValidated,
   isPaidByTimestampAllowed,
@@ -1298,6 +1299,7 @@ const requestPayloadValidator = {
   dueDiligenceChecked: v.optional(v.boolean()),
   dueDiligenceJiraLink: v.optional(v.string()),
   accountingJiraLink: v.optional(v.string()),
+  estimateLink: v.optional(v.string()),
   prepaymentRequired: v.optional(v.boolean()),
   prepaymentAmount: v.optional(v.number()),
   prepaymentAmountWithVat: v.optional(v.number()),
@@ -1345,6 +1347,7 @@ const requestFieldLabels: Record<string, string> = {
   dueDiligenceChecked: "Проведена должная осмотрительность",
   dueDiligenceJiraLink: "Ссылка на задачу в Jira",
   accountingJiraLink: "Ссылка на тикет в Jira",
+  estimateLink: "Ссылка на смету",
   prepaymentRequired: "Требуется предоплата",
   prepaymentAmount: "Предоплата без НДС",
   prepaymentAmountWithVat: "Предоплата с НДС",
@@ -2002,6 +2005,12 @@ function validateRequestPayload(args: any, existing?: {
   if (requestArea === ACCOUNTING_REQUEST_AREA && !args.accountingJiraLink?.trim()) {
     throw new Error("Укажите ссылку на тикет в Jira");
   }
+  if (isWelcomeBonus && !args.estimateLink?.trim()) {
+    throw new Error("Укажите ссылку на смету");
+  }
+  if (args.estimateLink?.trim() && !isGoogleSheetsLink(args.estimateLink)) {
+    throw new Error("Ссылка на смету должна вести на Google Таблицы");
+  }
   if (
     effectiveAmount > 100_000 &&
     normalizedCategory !== "Welcome-бонус" &&
@@ -2110,6 +2119,10 @@ function getRequestPaymentDeadline(request: { paymentDeadline?: number; neededBy
   return request.paymentDeadline ?? request.neededBy;
 }
 
+function getDateKey(timestamp: number) {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
 function hasPendingInternalFot(request: { specialists?: Array<any> }) {
   return (request.specialists ?? []).some(
     (item: any) =>
@@ -2122,29 +2135,7 @@ async function schedulePaymentDueReminders(ctx: any, requestId: any, paymentDueA
   if (!paymentDueAt) {
     return;
   }
-  const now = Date.now();
-  const dayMs = 24 * 60 * 60 * 1000;
-  const beforeDelay = startOfDate(paymentDueAt) - dayMs - now;
-  if (beforeDelay > 0) {
-    await ctx.scheduler.runAfter(
-      beforeDelay,
-      internal.emails.sendPaymentDeadlineReminder,
-      {
-        requestId,
-        paymentDeadline: paymentDueAt,
-        reminderKind: "before",
-      },
-    );
-  }
-  await ctx.scheduler.runAfter(
-    Math.max(0, startOfDate(paymentDueAt) + dayMs - now),
-    internal.emails.sendPaymentDeadlineReminder,
-    {
-      requestId,
-      paymentDeadline: paymentDueAt,
-      reminderKind: "overdue",
-    },
-  );
+  await scheduleDailyPaymentDeadlineReminder(ctx, requestId, paymentDueAt, Date.now());
 }
 
 async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymentDeadline?: number) {
@@ -2981,6 +2972,7 @@ export const previewEditImpact = query({
       dueDiligenceChecked: args.dueDiligenceChecked ?? false,
       dueDiligenceJiraLink: args.dueDiligenceJiraLink?.trim() || undefined,
       accountingJiraLink: args.accountingJiraLink?.trim() || undefined,
+      estimateLink: args.estimateLink?.trim() || undefined,
       prepaymentRequired: args.prepaymentRequired ?? false,
       prepaymentAmount: args.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
       prepaymentAmountWithVat: args.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
@@ -3155,6 +3147,7 @@ export const editRequest = mutation({
       dueDiligenceChecked: args.dueDiligenceChecked ?? false,
       dueDiligenceJiraLink: args.dueDiligenceJiraLink?.trim() || undefined,
       accountingJiraLink: args.accountingJiraLink?.trim() || undefined,
+      estimateLink: args.estimateLink?.trim() || undefined,
       prepaymentRequired: args.prepaymentRequired ?? false,
       prepaymentAmount: args.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
       prepaymentAmountWithVat: args.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
@@ -3671,6 +3664,7 @@ export const createRequest = mutation({
       dueDiligenceChecked: payloadArgs.dueDiligenceChecked ?? false,
       dueDiligenceJiraLink: payloadArgs.dueDiligenceJiraLink?.trim() || undefined,
       accountingJiraLink: payloadArgs.accountingJiraLink?.trim() || undefined,
+      estimateLink: payloadArgs.estimateLink?.trim() || undefined,
       prepaymentRequired: payloadArgs.prepaymentRequired ?? false,
       prepaymentAmount: payloadArgs.prepaymentRequired ? prepaymentAmounts.amountWithoutVat : undefined,
       prepaymentAmountWithVat: payloadArgs.prepaymentRequired ? prepaymentAmounts.amountWithVat : undefined,
@@ -4209,6 +4203,68 @@ export const adminBackfillPaymentDeadlineReminders = mutation({
       }
       await schedulePaymentDeadlineReminders(ctx, request._id, paymentDeadline);
       scheduled += 1;
+    }
+    return { scheduled };
+  },
+});
+
+async function scheduleDailyPaymentDeadlineReminder(
+  ctx: any,
+  requestId: any,
+  paymentDeadline: number,
+  now: number,
+) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const todayKey = getDateKey(now);
+  const deadlineDayStart = startOfDate(paymentDeadline);
+  const deadlineKey = getDateKey(deadlineDayStart);
+  const beforeKey = getDateKey(deadlineDayStart - dayMs);
+  const reminderKind =
+    todayKey === beforeKey ? "before" : todayKey > deadlineKey ? "overdue" : undefined;
+  if (!reminderKind) {
+    return false;
+  }
+  await ctx.scheduler.runAfter(0, internal.emails.sendPaymentDeadlineReminder, {
+    requestId,
+    paymentDeadline,
+    reminderKind,
+    dateKey: todayKey,
+  });
+  return true;
+}
+
+export const sendDailyPaymentDeadlineReminders = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const candidates = (
+      await Promise.all(
+        OPEN_PAYMENT_TASK_STATUSES.map((status) =>
+          ctx.db
+            .query("requests")
+            .withIndex("by_status", (q: any) => q.eq("status", status as any))
+            .collect(),
+        ),
+      )
+    ).flat();
+    let scheduled = 0;
+    for (const request of candidates) {
+      if (!isOpenPaymentTask(request)) {
+        continue;
+      }
+      const paymentDeadline = getPaymentTaskTimestamp(request);
+      if (!paymentDeadline) {
+        continue;
+      }
+      const wasScheduled = await scheduleDailyPaymentDeadlineReminder(
+        ctx,
+        request._id,
+        paymentDeadline,
+        now,
+      );
+      if (wasScheduled) {
+        scheduled += 1;
+      }
     }
     return { scheduled };
   },

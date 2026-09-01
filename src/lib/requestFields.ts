@@ -46,6 +46,10 @@ export function getPaymentMethodOptions(category: string): PaymentMethodOption[]
   return [...PAYMENT_METHOD_OPTIONS];
 }
 
+export function isGoogleSheetsLink(value?: string) {
+  return /docs\.google\.com\/spreadsheets|spreadsheets\.google\.com/i.test(value?.trim() ?? "");
+}
+
 export function normalizeContestSpecialistSource(
   source?: string,
 ): ContestSpecialistSource {

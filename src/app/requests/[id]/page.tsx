@@ -3537,6 +3537,12 @@ export default function RequestDetailPage() {
                     <p className="mt-1 break-all">{request.accountingJiraLink}</p>
                   </div>
                 ) : null}
+                {request.category === "Welcome-бонус" && request.estimateLink ? (
+                  <div>
+                    <div className="text-muted-foreground">Ссылка на смету</div>
+                    <p className="mt-1 break-all">{request.estimateLink}</p>
+                  </div>
+                ) : null}
               </div>
               {(request.contractLink || request.contractAttachmentCount) ? (
                 <div>
