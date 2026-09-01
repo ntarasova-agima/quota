@@ -120,6 +120,14 @@ function getDateKey(timestamp?: number) {
   return timestamp ? new Date(timestamp).toISOString().slice(0, 10) : undefined;
 }
 
+function getMoscowDateKey(timestamp?: number) {
+  return timestamp
+    ? new Date(timestamp).toLocaleDateString("sv-SE", {
+        timeZone: "Europe/Moscow",
+      })
+    : undefined;
+}
+
 type PaymentPlanningRole = {
   active?: boolean;
   email: string;
@@ -1361,8 +1369,12 @@ export const sendPaymentDeadlineReminder = internalAction({
     requestId: v.id("requests"),
     paymentDeadline: v.number(),
     reminderKind: v.union(v.literal("before"), v.literal("overdue")),
+    dateKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if (!args.dateKey) {
+      return;
+    }
     const data = await ctx.runQuery(internal.emails.getRequestData, {
       requestId: args.requestId,
     });
@@ -1370,8 +1382,12 @@ export const sendPaymentDeadlineReminder = internalAction({
       return;
     }
     const { request, roles } = data;
-    const dateKey = `${args.reminderKind}:${new Date().toISOString().slice(0, 10)}`;
+    const dateKey = `${args.reminderKind}:${args.dateKey}`;
     const effectivePaymentAt = getPaymentTaskTimestamp(request);
+    const dueDateKey = getMoscowDateKey(effectivePaymentAt);
+    const beforeDateKey = effectivePaymentAt
+      ? getMoscowDateKey(effectivePaymentAt - 24 * 60 * 60 * 1000)
+      : undefined;
     if (
       request.isCanceled ||
       !isOpenPaymentTask(request) ||
@@ -1379,6 +1395,8 @@ export const sendPaymentDeadlineReminder = internalAction({
       request.status === "closed" ||
       !effectivePaymentAt ||
       getDateKey(effectivePaymentAt) !== getDateKey(args.paymentDeadline) ||
+      (args.reminderKind === "before" && args.dateKey !== beforeDateKey) ||
+      (args.reminderKind === "overdue" && (!dueDateKey || args.dateKey <= dueDateKey)) ||
       request.paymentDeadlineReminderLastDateKey === dateKey
     ) {
       return;
@@ -1416,13 +1434,6 @@ export const sendPaymentDeadlineReminder = internalAction({
       expectedAt: args.paymentDeadline,
       dateKey,
     });
-    if (args.reminderKind === "overdue") {
-      await ctx.scheduler.runAfter(24 * 60 * 60 * 1000, internal.emails.sendPaymentDeadlineReminder, {
-        requestId: args.requestId,
-        paymentDeadline: args.paymentDeadline,
-        reminderKind: "overdue",
-      });
-    }
   },
 });
 

@@ -53,34 +53,12 @@ function startOfDate(timestamp: number) {
   return date.getTime();
 }
 
-async function schedulePaymentDeadlineReminders(ctx: any, request: { _id: any; paymentDeadline?: number; neededBy?: number }) {
+async function schedulePaymentDeadlineReminders(_ctx: any, request: { _id: any; paymentDeadline?: number; neededBy?: number }) {
   const paymentDeadline = getPaymentDeadlineTimestamp(request);
   if (!paymentDeadline) {
     return;
   }
-  const now = Date.now();
-  const dayMs = 24 * 60 * 60 * 1000;
-  const beforeDelay = startOfDate(paymentDeadline) - dayMs - now;
-  if (beforeDelay > 0) {
-    await ctx.scheduler.runAfter(
-      beforeDelay,
-      internal.emails.sendPaymentDeadlineReminder,
-      {
-        requestId: request._id,
-        paymentDeadline,
-        reminderKind: "before",
-      },
-    );
-  }
-  await ctx.scheduler.runAfter(
-    Math.max(0, startOfDate(paymentDeadline) + dayMs - now),
-    internal.emails.sendPaymentDeadlineReminder,
-    {
-      requestId: request._id,
-      paymentDeadline,
-      reminderKind: "overdue",
-    },
-  );
+  // Payment deadline reminders are sent by the daily 08:00 MSK cron.
 }
 
 async function scheduleFotDeadlineReminders(ctx: any, request: { _id: any; paymentDeadline?: number; neededBy?: number }) {

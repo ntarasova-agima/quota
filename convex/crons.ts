@@ -10,4 +10,10 @@ crons.daily(
   internal.finplanSync.syncDailyFinplanCosts,
 );
 
+crons.daily(
+  "daily payment deadline reminders",
+  { hourUTC: 5, minuteUTC: 0 },
+  internal.requests.sendDailyPaymentDeadlineReminders,
+);
+
 export default crons;

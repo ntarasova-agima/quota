@@ -2119,8 +2119,10 @@ function getRequestPaymentDeadline(request: { paymentDeadline?: number; neededBy
   return request.paymentDeadline ?? request.neededBy;
 }
 
-function getDateKey(timestamp: number) {
-  return new Date(timestamp).toISOString().slice(0, 10);
+function getMoscowDateKey(timestamp: number) {
+  return new Date(timestamp).toLocaleDateString("sv-SE", {
+    timeZone: "Europe/Moscow",
+  });
 }
 
 function hasPendingInternalFot(request: { specialists?: Array<any> }) {
@@ -2131,11 +2133,11 @@ function hasPendingInternalFot(request: { specialists?: Array<any> }) {
   );
 }
 
-async function schedulePaymentDueReminders(ctx: any, requestId: any, paymentDueAt?: number) {
+async function schedulePaymentDueReminders(_ctx: any, _requestId: any, paymentDueAt?: number) {
   if (!paymentDueAt) {
     return;
   }
-  await scheduleDailyPaymentDeadlineReminder(ctx, requestId, paymentDueAt, Date.now());
+  // Payment deadline reminders are sent by the daily 08:00 MSK cron.
 }
 
 async function schedulePaymentDeadlineReminders(ctx: any, requestId: any, paymentDeadline?: number) {
@@ -4201,8 +4203,15 @@ export const adminBackfillPaymentDeadlineReminders = mutation({
       if (!paymentDeadline) {
         continue;
       }
-      await schedulePaymentDeadlineReminders(ctx, request._id, paymentDeadline);
-      scheduled += 1;
+      const wasScheduled = await scheduleDailyPaymentDeadlineReminder(
+        ctx,
+        request._id,
+        paymentDeadline,
+        Date.now(),
+      );
+      if (wasScheduled) {
+        scheduled += 1;
+      }
     }
     return { scheduled };
   },
@@ -4215,10 +4224,9 @@ async function scheduleDailyPaymentDeadlineReminder(
   now: number,
 ) {
   const dayMs = 24 * 60 * 60 * 1000;
-  const todayKey = getDateKey(now);
-  const deadlineDayStart = startOfDate(paymentDeadline);
-  const deadlineKey = getDateKey(deadlineDayStart);
-  const beforeKey = getDateKey(deadlineDayStart - dayMs);
+  const todayKey = getMoscowDateKey(now);
+  const deadlineKey = getMoscowDateKey(paymentDeadline);
+  const beforeKey = getMoscowDateKey(paymentDeadline - dayMs);
   const reminderKind =
     todayKey === beforeKey ? "before" : todayKey > deadlineKey ? "overdue" : undefined;
   if (!reminderKind) {

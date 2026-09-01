@@ -4,6 +4,7 @@ import {
   adminBackfillCompletedRequestClosures,
   adminBackfillWelcomeBonusPaymentState,
   applyFinplanPaymentPreview,
+  sendDailyPaymentDeadlineReminders,
   updatePaymentStatus,
   updateSpecialistFot,
 } from "../convex/requests";
@@ -221,8 +222,12 @@ async function runBackfillPaymentDeadlineReminders(ctx: any) {
   return await (adminBackfillPaymentDeadlineReminders as any)._handler(ctx, {});
 }
 
+async function runDailyPaymentDeadlineReminders(ctx: any) {
+  return await (sendDailyPaymentDeadlineReminders as any)._handler(ctx, {});
+}
+
 describe("updatePaymentStatus workflow", () => {
-  it("does not schedule stale before-payment reminders immediately", async () => {
+  it("does not schedule stale before-payment or overdue reminders on the deadline day", async () => {
     const { ctx, scheduled } = createPaymentCtx(
       {
         createdBy: "author",
@@ -250,7 +255,83 @@ describe("updatePaymentStatus workflow", () => {
       Date.now = originalNow;
     }
 
-    expect(scheduled.map((item) => item.args.reminderKind)).toEqual(["overdue"]);
+    expect(scheduled.map((item) => item.args.reminderKind)).toEqual([]);
+  });
+
+  it("schedules payment deadline reminders only for the daily run date", async () => {
+    const { ctx, scheduled } = createPaymentCtx(
+      {
+        createdBy: "author",
+        createdByEmail: "author@agima.ru",
+        category: "Закупка",
+        fundingSource: "Квоты AGIMA",
+        cfdTag: "Офис",
+        status: "approved",
+        amount: 50_000,
+        amountWithVat: 61_000,
+        vatRate: 22,
+        currency: "RUB",
+        paymentDeadline: new Date("2030-05-20T00:00:00.000Z").getTime(),
+        isCanceled: false,
+        createdAt: new Date("2030-05-19T05:00:00.000Z").getTime(),
+        updatedAt: new Date("2030-05-19T05:00:00.000Z").getTime(),
+      },
+      ["ADMIN"],
+    );
+    const originalNow = Date.now;
+    Date.now = () => new Date("2030-05-19T05:00:00.000Z").getTime();
+    try {
+      await runDailyPaymentDeadlineReminders(ctx);
+    } finally {
+      Date.now = originalNow;
+    }
+
+    expect(scheduled.map((item) => item.args)).toEqual([
+      {
+        requestId: REQUEST_ID,
+        paymentDeadline: new Date("2030-05-20T00:00:00.000Z").getTime(),
+        reminderKind: "before",
+        dateKey: "2030-05-19",
+      },
+    ]);
+  });
+
+  it("schedules overdue payment reminders from the daily run after the deadline day", async () => {
+    const { ctx, scheduled } = createPaymentCtx(
+      {
+        createdBy: "author",
+        createdByEmail: "author@agima.ru",
+        category: "Закупка",
+        fundingSource: "Квоты AGIMA",
+        cfdTag: "Офис",
+        status: "approved",
+        amount: 50_000,
+        amountWithVat: 61_000,
+        vatRate: 22,
+        currency: "RUB",
+        paymentDeadline: new Date("2030-05-20T00:00:00.000Z").getTime(),
+        isCanceled: false,
+        createdAt: new Date("2030-05-21T05:00:00.000Z").getTime(),
+        updatedAt: new Date("2030-05-21T05:00:00.000Z").getTime(),
+      },
+      ["ADMIN"],
+    );
+    const originalNow = Date.now;
+    Date.now = () => new Date("2030-05-21T05:00:00.000Z").getTime();
+    try {
+      await runDailyPaymentDeadlineReminders(ctx);
+    } finally {
+      Date.now = originalNow;
+    }
+
+    expect(scheduled.map((item) => item.args)).toEqual([
+      {
+        requestId: REQUEST_ID,
+        paymentDeadline: new Date("2030-05-20T00:00:00.000Z").getTime(),
+        reminderKind: "overdue",
+        dateKey: "2030-05-21",
+      },
+    ]);
   });
 
   it("allows BUH Transit to plan payments", async () => {
