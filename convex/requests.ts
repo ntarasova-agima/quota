@@ -44,12 +44,14 @@ import {
   getRequestAreaForDepartment,
   getFundingOwnerRoles,
   isAgimaQuotaFundingSource,
+  isAuthorPaymentDeadlineRequired,
   isCategoryAllowedForDepartment,
   isFundingSourceAllowedForCategory,
   isHodSelectableCategory,
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
+  requiresAccountingRequestTag,
   shouldSkipQuotaByTag,
   supportsRequestSpecialists,
   usesServiceRecipientLabel,
@@ -1795,6 +1797,7 @@ function validateRequestPayload(args: any, existing?: {
     requiredRoles: args.requiredRoles as any,
     requiredHodDepartments: effectiveRequiredHodDepartments,
     category: normalizedCategory,
+    specialists: normalizedSpecialists,
   });
   const requestWithSpecialists =
     supportsRequestSpecialists(args.category) && hasContestSpecialists(normalizedSpecialists);
@@ -1899,8 +1902,11 @@ function validateRequestPayload(args: any, existing?: {
   if (!isWelcomeBonus && !args.neededBy) {
     throw new Error("Укажите дату отгрузки");
   }
-  if (!isWelcomeBonus && !args.paymentDeadline) {
+  if (isAuthorPaymentDeadlineRequired(normalizedCategory, normalizedDepartment) && !args.paymentDeadline) {
     throw new Error("Укажите дедлайн оплаты");
+  }
+  if (requiresAccountingRequestTag(normalizedCategory, normalizedDepartment) && !args.cfdTag?.trim()) {
+    throw new Error("Укажите тег заявки");
   }
   if (!isFundingSourceAllowedForCategory(normalizedCategory, normalizedFundingSource)) {
     throw new Error("Так не бывает");
@@ -2235,6 +2241,7 @@ async function createApprovalsForRequest(
     requiredRoles: string[];
     requiredHodDepartments?: string[];
     category?: string;
+    specialists?: Array<any>;
     autoApprovedRoles: string[];
     now: number;
     userId: any;
@@ -2245,6 +2252,7 @@ async function createApprovalsForRequest(
     requiredRoles: params.requiredRoles,
     requiredHodDepartments: params.requiredHodDepartments,
     category: params.category,
+    specialists: params.specialists,
   });
   for (const target of targets) {
     const isAutoApproved =
@@ -2928,11 +2936,12 @@ export const previewEditImpact = query({
       requiredHodDepartments: args.requiredHodDepartments,
       specialists: normalizedSpecialists,
     });
-    const effectiveRequiredRoles = getEffectiveRequiredRoles({
-      requiredRoles: args.requiredRoles as any,
-      requiredHodDepartments: effectiveRequiredHodDepartments,
-      category: normalizedCategory,
-    });
+  const effectiveRequiredRoles = getEffectiveRequiredRoles({
+    requiredRoles: args.requiredRoles as any,
+    requiredHodDepartments: effectiveRequiredHodDepartments,
+    category: normalizedCategory,
+    specialists: normalizedSpecialists,
+  });
     const effectiveAmounts = resolveRequestAmounts(
       {
         category: normalizedCategory,
@@ -3100,6 +3109,7 @@ export const editRequest = mutation({
       requiredRoles: args.requiredRoles as any,
       requiredHodDepartments: effectiveRequiredHodDepartments,
       category: normalizedCategory,
+      specialists: normalizedSpecialists,
     });
     const effectiveAmounts = resolveRequestAmounts(
       {
@@ -3229,6 +3239,7 @@ export const editRequest = mutation({
             requiredRoles: effectiveRequiredRoles as any,
             requiredHodDepartments: effectiveRequiredHodDepartments,
             category: normalizedCategory,
+            specialists: normalizedSpecialists,
             autoApprovedRoles,
             now,
             userId,
@@ -3586,6 +3597,7 @@ export const createRequest = mutation({
       requiredRoles: args.requiredRoles as any,
       requiredHodDepartments: effectiveRequiredHodDepartments,
       category: normalizedCategory,
+      specialists: normalizedSpecialists,
     });
     const autoApprovedRoles = effectiveRequiredRoles.filter((role) => creatorRoles.includes(role));
     const specialistNeedsHodValidation =
@@ -3596,6 +3608,7 @@ export const createRequest = mutation({
       requiredRoles: effectiveRequiredRoles as any,
       requiredHodDepartments: effectiveRequiredHodDepartments,
       category: normalizedCategory,
+      specialists: normalizedSpecialists,
     });
     const status = !payloadArgs.submit
       ? "draft"
@@ -3713,6 +3726,7 @@ export const createRequest = mutation({
         requiredRoles: effectiveRequiredRoles as any,
         requiredHodDepartments: effectiveRequiredHodDepartments,
         category: normalizedCategory,
+        specialists: normalizedSpecialists,
         autoApprovedRoles,
         now,
         userId,

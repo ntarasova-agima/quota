@@ -30,6 +30,14 @@ export const ACCOUNTING_REQUEST_CATEGORIES = [
   "Конкурсное задание",
 ] as const;
 
+export const ACCOUNTING_REQUIRED_TAG_CATEGORIES = [
+  "Welcome-бонус",
+  "Подарки",
+  "Неформальное мероприятие",
+  "Совместный мерч",
+  "Конкурсное задание",
+] as const;
+
 export const ADMINISTRATION_REQUEST_CATEGORIES = [
   PURCHASE_CATEGORY,
 ] as const;
@@ -216,6 +224,24 @@ export function isCategoryAllowedForDepartment(category: string, department?: st
   }
   return (getCategoriesForDepartment(department) as readonly string[]).includes(
     normalizeRequestCategory(category),
+  );
+}
+
+export function requiresAccountingRequestTag(category: string, department?: string | null) {
+  const normalizedCategory = normalizeRequestCategory(category);
+  return (
+    getRequestAreaForDepartment(department) === ACCOUNTING_REQUEST_AREA &&
+    ACCOUNTING_REQUIRED_TAG_CATEGORIES.includes(
+      normalizedCategory as (typeof ACCOUNTING_REQUIRED_TAG_CATEGORIES)[number],
+    )
+  );
+}
+
+export function isAuthorPaymentDeadlineRequired(category: string, department?: string | null) {
+  const normalizedCategory = normalizeRequestCategory(category);
+  return (
+    normalizedCategory !== "Welcome-бонус" &&
+    !requiresAccountingRequestTag(normalizedCategory, department)
   );
 }
 

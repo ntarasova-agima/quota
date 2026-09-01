@@ -22,11 +22,13 @@ import {
   getRequestAreaForDepartment,
   isAiToolsFundingSource,
   isAiToolsRequestCategory,
+  isAuthorPaymentDeadlineRequired,
   isCategoryAllowedForDepartment,
   isFundingSourceAllowedForCategory,
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
+  requiresAccountingRequestTag,
   shouldSkipQuotaByTag,
   supportsRequestSpecialists,
   usesServiceRecipientLabel,
@@ -109,6 +111,23 @@ describe("requestRules", () => {
     expect(supportsRequestSpecialists("Конкурсное задание")).toBe(true);
     expect(supportsRequestSpecialists(PURCHASE_CATEGORY)).toBe(false);
     expect(supportsRequestSpecialists(CLIENT_SERVICES_TRANSIT_CATEGORY)).toBe(false);
+  });
+
+  it("requires accounting quota tags for selected accounting categories", () => {
+    expect(requiresAccountingRequestTag("Welcome-бонус", "Аккаунтинг")).toBe(true);
+    expect(requiresAccountingRequestTag("Конкурсное задание", "Аккаунтинг")).toBe(true);
+    expect(requiresAccountingRequestTag("Совместный мерч", "Аккаунтинг")).toBe(true);
+    expect(requiresAccountingRequestTag("Неформальное мероприятие", "Аккаунтинг")).toBe(true);
+    expect(requiresAccountingRequestTag("Подарки", "Аккаунтинг")).toBe(true);
+    expect(requiresAccountingRequestTag(PURCHASE_CATEGORY, "Аккаунтинг")).toBe(false);
+    expect(requiresAccountingRequestTag(PURCHASE_CATEGORY, "Администрация")).toBe(false);
+  });
+
+  it("makes author payment deadline optional for categories with required accounting tags", () => {
+    expect(isAuthorPaymentDeadlineRequired("Конкурсное задание", "Аккаунтинг")).toBe(false);
+    expect(isAuthorPaymentDeadlineRequired("Подарки", "Аккаунтинг")).toBe(false);
+    expect(isAuthorPaymentDeadlineRequired(PURCHASE_CATEGORY, "Аккаунтинг")).toBe(true);
+    expect(isAuthorPaymentDeadlineRequired(PURCHASE_CATEGORY, "Администрация")).toBe(true);
   });
 
   it("skips quota usage for the Transit tag", () => {

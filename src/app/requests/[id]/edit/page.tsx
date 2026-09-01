@@ -52,6 +52,7 @@ import {
   SERVICE_PURCHASE_CATEGORY,
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
+  isAuthorPaymentDeadlineRequired,
   isAiToolsFundingSource,
   isAiToolsRequestCategory,
   isFundingSourceAllowedForCategory,
@@ -59,6 +60,7 @@ import {
   isServiceRecipientCategory,
   normalizeFundingSource,
   normalizeRequestCategory,
+  requiresAccountingRequestTag,
   supportsRequestSpecialists,
   usesServiceRecipientLabel,
 } from "@/lib/requestRules";
@@ -92,9 +94,9 @@ type PendingEditConfirmation = {
   infoLines: string[];
 };
 
-function getEnforcedRoleSet(category: string, fundingSource: string) {
+function getEnforcedRoleSet(category: string, fundingSource: string, specialists?: unknown[]) {
   const roles = new Set<RoleOption>(getEnforcedRolesForFundingSource(fundingSource) as RoleOption[]);
-  getAutoRequiredRolesForRequest({ category }).forEach((role) => roles.add(role as RoleOption));
+  getAutoRequiredRolesForRequest({ category, specialists }).forEach((role) => roles.add(role as RoleOption));
   return roles;
 }
 
@@ -257,6 +259,8 @@ export default function NewRequestPage() {
   const showGeneralAttachments = !isWelcomeBonus;
   const effectivePrepaymentRequired = !isWelcomeBonus && prepaymentRequired;
   const selectedDepartment = requestArea;
+  const isCfdTagRequired = requiresAccountingRequestTag(effectiveCategory, selectedDepartment);
+  const isPaymentDeadlineRequired = isAuthorPaymentDeadlineRequired(effectiveCategory, selectedDepartment);
   const availableTags = useQuery(api.cfdTags.list, { department: selectedDepartment });
   const categoryOptions = useMemo(
     () => getCategoriesForDepartment(selectedDepartment),
@@ -323,6 +327,8 @@ export default function NewRequestPage() {
   );
   const showPaymentMethod = !isWelcomeBonus;
   const isPaymentMethodRequired =
+    !isWelcomeBonus && effectiveCategory !== "Конкурсное задание";
+  const showAuthorPaymentDeadline =
     !isWelcomeBonus && effectiveCategory !== "Конкурсное задание";
   const showCounterparty =
     effectiveCategory !== "Конкурсное задание" &&
@@ -434,7 +440,11 @@ export default function NewRequestPage() {
           : defaultDeadline,
     );
     setPaidBy(request.paidBy ? new Date(request.paidBy).toISOString().slice(0, 10) : "");
-    const loadedEnforcedRoles = getEnforcedRoleSet(normalizedStoredCategory, normalizedFundingSource);
+    const loadedEnforcedRoles = getEnforcedRoleSet(
+      normalizedStoredCategory,
+      normalizedFundingSource,
+      normalizedParticipants,
+    );
     setRequiredRoles(
       Array.from(
         new Set([
@@ -663,7 +673,8 @@ export default function NewRequestPage() {
       !prepaymentDate);
   const approvalDeadlineInvalid = showValidationErrors && !approvalDeadline;
   const neededByInvalid = showValidationErrors && !isWelcomeBonus && !neededBy;
-  const paymentDeadlineInvalid = showValidationErrors && !isWelcomeBonus && !paymentDeadline;
+  const paymentDeadlineInvalid = showValidationErrors && isPaymentDeadlineRequired && !paymentDeadline;
+  const cfdTagInvalid = showValidationErrors && isCfdTagRequired && !effectiveCfdTag.trim();
   const hodDepartmentsInvalid =
     showValidationErrors &&
     requiredRoles.includes("HOD") &&
@@ -684,6 +695,7 @@ export default function NewRequestPage() {
     !justification.trim() ||
     (isWelcomeBonus && !investmentReturn.trim()) ||
     (financeLinksRequired && financeLinksList.length === 0) ||
+    (isCfdTagRequired && !effectiveCfdTag.trim()) ||
     (showTransitFields &&
       (!resolvedIncomingAmountsPreview.amountWithoutVat ||
         !resolvedIncomingAmountsPreview.amountWithVat)) ||
@@ -700,13 +712,13 @@ export default function NewRequestPage() {
       effectiveRequiredHodDepartments.length === 0) ||
     !approvalDeadline ||
     (!isWelcomeBonus && !neededBy) ||
-    (!isWelcomeBonus && !paymentDeadline) ||
+    (isPaymentDeadlineRequired && !paymentDeadline) ||
     Boolean(fundingError) ||
     Boolean(paidByError);
 
   const enforcedRoles = useMemo(
-    () => getEnforcedRoleSet(effectiveCategory, fundingSource),
-    [effectiveCategory, fundingSource],
+    () => getEnforcedRoleSet(effectiveCategory, fundingSource, specialistsPayload),
+    [effectiveCategory, fundingSource, specialistsPayload],
   );
   const displayedRoleOptions = useMemo(() => {
     const roles = new Set<RoleOption>(ROLE_OPTIONS);
@@ -1017,7 +1029,10 @@ export default function NewRequestPage() {
             : undefined,
         approvalDeadline: approvalDeadline ? new Date(approvalDeadline).getTime() : undefined,
         neededBy: !isWelcomeBonus && neededBy ? new Date(neededBy).getTime() : undefined,
-        paymentDeadline: !isWelcomeBonus && paymentDeadline ? new Date(paymentDeadline).getTime() : undefined,
+        paymentDeadline:
+          showAuthorPaymentDeadline && paymentDeadline
+            ? new Date(paymentDeadline).getTime()
+            : undefined,
         paidBy:
           showTransitFields && paidBy
             ? new Date(paidBy).getTime()
@@ -1121,7 +1136,9 @@ export default function NewRequestPage() {
                     )}
                   </div>
                   <div className="space-y-2">
-                    <FieldLabel className={headerFieldLabelClass}>Тег заявки (необязательно)</FieldLabel>
+                    <FieldLabel className={headerFieldLabelClass} required={isCfdTagRequired}>
+                      Тег заявки
+                    </FieldLabel>
                     <Select
                       value={effectiveCfdTag || "none"}
                       onValueChange={(value) => {
@@ -1129,7 +1146,10 @@ export default function NewRequestPage() {
                         setCfdTag(value === "none" ? "" : value);
                       }}
                     >
-                      <SelectTrigger className={wrappedSelectTriggerClass}>
+                      <SelectTrigger
+                        className={wrappedSelectTriggerClass}
+                        aria-invalid={cfdTagInvalid ? true : undefined}
+                      >
                         <SelectValue placeholder="Выберите тег" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1909,7 +1929,7 @@ export default function NewRequestPage() {
                 ) : null}
               </div>
 
-              <div className={`grid gap-4 ${isWelcomeBonus ? "sm:grid-cols-1" : "sm:grid-cols-3"}`}>
+              <div className={`grid gap-4 ${showAuthorPaymentDeadline ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
                 <div className="space-y-2">
                   <FieldLabel htmlFor="approvalDeadline" required>
                     Дедлайн согласования
@@ -1946,23 +1966,25 @@ export default function NewRequestPage() {
                         }
                       />
                     </div>
-                    <div className="space-y-2">
-                      <FieldLabel htmlFor="paymentDeadline" required>
-                        Дедлайн оплаты от автора
-                      </FieldLabel>
-                      <Input
-                        id="paymentDeadline"
-                        type="date"
-                        value={paymentDeadline}
-                        onChange={(event) => setPaymentDeadline(event.target.value)}
-                        aria-invalid={paymentDeadlineInvalid ? true : undefined}
-                        min={
-                          paymentDeadline && paymentDeadline === originalPaymentDeadlineValue
-                            ? undefined
-                            : minNeededByDateValue
-                        }
-                      />
-                    </div>
+                    {showAuthorPaymentDeadline ? (
+                      <div className="space-y-2">
+                        <FieldLabel htmlFor="paymentDeadline" required={isPaymentDeadlineRequired}>
+                          Дедлайн оплаты от автора
+                        </FieldLabel>
+                        <Input
+                          id="paymentDeadline"
+                          type="date"
+                          value={paymentDeadline}
+                          onChange={(event) => setPaymentDeadline(event.target.value)}
+                          aria-invalid={paymentDeadlineInvalid ? true : undefined}
+                          min={
+                            paymentDeadline && paymentDeadline === originalPaymentDeadlineValue
+                              ? undefined
+                              : minNeededByDateValue
+                          }
+                        />
+                      </div>
+                    ) : null}
                   </>
                 ) : null}
               </div>

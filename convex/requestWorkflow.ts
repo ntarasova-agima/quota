@@ -82,6 +82,7 @@ export function getEffectiveRequiredRoles(params: {
   requiredRoles: string[];
   requiredHodDepartments?: string[];
   category?: string;
+  specialists?: SpecialistEntryLike[];
   enforceFinanceRole?: boolean;
 }) {
   const roles = new Set(params.requiredRoles);
@@ -90,7 +91,10 @@ export function getEffectiveRequiredRoles(params: {
     if (normalizedCategory === CLIENT_SERVICES_TRANSIT_CATEGORY) {
       roles.delete("BUH");
     }
-    getAutoRequiredRolesForRequest({ category: normalizedCategory }).forEach((role) =>
+    getAutoRequiredRolesForRequest({
+      category: normalizedCategory,
+      specialists: params.specialists,
+    }).forEach((role) =>
       roles.add(role),
     );
   }
@@ -112,6 +116,7 @@ export function buildApprovalTargets(params: {
   requiredRoles: string[];
   requiredHodDepartments?: string[];
   category?: string;
+  specialists?: SpecialistEntryLike[];
   enforceFinanceRole?: boolean;
 }) {
   const roles = getEffectiveRequiredRoles(params);
@@ -142,6 +147,7 @@ export function getMandatoryApprovalTargets(params: {
     requiredRoles: [],
     requiredHodDepartments,
     category: params.category,
+    specialists: params.specialists,
   });
 }
 
