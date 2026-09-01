@@ -659,9 +659,9 @@ function getFinplanPreviewSummary(preview: FinplanPaymentPreview, currency?: str
     return `Найдено: ${rowsLabel}. В строках не хватает суммы без НДС, поэтому затраты требуют планирования.`;
   }
   if (!preview.comparison.amountMatches) {
-    return `Найдено: ${rowsLabel}. Сумма Финплана ${amountLabel} не совпадает с суммой заявки. Проверьте предпросмотр и выберите, как сохранить расхождение.`;
+    return `Найдено: ${rowsLabel}. Сумма Финплана ${amountLabel} не совпадает с суммой к оплате. Проверьте предпросмотр и выберите, как сохранить расхождение.`;
   }
-  return `Найдено: ${rowsLabel}. Сумма Финплана ${amountLabel} совпадает с заявкой. Проверьте предпросмотр перед сохранением.`;
+  return `Найдено: ${rowsLabel}. Сумма Финплана ${amountLabel} совпадает с суммой к оплате. Проверьте предпросмотр перед сохранением.`;
 }
 
 function buildPaymentTimelineRows(request: {
@@ -1303,10 +1303,15 @@ export default function RequestDetailPage() {
   const parsedPaymentCurrencyRate = isRubRequest ? undefined : parseMoneyInput(paymentCurrencyRate);
   const unifiedFinplanCostIds = getUnifiedFinplanCostIds(request);
   const verifiedFinplanCostIds = getVerifiedFinplanCostIds(request);
+  const currentFinplanPreviewCostIds = finplanPaymentPreview
+    ? new Set(finplanPaymentPreview.matchedRows.map((row) => row.id))
+    : null;
   const finplanCostIdLinks = unifiedFinplanCostIds.length ? (
     <div className="flex flex-wrap gap-x-3 gap-y-1">
       {unifiedFinplanCostIds.map((item) => {
-        const isVerified = verifiedFinplanCostIds.has(item);
+        const isVerified = currentFinplanPreviewCostIds
+          ? currentFinplanPreviewCostIds.has(item)
+          : verifiedFinplanCostIds.has(item);
         return (
           <button
             key={item}

@@ -60,15 +60,18 @@ async function schedulePaymentDeadlineReminders(ctx: any, request: { _id: any; p
   }
   const now = Date.now();
   const dayMs = 24 * 60 * 60 * 1000;
-  await ctx.scheduler.runAfter(
-    Math.max(0, startOfDate(paymentDeadline) - dayMs - now),
-    internal.emails.sendPaymentDeadlineReminder,
-    {
-      requestId: request._id,
-      paymentDeadline,
-      reminderKind: "before",
-    },
-  );
+  const beforeDelay = startOfDate(paymentDeadline) - dayMs - now;
+  if (beforeDelay > 0) {
+    await ctx.scheduler.runAfter(
+      beforeDelay,
+      internal.emails.sendPaymentDeadlineReminder,
+      {
+        requestId: request._id,
+        paymentDeadline,
+        reminderKind: "before",
+      },
+    );
+  }
   await ctx.scheduler.runAfter(
     Math.max(0, startOfDate(paymentDeadline) + dayMs - now),
     internal.emails.sendPaymentDeadlineReminder,

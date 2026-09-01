@@ -2118,15 +2118,18 @@ async function schedulePaymentDueReminders(ctx: any, requestId: any, paymentDueA
   }
   const now = Date.now();
   const dayMs = 24 * 60 * 60 * 1000;
-  await ctx.scheduler.runAfter(
-    Math.max(0, startOfDate(paymentDueAt) - dayMs - now),
-    internal.emails.sendPaymentDeadlineReminder,
-    {
-      requestId,
-      paymentDeadline: paymentDueAt,
-      reminderKind: "before",
-    },
-  );
+  const beforeDelay = startOfDate(paymentDueAt) - dayMs - now;
+  if (beforeDelay > 0) {
+    await ctx.scheduler.runAfter(
+      beforeDelay,
+      internal.emails.sendPaymentDeadlineReminder,
+      {
+        requestId,
+        paymentDeadline: paymentDueAt,
+        reminderKind: "before",
+      },
+    );
+  }
   await ctx.scheduler.runAfter(
     Math.max(0, startOfDate(paymentDueAt) + dayMs - now),
     internal.emails.sendPaymentDeadlineReminder,

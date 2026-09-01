@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adminBackfillPaymentDeadlineReminders,
   adminBackfillCompletedRequestClosures,
   adminBackfillWelcomeBonusPaymentState,
   applyFinplanPaymentPreview,
@@ -216,7 +217,42 @@ async function runBackfillWelcomeBonusPaymentState(ctx: any, args: Record<string
   return await (adminBackfillWelcomeBonusPaymentState as any)._handler(ctx, args);
 }
 
+async function runBackfillPaymentDeadlineReminders(ctx: any) {
+  return await (adminBackfillPaymentDeadlineReminders as any)._handler(ctx, {});
+}
+
 describe("updatePaymentStatus workflow", () => {
+  it("does not schedule stale before-payment reminders immediately", async () => {
+    const { ctx, scheduled } = createPaymentCtx(
+      {
+        createdBy: "author",
+        createdByEmail: "author@agima.ru",
+        category: "Закупка",
+        fundingSource: "Квоты AGIMA",
+        cfdTag: "Офис",
+        status: "approved",
+        amount: 50_000,
+        amountWithVat: 61_000,
+        vatRate: 22,
+        currency: "RUB",
+        paymentDeadline: new Date("2030-05-20T00:00:00.000Z").getTime(),
+        isCanceled: false,
+        createdAt: new Date("2030-05-20T12:00:00.000Z").getTime(),
+        updatedAt: new Date("2030-05-20T12:00:00.000Z").getTime(),
+      },
+      ["ADMIN"],
+    );
+    const originalNow = Date.now;
+    Date.now = () => new Date("2030-05-20T12:00:00.000Z").getTime();
+    try {
+      await runBackfillPaymentDeadlineReminders(ctx);
+    } finally {
+      Date.now = originalNow;
+    }
+
+    expect(scheduled.map((item) => item.args.reminderKind)).toEqual(["overdue"]);
+  });
+
   it("allows BUH Transit to plan payments", async () => {
     const { db, ctx } = createPaymentCtx(
       {
