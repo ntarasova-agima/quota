@@ -51,7 +51,9 @@ import {
   AI_TOOLS_FUNDING_SOURCE,
   AI_TOOLS_REQUEST_CATEGORY,
   SERVICE_PURCHASE_CATEGORY,
+  CONTEST_REQUEST_DEFAULT_TAG,
   getDefaultFundingSourceForCategory,
+  getDefaultAccountingRequestTag,
   getEnforcedRolesForFundingSource,
   isAuthorPaymentDeadlineRequired,
   isAiToolsFundingSource,
@@ -63,6 +65,7 @@ import {
   normalizeRequestCategory,
   requiresAccountingRequestTag,
   supportsRequestSpecialists,
+  WELCOME_BONUS_DEFAULT_TAG,
   usesServiceRecipientLabel,
 } from "@/lib/requestRules";
 import {
@@ -193,7 +196,7 @@ export default function NewRequestPage() {
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const contractFileInputRef = useRef<HTMLInputElement | null>(null);
-  const previousEnforcedRolesRef = useRef<Set<RoleOption>>(new Set());
+  const autoAddedRolesRef = useRef<Set<RoleOption>>(new Set());
   const loadedRequestIdRef = useRef<string | null>(null);
   const myRoles = useQuery(api.roles.myRoles);
   const isNbd = useMemo(() => myRoles?.includes("NBD"), [myRoles]);
@@ -332,6 +335,7 @@ export default function NewRequestPage() {
     !isWelcomeBonus && effectiveCategory !== "Конкурсное задание";
   const showAuthorPaymentDeadline =
     !isWelcomeBonus && effectiveCategory !== "Конкурсное задание";
+  const defaultAccountingTag = getDefaultAccountingRequestTag(effectiveCategory);
   const showCounterparty =
     effectiveCategory !== "Конкурсное задание" &&
     !isWelcomeBonus &&
@@ -456,9 +460,28 @@ export default function NewRequestPage() {
         ]),
       ),
     );
-    previousEnforcedRolesRef.current = loadedEnforcedRoles;
+    autoAddedRolesRef.current = new Set(loadedEnforcedRoles);
     setRequiredHodDepartments(request.requiredHodDepartments ?? []);
   }, [data?.request?._id, defaultDeadline]);
+
+  useEffect(() => {
+    if (!isCfdTagRequired) {
+      return;
+    }
+    setCfdTag((current) => {
+      const trimmed = current.trim();
+      if (!trimmed) {
+        return defaultAccountingTag;
+      }
+      if (
+        trimmed === CONTEST_REQUEST_DEFAULT_TAG ||
+        trimmed === WELCOME_BONUS_DEFAULT_TAG
+      ) {
+        return defaultAccountingTag;
+      }
+      return current;
+    });
+  }, [cfdTag, defaultAccountingTag, isCfdTagRequired]);
 
   const relatedRequestsList = useMemo(
     () =>
@@ -739,19 +762,29 @@ export default function NewRequestPage() {
       return;
     }
     setRequiredRoles((current) => {
-      const previouslyEnforcedRoles = previousEnforcedRolesRef.current;
+      const previouslyAutoAddedRoles = autoAddedRolesRef.current;
       const next = new Set(
-        current.filter(
-          (role) =>
+        current.filter((role) => {
+          if (role === "COO" && !enforcedRoles.has("COO")) {
+            return false;
+          }
+          return (
             enforcedRoles.has(role) ||
-            (
-              !previouslyEnforcedRoles.has(role) &&
-              !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role)
-            ),
-        ),
+            (!previouslyAutoAddedRoles.has(role) &&
+              !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role))
+          );
+        }),
       );
-      enforcedRoles.forEach((role) => next.add(role));
-      previousEnforcedRolesRef.current = new Set(enforcedRoles);
+      const nextAutoAddedRoles = new Set<RoleOption>(
+        Array.from(previouslyAutoAddedRoles).filter((role) => enforcedRoles.has(role)),
+      );
+      enforcedRoles.forEach((role) => {
+        if (!current.includes(role) || previouslyAutoAddedRoles.has(role)) {
+          nextAutoAddedRoles.add(role);
+        }
+        next.add(role);
+      });
+      autoAddedRolesRef.current = nextAutoAddedRoles;
       return Array.from(next);
     });
   }, [data?.request?._id, enforcedRoles]);
@@ -803,6 +836,8 @@ export default function NewRequestPage() {
     setRequestArea(nextArea);
     const nextCategory = getCategoriesForDepartment(nextArea)[0];
     setCategory(nextCategory);
+    setCfdTag(getDefaultAccountingRequestTag(nextCategory));
+    setCfdTagWasChanged(true);
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
@@ -814,7 +849,20 @@ export default function NewRequestPage() {
   }
 
   function handleCategoryChange(nextCategory: string) {
+    const nextDefaultTag = getDefaultAccountingRequestTag(nextCategory);
     setCategory(nextCategory);
+    setCfdTagWasChanged(true);
+    setCfdTag((current) => {
+      const trimmed = current.trim();
+      if (
+        !trimmed ||
+        trimmed === CONTEST_REQUEST_DEFAULT_TAG ||
+        trimmed === WELCOME_BONUS_DEFAULT_TAG
+      ) {
+        return nextDefaultTag;
+      }
+      return current;
+    });
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);

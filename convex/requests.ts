@@ -47,6 +47,7 @@ import {
   isAuthorPaymentDeadlineRequired,
   isCategoryAllowedForDepartment,
   isFundingSourceAllowedForCategory,
+  isDefaultAccountingRequestTag,
   isHodSelectableCategory,
   isServiceRecipientCategory,
   normalizeFundingSource,
@@ -3088,7 +3089,7 @@ export const editRequest = mutation({
           tag.active &&
           normalizeHodDepartment(tag.department) === normalizedDepartment,
       );
-      if (!existingTag && cfdTag !== TRANSIT_TAG_NAME) {
+      if (!existingTag && cfdTag !== TRANSIT_TAG_NAME && !isDefaultAccountingRequestTag(cfdTag)) {
         throw new Error("Тег не найден");
       }
     }
@@ -3575,7 +3576,7 @@ export const createRequest = mutation({
           tag.active &&
           normalizeHodDepartment(tag.department) === normalizedDepartment,
       );
-      if (!existingTag && cfdTag !== TRANSIT_TAG_NAME) {
+      if (!existingTag && cfdTag !== TRANSIT_TAG_NAME && !isDefaultAccountingRequestTag(cfdTag)) {
         throw new Error("Тег не найден");
       }
     }

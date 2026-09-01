@@ -31,11 +31,15 @@ export const ACCOUNTING_REQUEST_CATEGORIES = [
 ] as const;
 
 export const ACCOUNTING_REQUIRED_TAG_CATEGORIES = [
-  "Welcome-бонус",
-  "Подарки",
-  "Неформальное мероприятие",
-  "Совместный мерч",
   "Конкурсное задание",
+  "Welcome-бонус",
+] as const;
+
+export const CONTEST_REQUEST_DEFAULT_TAG = "Тендер";
+export const WELCOME_BONUS_DEFAULT_TAG = "Безопасный тендер";
+export const DEFAULT_ACCOUNTING_REQUEST_TAGS = [
+  CONTEST_REQUEST_DEFAULT_TAG,
+  WELCOME_BONUS_DEFAULT_TAG,
 ] as const;
 
 export const ADMINISTRATION_REQUEST_CATEGORIES = [
@@ -234,6 +238,23 @@ export function requiresAccountingRequestTag(category: string, department?: stri
     ACCOUNTING_REQUIRED_TAG_CATEGORIES.includes(
       normalizedCategory as (typeof ACCOUNTING_REQUIRED_TAG_CATEGORIES)[number],
     )
+  );
+}
+
+export function getDefaultAccountingRequestTag(category: string) {
+  const normalizedCategory = normalizeRequestCategory(category);
+  if (normalizedCategory === "Конкурсное задание") {
+    return CONTEST_REQUEST_DEFAULT_TAG;
+  }
+  if (normalizedCategory === "Welcome-бонус") {
+    return WELCOME_BONUS_DEFAULT_TAG;
+  }
+  return "";
+}
+
+export function isDefaultAccountingRequestTag(tag?: string | null) {
+  return DEFAULT_ACCOUNTING_REQUEST_TAGS.includes(
+    (tag?.trim() ?? "") as (typeof DEFAULT_ACCOUNTING_REQUEST_TAGS)[number],
   );
 }
 

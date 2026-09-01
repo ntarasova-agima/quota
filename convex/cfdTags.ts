@@ -5,6 +5,7 @@ import { getCurrentEmail } from "./authHelpers";
 import { HOD_DEPARTMENTS, normalizeHodDepartment } from "../src/lib/departments";
 import {
   ACCOUNTING_REQUEST_AREA,
+  DEFAULT_ACCOUNTING_REQUEST_TAGS,
   TRANSIT_TAG_NAME,
   getRequestAreaForDepartment,
 } from "../src/lib/requestRules";
@@ -134,6 +135,31 @@ export const list = query({
           updatedAt: 0,
           isSystem: true,
         });
+      }
+    }
+    if (
+      normalizedDepartment === ACCOUNTING_REQUEST_AREA &&
+      (access.canViewAll || access.visibleDepartments.includes(ACCOUNTING_REQUEST_AREA))
+    ) {
+      for (const name of DEFAULT_ACCOUNTING_REQUEST_TAGS) {
+        const hasDefaultTag = result.some(
+          (row) =>
+            row.name === name &&
+            normalizeHodDepartment(row.department) === ACCOUNTING_REQUEST_AREA,
+        );
+        if (!hasDefaultTag) {
+          result.push({
+            _id: `system-accounting-tag-${name}` as any,
+            _creationTime: 0,
+            name,
+            requestArea: ACCOUNTING_REQUEST_AREA,
+            department: ACCOUNTING_REQUEST_AREA,
+            active: true,
+            createdAt: 0,
+            updatedAt: 0,
+            isSystem: true,
+          });
+        }
       }
     }
     return result.sort((a, b) => {

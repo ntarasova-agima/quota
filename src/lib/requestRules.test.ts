@@ -18,8 +18,10 @@ import {
   getDefaultFundingSourceForCategory,
   getEnforcedRolesForFundingSource,
   getFundingOwnerRoles,
+  getDefaultAccountingRequestTag,
   getRequestAreaForCategory,
   getRequestAreaForDepartment,
+  isDefaultAccountingRequestTag,
   isAiToolsFundingSource,
   isAiToolsRequestCategory,
   isAuthorPaymentDeadlineRequired,
@@ -114,18 +116,27 @@ describe("requestRules", () => {
   });
 
   it("requires accounting quota tags for selected accounting categories", () => {
-    expect(requiresAccountingRequestTag("Welcome-бонус", "Аккаунтинг")).toBe(true);
     expect(requiresAccountingRequestTag("Конкурсное задание", "Аккаунтинг")).toBe(true);
-    expect(requiresAccountingRequestTag("Совместный мерч", "Аккаунтинг")).toBe(true);
-    expect(requiresAccountingRequestTag("Неформальное мероприятие", "Аккаунтинг")).toBe(true);
-    expect(requiresAccountingRequestTag("Подарки", "Аккаунтинг")).toBe(true);
+    expect(requiresAccountingRequestTag("Welcome-бонус", "Аккаунтинг")).toBe(true);
+    expect(requiresAccountingRequestTag("Совместный мерч", "Аккаунтинг")).toBe(false);
+    expect(requiresAccountingRequestTag("Неформальное мероприятие", "Аккаунтинг")).toBe(false);
+    expect(requiresAccountingRequestTag("Подарки", "Аккаунтинг")).toBe(false);
     expect(requiresAccountingRequestTag(PURCHASE_CATEGORY, "Аккаунтинг")).toBe(false);
     expect(requiresAccountingRequestTag(PURCHASE_CATEGORY, "Администрация")).toBe(false);
   });
 
+  it("returns default accounting tags for contest and welcome bonus requests", () => {
+    expect(getDefaultAccountingRequestTag("Конкурсное задание")).toBe("Тендер");
+    expect(getDefaultAccountingRequestTag("Welcome-бонус")).toBe("Безопасный тендер");
+    expect(getDefaultAccountingRequestTag("Подарки")).toBe("");
+    expect(isDefaultAccountingRequestTag("Тендер")).toBe(true);
+    expect(isDefaultAccountingRequestTag("Безопасный тендер")).toBe(true);
+    expect(isDefaultAccountingRequestTag("Подарки")).toBe(false);
+  });
+
   it("makes author payment deadline optional for categories with required accounting tags", () => {
     expect(isAuthorPaymentDeadlineRequired("Конкурсное задание", "Аккаунтинг")).toBe(false);
-    expect(isAuthorPaymentDeadlineRequired("Подарки", "Аккаунтинг")).toBe(false);
+    expect(isAuthorPaymentDeadlineRequired("Подарки", "Аккаунтинг")).toBe(true);
     expect(isAuthorPaymentDeadlineRequired(PURCHASE_CATEGORY, "Аккаунтинг")).toBe(true);
     expect(isAuthorPaymentDeadlineRequired(PURCHASE_CATEGORY, "Администрация")).toBe(true);
   });

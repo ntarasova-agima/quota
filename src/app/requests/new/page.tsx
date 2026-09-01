@@ -48,7 +48,9 @@ import {
 import {
   ACCOUNTING_REQUEST_AREA,
   AI_TOOLS_FUNDING_SOURCE,
+  CONTEST_REQUEST_DEFAULT_TAG,
   getDefaultFundingSourceForCategory,
+  getDefaultAccountingRequestTag,
   getEnforcedRolesForFundingSource,
   isAuthorPaymentDeadlineRequired,
   isAiToolsRequestCategory,
@@ -57,6 +59,7 @@ import {
   isServiceRecipientCategory,
   requiresAccountingRequestTag,
   supportsRequestSpecialists,
+  WELCOME_BONUS_DEFAULT_TAG,
   usesServiceRecipientLabel,
 } from "@/lib/requestRules";
 import {
@@ -133,7 +136,9 @@ export default function NewRequestPage() {
   const [vatInputSource, setVatInputSource] = useState<VatAmountSource>("without");
   const [currency, setCurrency] = useState("RUB");
   const [fundingSource, setFundingSource] = useState(() => (copyFromRequestId ? "" : "Квоты AGIMA"));
-  const [cfdTag, setCfdTag] = useState("");
+  const [cfdTag, setCfdTag] = useState(() =>
+    copyFromRequestId ? "" : getDefaultAccountingRequestTag("Welcome-бонус"),
+  );
   const [justification, setJustification] = useState("");
   const [investmentReturn, setInvestmentReturn] = useState("");
   const [clientName, setClientName] = useState("");
@@ -182,7 +187,7 @@ export default function NewRequestPage() {
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const contractFileInputRef = useRef<HTMLInputElement | null>(null);
-  const previousEnforcedRolesRef = useRef<Set<RoleOption>>(new Set());
+  const autoAddedRolesRef = useRef<Set<RoleOption>>(new Set());
   const copiedRequestIdRef = useRef<string | null>(null);
   const profileDepartmentSyncedRef = useRef(false);
   const myRoles = useQuery(api.roles.myRoles);
@@ -275,6 +280,7 @@ export default function NewRequestPage() {
     !isWelcomeBonus && category !== "Конкурсное задание";
   const showAuthorPaymentDeadline =
     !isWelcomeBonus && category !== "Конкурсное задание";
+  const defaultAccountingTag = getDefaultAccountingRequestTag(category);
   const showCounterparty =
     category !== "Конкурсное задание" &&
     !isWelcomeBonus &&
@@ -294,6 +300,25 @@ export default function NewRequestPage() {
       handleRequestAreaChange(profileDepartment as RequestArea);
     }
   }, [copyFromRequestId, profile?.department, requestArea]);
+
+  useEffect(() => {
+    if (!isCfdTagRequired) {
+      return;
+    }
+    setCfdTag((current) => {
+      const trimmed = current.trim();
+      if (!trimmed) {
+        return defaultAccountingTag;
+      }
+      if (
+        trimmed === CONTEST_REQUEST_DEFAULT_TAG ||
+        trimmed === WELCOME_BONUS_DEFAULT_TAG
+      ) {
+        return defaultAccountingTag;
+      }
+      return current;
+    });
+  }, [cfdTag, defaultAccountingTag, isCfdTagRequired]);
 
   useEffect(() => {
     if (!copyFromRequestId || copiedRequestIdRef.current === copyFromRequestId) {
@@ -403,7 +428,7 @@ export default function NewRequestPage() {
         ]),
       ),
     );
-    previousEnforcedRolesRef.current = loadedEnforcedRoles;
+    autoAddedRolesRef.current = new Set(loadedEnforcedRoles);
     setRequiredHodDepartments(request.requiredHodDepartments ?? []);
     setSelectedFiles([]);
     setSelectedContractFiles([]);
@@ -691,19 +716,29 @@ export default function NewRequestPage() {
 
   useEffect(() => {
     setRequiredRoles((current) => {
-      const previouslyEnforcedRoles = previousEnforcedRolesRef.current;
+      const previouslyAutoAddedRoles = autoAddedRolesRef.current;
       const next = new Set(
-        current.filter(
-          (role) =>
+        current.filter((role) => {
+          if (role === "COO" && !enforcedRoles.has("COO")) {
+            return false;
+          }
+          return (
             enforcedRoles.has(role) ||
-            (
-              !previouslyEnforcedRoles.has(role) &&
-              !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role)
-            ),
-        ),
+            (!previouslyAutoAddedRoles.has(role) &&
+              !(AUTO_ONLY_REQUIRED_ROLES as readonly string[]).includes(role))
+          );
+        }),
       );
-      enforcedRoles.forEach((role) => next.add(role));
-      previousEnforcedRolesRef.current = new Set(enforcedRoles);
+      const nextAutoAddedRoles = new Set<RoleOption>(
+        Array.from(previouslyAutoAddedRoles).filter((role) => enforcedRoles.has(role)),
+      );
+      enforcedRoles.forEach((role) => {
+        if (!current.includes(role) || previouslyAutoAddedRoles.has(role)) {
+          nextAutoAddedRoles.add(role);
+        }
+        next.add(role);
+      });
+      autoAddedRolesRef.current = nextAutoAddedRoles;
       return Array.from(next);
     });
   }, [enforcedRoles]);
@@ -782,9 +817,9 @@ export default function NewRequestPage() {
 
   function handleRequestAreaChange(nextArea: RequestArea) {
     setRequestArea(nextArea);
-    setCfdTag("");
     const nextCategory = getCategoriesForDepartment(nextArea)[0];
     setCategory(nextCategory);
+    setCfdTag(getDefaultAccountingRequestTag(nextCategory));
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
@@ -796,7 +831,19 @@ export default function NewRequestPage() {
   }
 
   function handleCategoryChange(nextCategory: string) {
+    const nextDefaultTag = getDefaultAccountingRequestTag(nextCategory);
     setCategory(nextCategory);
+    setCfdTag((current) => {
+      const trimmed = current.trim();
+      if (
+        !trimmed ||
+        trimmed === CONTEST_REQUEST_DEFAULT_TAG ||
+        trimmed === WELCOME_BONUS_DEFAULT_TAG
+      ) {
+        return nextDefaultTag;
+      }
+      return current;
+    });
     const defaultFundingSource = getDefaultFundingSourceForCategory(nextCategory);
     if (defaultFundingSource) {
       setFundingSource(defaultFundingSource);
